@@ -18,11 +18,7 @@
       <div id="content-container"> 
 	<div id="content-menu">
 	  <ul>
-            <li><a href="index.html">Project Page</a></li> 
-	  </ul>
-	  <hr />
-	  <ul>
-            <li><a href="http://sourceforge.net/projects/asyncoro/files">Download dispy</a></li> 
+            <li><a href="http://sourceforge.net/projects/asyncoro/files">Download asyncoro</a></li> 
             <li><a href="http://sourceforge.net/projects/asyncoro/">Project details</a></li> 
             <li><a href="http://sourceforge.net/projects/asyncoro/support">Get support</a></li>
 	  </ul>
@@ -36,16 +32,17 @@
   asyncoro is a Python framework for developing concurrent programs
   with asynchronous completions and coroutines. Asynchronous
   completions currently implemented in asyncoro are socket I/O
-  operations, database cursors, sleep timers and locking primitives.
-  The coroutines should use 'yield' with these completions. Each yield
-  statement gives control to asyncoro's scheduler, which interleaves
-  executions of coroutines, similar to the way an operating system
-  executes multiple processes. Programs developed with asyncoro have
-  same logic as Python programs with threads, except for a few
-  syntactic changes. asyncoro supports socket I/O notification
-  mechanisms epoll, kqueue, /dev/poll (and poll and select, where
-  necessary), and Windows I/O Completion Ports (IOCP) for high
-  performance and scalability, and SSL for security.</p>
+  operations (for non-blocking sockets), database cursors, sleep
+  timers and locking primitives.  The coroutines should use 'yield'
+  with these completions. Each yield statement gives control to
+  asyncoro's scheduler, which interleaves executions of coroutines,
+  similar to the way an operating system executes multiple
+  processes. Programs developed with asyncoro have same logic and
+  structure as programs with threads, except for a few syntactic
+  changes. asyncoro supports socket I/O notification mechanisms epoll,
+  kqueue, /dev/poll (and poll and select, where necessary), and
+  Windows I/O Completion Ports (IOCP) for high performance and
+  scalability, and SSL for security.</p>
 
 <h4>Details</h4>
 <p>
@@ -254,9 +251,10 @@ coroutines).
 	entire coroutine framework to deadlock.  This method is meant
 	for main thread in the user program to wait for (main)
 	coroutine(s) it creates. If one coroutine needs to wait for
-	another to finish, they can use asyncoro's Condition variable
-	(see below) so first coroutine waits on the condition variable
-	(with 'yield') and finishing coroutine notifies the variable.
+	another to finish, they can use asyncoro's locking primitive
+	Event (see below) so first coroutine waits on the event
+	variable (with 'yield') and finishing coroutine sets the
+	variable.
 	</li>
       </ul>
     </li>

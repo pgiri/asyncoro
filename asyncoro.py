@@ -1,22 +1,20 @@
 # asyncoro: Framework for asynchronous, concurrent programming with
-# coroutines; see accompanying 'asyncoro.html' for more details.
+# coroutines.
 
 # Copyright (C) 2012 Giridhar Pemmasani (pgiri@yahoo.com)
 
-# This file is part of dispy.
-
-# dispy is free software: you can redistribute it and/or modify
+# asyncoro is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 
-# dispy is distributed in the hope that it will be useful,
+# asyncoro is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Lesser General Public License for more details.
 
 # You should have received a copy of the GNU Lesser General Public License
-# along with dispy.  If not, see <http://www.gnu.org/licenses/>.
+# along with asyncoro.  If not, see <http://www.gnu.org/licenses/>.
 
 import time
 import threading
@@ -2383,9 +2381,7 @@ class AsynCoroDBCursor(object):
     """Database cursor proxy for asynchronous processing of executions.
 
     Since connections (and cursors) can't be shared in threads,
-    operations on same cursor are run sequentially. This
-    implementation can be augmented with any optimizations such as
-    connection pooling.
+    operations on same cursor are run sequentially.
     """
 
     def __init__(self, thread_pool, cursor):
