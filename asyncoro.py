@@ -604,11 +604,13 @@ class _AsynCoroSocket(object):
         try:
             n = struct.calcsize('>L')
             data = yield self.recvall(n)
-            assert len(data) == n
+            if len(data) != n:
+                raise StopIteration('')
             n = struct.unpack('>L', data)[0]
             assert n >= 0
             data = yield self.recvall(n)
-            assert len(data) == n
+            if len(data) != n:
+                raise StopIteration('')
             yield data
         except socket.error as err:
             if err.args[0] == 'hangup':
@@ -624,15 +626,17 @@ class _AsynCoroSocket(object):
         try:
             n = struct.calcsize('>L')
             data = self._sync_recvall(n)
-            assert len(data) == n
+            if len(data) != n:
+                return ''
             n = struct.unpack('>L', data)[0]
             assert n >= 0
             data = self._sync_recvall(n)
-            assert len(data) == n
+            if len(data) != n:
+                return ''
             return data
         except socket.error as err:
             if err.args[0] == 'hangup':
-                raise StopIteration('')
+                return ''
             else:
                 raise
 
@@ -1575,9 +1579,9 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
 
         def update(self, fid, event, flags):
             if event == _AsyncNotifier._Readable:
-                self.poller.control([select.kevent(fid, filter=select.KQ_FILTER_READ, flags=flags)])
+                self.poller.control([select.kevent(fid, filter=select.KQ_FILTER_READ, flags=flags)], 0)
             elif event == _AsyncNotifier._Writable:
-                self.poller.control([select.kevent(fid, filter=select.KQ_FILTER_WRITE, flags=flags)])
+                self.poller.control([select.kevent(fid, filter=select.KQ_FILTER_WRITE, flags=flags)], 0)
 
         def poll(self, timeout):
             kevents = self.poller.control(None, 500, timeout)
