@@ -317,7 +317,7 @@ class _AsynCoroSocket(object):
                     self._notifier.clear(self, _AsyncPoller._Read)
                     self._read_task = self._read_result = None
                     coro, self._read_coro = self._read_coro, None
-                    coro._proceed_('')
+                    coro._proceed_(b'')
 
         self._read_result = bytearray(bufsize)
         view = memoryview(self._read_result)
@@ -503,7 +503,7 @@ class _AsynCoroSocket(object):
             self._notifier.unregister(self)
 
             if self._certfile:
-                def _ssl_handshake(self, conn, addr):
+                def _ssl_handshake(conn, addr):
                     try:
                         conn._rsock.do_handshake()
                     except ssl.SSLError as err:
@@ -511,30 +511,29 @@ class _AsynCoroSocket(object):
                             pass
                         else:
                             conn._read_task = conn._write_task = None
-                            coro, self._read_coro = self._read_coro, None
-                            self._write_coro = None
+                            coro, conn._read_coro = conn._read_coro, None
+                            conn._write_coro = None
                             conn.close()
                             coro.throw(*sys.exc_info())
                     else:
                         conn._read_task = conn._write_task = None
-                        coro, self._read_coro = self._read_coro, None
+                        coro, conn._read_coro = conn._read_coro, None
                         conn._notifier.clear(conn)
                         coro._proceed_((conn, addr))
                 conn = AsynCoroSocket(conn, blocking=False, keyfile=self._keyfile,
                                       certfile=self._certfile, ssl_version=self._ssl_version)
-                conn._notifier.add(conn, _AsyncPoller._Read)
-                conn._rsock = ssl.wrap_socket(conn._rsock, keyfile=self._keyfile, certfile=self._certfile,
-                                              server_side=True, do_handshake_on_connect=False,
+                conn._rsock = ssl.wrap_socket(conn._rsock, keyfile=self._keyfile,
+                                              certfile=self._certfile, server_side=True,
+                                              do_handshake_on_connect=False,
                                               ssl_version=self._ssl_version)
-                conn._read_task = functools.partial(_ssl_handshake, self, conn, addr)
-                conn._write_task = conn._read_task
-                self._write_coro = self._read_coro
-                conn._notifier.add(self, _AsyncPoller._Write | _AsyncPoller._Read)
+                conn._read_task = conn._write_task = functools.partial(_ssl_handshake, conn, addr)
+                conn._read_coro = conn._write_coro = self._read_coro
+                self._read_coro = None
+                conn._notifier.add(conn, _AsyncPoller._Read | _AsyncPoller._Write)
                 conn._read_task()
             else:
                 coro, self._read_coro = self._read_coro, None
                 conn = AsynCoroSocket(conn, blocking=False)
-                # conn._notifier.add(conn)
                 coro._proceed_((conn, addr))
 
         self._read_task = functools.partial(_accept, self)
@@ -625,22 +624,22 @@ class _AsynCoroSocket(object):
             data = yield self.recvall(n)
         except socket.error as err:
             if err.args[0] == 'hangup':
-                raise StopIteration('')
+                raise StopIteration(b'')
             else:
                 raise
         if len(data) != n:
-            raise StopIteration('')
+            raise StopIteration(b'')
         n = struct.unpack('>L', data)[0]
         assert n >= 0
         try:
             data = yield self.recvall(n)
         except socket.error as err:
             if err.args[0] == 'hangup':
-                raise StopIteration('')
+                raise StopIteration(b'')
             else:
                 raise
         if len(data) != n:
-            raise StopIteration('')
+            raise StopIteration(b'')
         yield data
 
     def _sync_recv_msg(self):
@@ -653,22 +652,22 @@ class _AsynCoroSocket(object):
             data = self._sync_recvall(n)
         except socket.error as err:
             if err.args[0] == 'hangup':
-                return ''
+                return b''
             else:
                 raise
         if len(data) != n:
-            return ''
+            return b''
         n = struct.unpack('>L', data)[0]
         assert n >= 0
         try:
             data = self._sync_recvall(n)
         except socket.error as err:
             if err.args[0] == 'hangup':
-                return ''
+                return b''
             else:
                 raise
         if len(data) != n:
-            return ''
+            return b''
         return data
 
 if platform.system() == 'Windows':
@@ -775,17 +774,17 @@ if platform.system() == 'Windows':
                 fid = fd._fileno
                 cur_event = self._events.get(fid, 0)
                 if cur_event:
-                    if cur_event:
-                        if cur_event & _AsyncPoller._Read:
-                            self.rset.discard(fid)
-                        if cur_event & _AsyncPoller._Write:
-                            self.wset.discard(fid)
-                        if cur_event & _AsyncPoller._Error:
-                            self.xset.discard(fid)
+                    if cur_event & _AsyncPoller._Read:
+                        self.rset.discard(fid)
+                    if cur_event & _AsyncPoller._Write:
+                        self.wset.discard(fid)
+                    if cur_event & _AsyncPoller._Error:
+                        self.xset.discard(fid)
                     if event:
                         cur_event &= ~event
                     else:
                         cur_event = 0
+                    self._events[fid] = cur_event
                     if cur_event:
                         if cur_event & _AsyncPoller._Read:
                             self.rset.add(fid)
@@ -795,6 +794,8 @@ if platform.system() == 'Windows':
                             self.xset.add(fid)
                     elif fd._timeout:
                         self.iocp_notifier._del_timeout(fd)
+                    if self.polling:
+                        self.cmd_wsock.send(b'm')
 
             def poll(self):
                 self.cmd_rsock = AsynCoroSocket(self.cmd_rsock)
@@ -1069,7 +1070,7 @@ if platform.system() == 'Windows':
                             coro, self._read_coro = self._read_coro, None
                             if coro:
                                 if err == winerror.ERROR_CONNECTION_INVALID:
-                                    coro._proceed_('')
+                                    coro._proceed_(b'')
                                 else:
                                     coro.throw(socket.error(err))
                     else:
@@ -1139,7 +1140,7 @@ if platform.system() == 'Windows':
                             coro, self._read_coro = self._read_coro, None
                             if coro:
                                 if err == winerror.ERROR_CONNECTION_INVALID:
-                                    coro._proceed_('')
+                                    coro._proceed_(b'')
                                 else:
                                     coro.throw(socket.error(err))
                     else:
@@ -1646,7 +1647,6 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
         def unregister(self, fid):
             event = self.events.pop(fid, None)
             if event is not None:
-                # logging.debug('updating %s to %x', fid, event)
                 self.update(fid, event, select.KQ_EV_DELETE)
 
         def modify(self, fid, event):
@@ -1663,7 +1663,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
             kevents = self.poller.control(None, 500, timeout)
             events = [(kevent.ident,
                        _AsyncPoller._Read if kevent.filter == select.KQ_FILTER_READ else \
-                           _AsyncPoller._Write if kevent.filter == select.KQ_FILTER_WRITE else 0| \
+                           _AsyncPoller._Write if kevent.filter == select.KQ_FILTER_WRITE else 0 | \
                            _AsyncPoller._Hangup if kevent.flags == select.KQ_EV_EOF else \
                            _AsyncPoller._Error if kevent.flags == select.KQ_EV_ERROR else 0) \
                           for kevent in kevents]

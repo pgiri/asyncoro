@@ -222,12 +222,15 @@ coroutines).
 	suspended coroutine. <b>wakeup</b> method is synonym for
 	resume. As explained above, the suspended coroutine gets
 	"update" (any Python object) as the value of yield statement
-	that caused it to suspend. With suspend/resume methods,
-	coroutines can synchronize their executions and possibly
-	exchange data at specific execution points (compared to Python
-	generator functions that do so at every 'yield' statement,
-	which can be very complex to program and understand
-	non-trivial programs).
+	that caused it to suspend. Resume and suspend methods must be
+	synchronized - a resume on a coroutine must be for specific
+	suspend for that coroutine. If necessary, Event locking
+	primitive (see below) can be used so that resuming coroutine
+	waits on an event variable and suspending coroutine sets the
+	event before going to sleep, so that resume will suspend only
+	that suspend.  With suspend/resume methods, coroutines can
+	synchronize their executions and possibly exchange data at
+	specific execution points.
 	</li>
       <li>
 	<b>set_daemon()</b> method indicates that coroutine is a
