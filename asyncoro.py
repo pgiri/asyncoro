@@ -1858,13 +1858,13 @@ class Lock(object):
     def acquire(self, blocking=True):
         """Must be used with 'yield' as 'yield lock.acquire()'.
         """
+        if not blocking and self._owner is not None:
+            raise StopIteration(False)
         coro = self._asyncoro.cur_coro()
         while True:
             if self._owner is None:
                 self._owner = coro
                 raise StopIteration(True)
-            if not blocking:
-                raise StopIteration(False)
             self._waitlist.append(coro)
             yield coro._await_()
 
@@ -1893,6 +1893,8 @@ class RLock(object):
         """Must be used with 'yield' as 'yield rlock.acquire()'.
         """
         coro = self._asyncoro.cur_coro()
+        if not blocking and not (self._owner is None or self._owner == coro):
+            raise StopIteration(False)
         while True:
             if self._owner is None:
                 assert self._depth == 0
@@ -1903,8 +1905,6 @@ class RLock(object):
                 self._depth += 1
                 raise StopIteration(True)
             else:
-                if not blocking:
-                    raise StopIteration(False)
                 self._waitlist.append(coro)
                 yield coro._await_()
 
@@ -1938,6 +1938,8 @@ class Condition(object):
         """Must be used with 'yield' as 'yield cv.acquire()'.
         """
         coro = self._asyncoro.cur_coro()
+        if not blocking and not (self._owner is None or self._owner == coro):
+            raise StopIteration(False)
         while True:
             if self._owner is None:
                 assert self._depth == 0
@@ -1948,8 +1950,6 @@ class Condition(object):
                 self._depth += 1
                 raise StopIteration(True)
             else:
-                if not blocking:
-                    raise StopIteration(False)
                 self._waitlist.append(coro)
                 yield coro._await_()
 

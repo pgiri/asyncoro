@@ -1790,11 +1790,9 @@ class Coro(object):
         """Resume/wakeup this coro and send 'update' to it.
 
         The resuming coro gets 'update' for the 'yield' that caused it
-        to suspend. This method must be called from coro only. Note
-        that asyncoro also uses suspend/resume to implement
-        asynchronous API, so resume from user programs must be for
-        matching suspend - resuming otherwise may interrupt
-        asynchronous call, causing failures.
+        to suspend. This method must be called from coro only. Resume
+        method must be for matching suspend - resuming otherwise may
+        interrupt unrelated suspend, causing failures.
         """
         if self._asyncoro:
             return self._asyncoro._resume(self, update, AsynCoro._Suspended)
@@ -1865,6 +1863,8 @@ class Lock(object):
     def acquire(self, blocking=True, timeout=-1):
         """Must be used with 'yield' as 'yield lock.acquire()'.
         """
+        if not blocking and self._owner is not None:
+            raise StopIteration(False)
         coro = self._asyncoro.cur_coro()
         if timeout < 0:
             timeout = None
@@ -1872,8 +1872,6 @@ class Lock(object):
             if self._owner is None:
                 self._owner = coro
                 raise StopIteration(True)
-            if not blocking:
-                raise StopIteration(False)
             if timeout is not None:
                 if timeout <= 0:
                     raise StopIteration(False)
@@ -1908,6 +1906,8 @@ class RLock(object):
         """Must be used with 'yield' as 'yield rlock.acquire()'.
         """
         coro = self._asyncoro.cur_coro()
+        if not blocking and not (self._owner is None or self._owner == coro):
+            raise StopIteration(False)
         if timeout < 0:
             timeout = None
         while True:
@@ -1920,8 +1920,6 @@ class RLock(object):
                 self._depth += 1
                 raise StopIteration(True)
             else:
-                if not blocking:
-                    raise StopIteration(False)
                 if timeout is not None:
                     if timeout <= 0:
                         raise StopIteration(False)
@@ -1961,6 +1959,8 @@ class Condition(object):
         """Must be used with 'yield' as 'yield cv.acquire()'.
         """
         coro = self._asyncoro.cur_coro()
+        if not blocking and not (self._owner is None or self._owner == coro):
+            raise StopIteration(False)
         if timeout < 0:
             timeout = None
         while True:
@@ -1973,8 +1973,6 @@ class Condition(object):
                 self._depth += 1
                 raise StopIteration(True)
             else:
-                if not blocking:
-                    raise StopIteration(False)
                 if timeout is not None:
                     if timeout <= 0:
                         raise StopIteration(False)
