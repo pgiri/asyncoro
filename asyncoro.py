@@ -2088,6 +2088,17 @@ class AsynCoro(object):
 
     The only methods available to users are 'cur_coro', 'terminate' and
     'join' and class method 'instance'.
+
+    AsynCoro can be initialized with an event notifier that provides
+    'poll' and 'interrupt' methods. AsynCoro calls 'poll' method to
+    deliver events to coroutines (typically, processing I/O events and
+    calling 'resume' methods), and 'interrupt' method to cause current
+    (blocking) 'poll' method to terminate so control is returned to
+    AsynCoro. 'poll' method is called with timeout argument. If
+    timeout is 0, 'poll' should deliver events without blocking, if
+    timeout is None, 'poll' may block (i.e., can wait indefinitely for
+    events to occur) and if timeout is a number, 'poll' should wait at
+    most that many seconds before returning (control to AsynCoro).
     """
 
     __metaclass__ = MetaSingleton
@@ -2102,7 +2113,7 @@ class AsynCoro(object):
     # in _suspended; for internal use
     _Await_ = 4
 
-    def __init__(self):
+    def __init__(self, notifier=None):
         if self.__class__.__instance is None:
             self.__class__.__instance = self
             self._coros = {}
@@ -2117,18 +2128,21 @@ class AsynCoro(object):
             self._terminate = False
             self._complete = threading.Event()
             self._daemons = 0
-            self._notifier = _AsyncNotifier()
+            if notifier is None:
+                self._notifier = _AsyncNotifier()
+            else:
+                self._notifier = notifier
             self._scheduler = threading.Thread(target=self._schedule)
             self._scheduler.daemon = True
             self._scheduler.start()
             atexit.register(self.terminate, True)
 
     @classmethod
-    def instance(cls):
+    def instance(cls, *args, **kwargs):
         """Returns (singleton) instance of AsynCoro.
         """
         if cls.__instance is None:
-            cls.__instance = cls()
+            cls.__instance = cls(*args, **kwargs)
         return cls.__instance
 
     def cur_coro(self):
@@ -2558,7 +2572,3 @@ class AsynCoroDBCursor(object):
         coro = self._asyncoro.cur_coro()
         self._thread_pool.async_task(coro, self._exec_task,
                                      functools.partial(self._cursor.callproc, proc, args))
-
-# initialize AsynCoro so all components are setup correctly
-scheduler = AsynCoro()
-del scheduler
