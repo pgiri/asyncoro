@@ -1766,10 +1766,12 @@ class Coro(object):
         When exiting, AsynCoro scheduler waits for all non-daemon
         coroutines to terminate.
         """
-        if self._asyncoro:
+        if self._asyncoro and self._asyncoro.cur_coro() == self:
             self._asyncoro._set_daemon(self)
+            return 0
         else:
-            logging.warning('set_daemon: coroutine %s removed?', self.name)
+            logging.warning('set_daemon must be called from running coro')
+            return -1
 
     def suspend(self, timeout=None, alarm_value=None):
         """Suspend/sleep coro (until woken up, usually by AsyncNotifier
@@ -1868,17 +1870,23 @@ class Coro(object):
             return -1
 
     def hot_swappable(self, flag):
-        if flag:
-            self._hot_swappable = True
+        if self._asyncoro and self._asyncoro.cur_coro() == self:
+            if flag:
+                self._hot_swappable = True
+            else:
+                self._hot_swappable = False
+            return 0
         else:
-            self._hot_swappable = False
+            logging.warning('hot_swappable must be called from running coro')
+            return -1
 
     def hot_swap(self, target, *args, **kwargs):
         """Replaces coro's generator function with given target(*args, **kwargs).
 
-        Coro must be currently suspended. The new generator starts
-        executing from the beginning, so technically it is possible to
-        replace with an entirely unrelated generator!
+        The new generator starts executing from the beginning. If
+        there are any pending resumes, they will not be reset, so new
+        generator can process them (or clear them with successive
+        'receive' calls with timeout=0 until it returns 'alarm_value').
         """
         if not inspect.isgeneratorfunction(target):
             logging.warning('%s is not a generator!' % target.__name__)
@@ -2260,7 +2268,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
         """Internal use only. See sleep/suspend in Coro.
         """
         if timeout is not None:
-            if not isinstance(timeout, (float, int)) or timeout <= 0:
+            if not isinstance(timeout, (float, int)) or timeout < 0:
                 logging.warning('invalid timeout %s', timeout)
                 return -1
         self._lock.acquire()
@@ -2276,6 +2284,9 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 del coro._resumes[0]
                 self._lock.release()
                 return update
+        if timeout == 0:
+            self._lock.release()
+            return alarm_value
         self._scheduled.discard(cid)
         self._suspended.add(cid)
         assert state == AsynCoro._Await_ or state == AsynCoro._Suspended
@@ -2332,8 +2343,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
         coro._timeout = None
         coro._exception = args
         if coro._state == AsynCoro._Await_ or coro._state == AsynCoro._Suspended:
-            self._suspended.discard(id(coro))
-            self._scheduled.add(id(coro))
+            self._suspended.discard(cid)
+            self._scheduled.add(cid)
         coro._state = AsynCoro._Scheduled
         if len(self._scheduled) == 1:
             self._notifier.interrupt()
@@ -2375,12 +2386,13 @@ class AsynCoro(object, metaclass=MetaSingleton):
             logging.warning('invalid coroutine %s to terminate', cid)
             self._lock.release()
             return -1
+        # TODO: prevent overwriting another generator already queued?
         if coro._callers or coro._state not in [AsynCoro._Scheduled, AsynCoro._Suspended] or \
                not coro._hot_swappable:
             logging.debug('postponing hot swapping of %s/%s', coro.name, cid)
             coro._new_generator = generator
             self._lock.release()
-            return 0
+            return 1
         else:
             coro._timeout = None
             coro._exception = (HotSwap, HotSwap(generator))
@@ -2473,12 +2485,17 @@ class AsynCoro(object, metaclass=MetaSingleton):
                         v = coro._exception[1].args
                         if isinstance(v, tuple) and len(v) == 1 and inspect.isgenerator(v[0]) and \
                                coro._hot_swappable and not coro._callers:
+                            try:
+                                coro._generator.close()
+                            except:
+                                logging.warning('closing %s raised exception: %s',
+                                                coro._generator.__name__, traceback.format_exc())
                             coro._generator = v[0]
                             coro.name = coro._generator.__name__
                             coro._exception = None
                             coro._value = None
                             # coro._resumes is not reset, so new
-                            # generator can process pending resumes
+                            # generator can process pending messages
                             coro._state = AsynCoro._Scheduled
                         else:
                             logging.warning('invalid HotSwap exception from %s/%s ignored',
@@ -2534,7 +2551,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
                         coro._value = retval
 
                     if coro._new_generator is not None and not coro._callers and \
-                           coro._hot_swappable:
+                           coro._hot_swappable and coro._state in [AsynCoro._Scheduled,
+                                                                   AsynCoro._Suspended]:
                         coro._exception = (HotSwap, HotSwap(coro._new_generator))
                         coro._new_generator = None
                     elif isinstance(retval, types.GeneratorType):
