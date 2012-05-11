@@ -811,9 +811,9 @@ if platform.system() == 'Windows':
                     for fid in rlist:
                         events[fid] = _AsyncPoller._Read
                     for fid in wlist:
-                        events[fid] = _AsyncPoller._Write
+                        events[fid] = events.get(fid, 0) | _AsyncPoller._Write
                     for fid in xlist:
-                        events[fid] = _AsyncPoller._Error
+                        events[fid] = events.get(fid, 0) | _AsyncPoller._Error
 
                     self._lock.acquire()
                     events = [(self._fds.get(fid, None), event) \
@@ -1654,9 +1654,9 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
             self.register(fid, event)
 
         def update(self, fid, event, flags):
-            if event & _AsyncNotifier._Read:
+            if event & _AsyncPoller._Read:
                 self.poller.control([select.kevent(fid, filter=select.KQ_FILTER_READ, flags=flags)], 0)
-            if event & _AsyncNotifier._Write:
+            if event & _AsyncPoller._Write:
                 self.poller.control([select.kevent(fid, filter=select.KQ_FILTER_WRITE, flags=flags)], 0)
 
         def poll(self, timeout):
@@ -1682,11 +1682,11 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
 
         def register(self, fid, event):
             if event:
-                if event & _AsyncNotifier._Read:
+                if event & _AsyncPoller._Read:
                     self.rset.add(fid)
-                if event & _AsyncNotifier._Write:
+                if event & _AsyncPoller._Write:
                     self.wset.add(fid)
-                if event & _AsyncNotifier._Error:
+                if event & _AsyncPoller._Error:
                     self.xset.add(fid)
 
         def unregister(self, fid):
@@ -1702,11 +1702,11 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
             rlist, wlist, xlist = self.poller(self.rset, self.wset, self.xset, timeout)
             events = {}
             for fid in rlist:
-                events[fid] = _AsyncNotifier._Read
+                events[fid] = _AsyncPoller._Read
             for fid in wlist:
-                events[fid] = _AsyncNotifier._Write
+                events[fid] = events.get(fid, 0) | _AsyncPoller._Write
             for fid in xlist:
-                events[fid] = _AsyncNotifier._Error
+                events[fid] = events.get(fid, 0) | _AsyncPoller._Error
 
             return events.items()
 
@@ -2284,19 +2284,19 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 del coro._resumes[0]
                 self._lock.release()
                 return update
-        if timeout == 0:
-            self._lock.release()
-            return alarm_value
-        self._scheduled.discard(cid)
-        self._suspended.add(cid)
-        assert state == AsynCoro._Await_ or state == AsynCoro._Suspended
-        coro._state = state
         if timeout is None:
             coro._timeout = None
+        elif timeout == 0:
+            self._lock.release()
+            return alarm_value
         else:
             timeout = _time() + timeout
             heappush(self._timeouts, (timeout, cid, alarm_value))
             coro._timeout = timeout
+        self._scheduled.discard(cid)
+        self._suspended.add(cid)
+        assert state == AsynCoro._Await_ or state == AsynCoro._Suspended
+        coro._state = state
         self._lock.release()
         return 0
 
@@ -2439,8 +2439,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
                                         coro.name, id(coro), coro._state)
                         continue
                     coro._timeout = None
-                    self._suspended.discard(id(coro))
-                    self._scheduled.add(id(coro))
+                    self._suspended.discard(cid)
+                    self._scheduled.add(cid)
                     coro._state = AsynCoro._Scheduled
                     coro._value = alarm_value
             scheduled = [self._coros.get(cid, None) for cid in self._scheduled]
