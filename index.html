@@ -280,30 +280,41 @@ other <em>process</em> coroutines).
       <li>
 	<b>hot_swappable(flag)</b> method marks if the coroutine's
 	generator function can be replaced. This method can be used to
-	set (with flag=True) or clear (with flag=False) the flag.
+	set (with flag=True) or clear (with flag=False) the flag. With
+	hot swapping, specific coroutines' code can be upgraded
+	while the application is running.
+	</li>
+      <li>
 	<b>hot_swap(target [, arg1, arg2, ...])</b> method requests
-	AsynCoro to replace current generator function
-	with <em>target(arg1, arg2, ...)</em>. AsynCoro then sends
-	HotSwap exception to the coroutine when a) coro indicated it
+	AsynCoro to replace coroutine's generator function
+	with <em>target(arg1, arg2, ...)</em>. AsynCoro then throws
+	HotSwap exception in the coroutine when a) coro indicated it
 	can handle hot swap (i.e., called hot_swappable with
 	flag=True), b) it is currently executing at top-level (i.e.,
-	has not called other generator functions) and c) not
-	processing exceptions. The new generator is set as args[0] of
-	HotSwap exception, so the coro can inspect new generator, if
-	necessary, and can do any preparation for hot swapping, e.g.,
-	saving state (perhaps by sending state as a message to itself
-	with <em>send</em> which can be retrieved in the new generator
-	with <em>receive</em>), or even ignore HotSwap command. When
-	it is ready for swap, it must re-raise the same HotSwap
-	exception (with new generator as args[0]). This causes
-	AsynCoro to close current generator, replace it with the new
-	generator and schedule new generator for execution (from the
-	beginning). Any messages (or resume updates) queued in the
-	previous generator are not reset, so new generator can process
-	queued messages (e.g., use <em>receive</em> in a loop with
-	timeout=0 until <em>receive</em> returns alarm_value)
-      </ul>
-    </li>
+	has not called other generator functions) and c) has no
+	pending asynchronous operations (socket I/O, tasks scheduled
+	with AsyncThreadPool, and database cursor tasks). The new
+	generator is set as args[0] of HotSwap exception, so the coro
+	can inspect new generator, if necessary, and can do any
+	preparation for hot swapping, e.g., saving state (perhaps by
+	sending state as a message to itself which can be retrieved in
+	the new generator with <em>receive</em>), or even ignore
+	HotSwap request. If/when it is ready for swap, it must
+	re-raise the same HotSwap exception (with the new generator as
+	args[0]). This causes AsynCoro to close current generator,
+	replace it with the new generator and schedule new generator
+	for execution (from the beginning). Any messages (i.e., resume
+	updates) queued in the previous generator are not reset, so
+	new generator can process queued messages (e.g.,
+	use <em>receive</em> in a loop with timeout=0
+	until <em>receive</em> returns alarm_value). Note that
+	<em>hot_swap</em> changes generator function of a particular
+	coroutine for which it is called. If there are many coroutines
+	using that generator function, <em>hot_swap</em> may be called
+	for each such coroutine.
+	</li>
+    </ul>
+  </li>
   <li>
     A synchronous (regular) socket <em>sock</em> can be converted to
     asynchronous (non-blocking) socket
