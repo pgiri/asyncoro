@@ -321,7 +321,6 @@ class _AsynCoroSocket(object):
 
         self._read_result = bytearray(bufsize)
         view = memoryview(self._read_result)
-        self._read_task = functools.partial(_recvall, self, view, *args)
         self._notifier.add(self, _AsyncPoller._Read)
         if not self._certfile:
             try:
@@ -341,6 +340,7 @@ class _AsynCoroSocket(object):
                 elif recvd:
                     view = view[recvd:]
 
+        self._read_task = functools.partial(_recvall, self, view, *args)
         self._read_coro = self._asyncoro.cur_coro()
         self._read_coro._await_()
 
