@@ -1920,8 +1920,9 @@ class Coro(object):
         self.name = target.__name__
         self._value = None
         self._exceptions = []
-        self._callers = []
         self._timeout = None
+        self._daemon = False
+        self._hot_swappable = False
         self._asyncoro = AsynCoro.instance()
         self._asyncoro._add(self)
 
@@ -2374,7 +2375,7 @@ class AsynCoro(object):
             logging.warning('coroutine to terminate %s/%s is running', coro.name, cid)
             # if coro raises exception during current run, this
             # exception will be ignored (coro won't terminated)!
-        coro._exception.append((GeneratorExit, GeneratorExit('close')))
+        coro._exceptions.append((GeneratorExit, GeneratorExit('close')))
         coro._timeout = None
         coro._state = AsynCoro._Scheduled
         if len(self._scheduled) == 1:
@@ -2401,7 +2402,7 @@ class AsynCoro(object):
             return 1
         else:
             coro._timeout = None
-            coro._exception.append((HotSwap, HotSwap(generator)))
+            coro._exceptions.append((HotSwap, HotSwap(generator)))
             if coro._state == AsynCoro._Suspended:
                 self._suspended.discard(cid)
                 self._scheduled.add(cid)
@@ -2486,7 +2487,7 @@ class AsynCoro(object):
                                 coro._value = v[0]
                             else:
                                 coro._value = v
-                        coro._exception = None
+                        coro._exceptions = []
                     elif exc[0] == HotSwap:
                         v = exc[1].args
                         if isinstance(v, tuple) and len(v) == 1 and inspect.isgenerator(v[0]) and \
@@ -2534,7 +2535,8 @@ class AsynCoro(object):
                             try:
                                 coro._generator.close()
                             except:
-                                pass
+                                logging.warning('closing %s raised exception: %s',
+                                                coro._generator.__name__, traceback.format_exc())
 
                         # delete this coro
                         if self._coros.pop(id(coro), None) == coro:
@@ -2561,6 +2563,7 @@ class AsynCoro(object):
                                         self._suspended.discard(coro._monitor)
                                         self._scheduled.add(coro._monitor)
                                         monitor._state = AsynCoro._Scheduled
+                                coro._monitor = None
                             else:
                                 coro._resumes = []
                         else:
@@ -2579,7 +2582,7 @@ class AsynCoro(object):
                     if coro._new_generator is not None and not coro._callers and \
                            coro._hot_swappable and coro._state in [AsynCoro._Scheduled,
                                                                    AsynCoro._Suspended]:
-                        coro._exception.append((HotSwap, HotSwap(coro._new_generator)))
+                        coro._exceptions.append((HotSwap, HotSwap(coro._new_generator)))
                         coro._new_generator = None
                     elif isinstance(retval, types.GeneratorType):
                         # push current generator onto stack and activate
