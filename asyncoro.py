@@ -36,6 +36,13 @@ from bisect import bisect_left
 import Queue
 import atexit
 
+logger = logging.getLogger('asyncoro')
+logger.setLevel(logging.DEBUG)
+handler = logging.StreamHandler()
+handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+logger.addHandler(handler)
+del handler
+
 if platform.system() == 'Windows':
     from errno import WSAEINPROGRESS as EINPROGRESS
     from errno import WSAEWOULDBLOCK as EWOULDBLOCK
@@ -80,7 +87,7 @@ class _AsynCoroSocket(object):
         """
 
         if isinstance(sock, AsynCoroSocket):
-            logging.warning('Socket %s is already AsynCoroSocket', sock._fileno)
+            logger.warning('Socket %s is already AsynCoroSocket', sock._fileno)
             self.__dict__ = sock.__dict__
         else:
             self._rsock = sock
@@ -200,7 +207,7 @@ class _AsynCoroSocket(object):
             self._rsock.setdefaulttimeout(timeout)
             self._default_timeout = timeout
         else:
-            logging.warning('invalid timeout %s ignored', timeout)
+            logger.warning('invalid timeout %s ignored', timeout)
 
     def getdefaulttimeout(self):
         if self._blocking:
@@ -224,7 +231,7 @@ class _AsynCoroSocket(object):
                 self._timeout = timeout
                 # self._notifier._del_timeout(self)
             else:
-                logging.warning('invalid timeout %s ignored' % timeout)
+                logger.warning('invalid timeout %s ignored' % timeout)
 
     def gettimeout(self):
         if self._blocking:
@@ -669,8 +676,8 @@ if platform.system() == 'Windows':
         import pywintypes
         import winerror
     except:
-        print 'Could not load pywin32 for I/O Completion Ports; ' \
-              'using inefficient polling for sockets'
+        logger.warning('Could not load pywin32 for I/O Completion Ports; ' \
+                       'using inefficient polling for sockets')
     else:
         # for UDP we need 'select' polling (pywin32 doesn't yet support
         # UDP); _AsyncPoller below is combination of the other
@@ -720,7 +727,7 @@ if platform.system() == 'Windows':
                 if update:
                     if self._fds.pop(fid, None) != fd:
                         self._lock.release()
-                        logging.debug('fd %s is not registered', fd._fileno)
+                        logger.debug('fd %s is not registered', fd._fileno)
                         return
                     event = self._events.pop(fid, 0)
                 else:
@@ -814,7 +821,7 @@ if platform.system() == 'Windows':
                     iocp_notify = False
                     for fd, event in events:
                         if fd is None:
-                            logging.debug('invalid fd')
+                            logger.debug('invalid fd')
                             continue
                         if event & _AsyncPoller._Read:
                             if fd._read_task:
@@ -822,13 +829,13 @@ if platform.system() == 'Windows':
                                     iocp_notify = True
                                 fd._read_task()
                             else:
-                                logging.warning('fd %s is not registered for reading!', fd._fileno)
+                                logger.warning('fd %s is not registered for reading!', fd._fileno)
                         if event & _AsyncPoller._Write:
                             if fd._write_task:
                                 iocp_notify = True
                                 fd._write_task()
                             else:
-                                logging.warning('fd %s is not registered for writing!', fd._fileno)
+                                logger.warning('fd %s is not registered for writing!', fd._fileno)
                         if event & _AsyncPoller._Error:
                             if fd._read_coro:
                                 fd._read_coro.throw(socket.error(_AsyncPoller._Error))
@@ -896,17 +903,17 @@ if platform.system() == 'Windows':
                     err, n = win32file.WSARecv(self.cmd_rsock._fileno, self.cmd_rsock_buf,
                                                self.cmd_rsock._read_overlap, 0)
                     if err and err != winerror.ERROR_IO_PENDING:
-                        logging.warning('WSARecv error: %s', err)
+                        logger.warning('WSARecv error: %s', err)
 
             def cmd_rsock_recv(self, err, n):
                 if n == 0:
                     err = winerror.ERROR_CONNECTION_INVALID
                 if err:
-                    logging.warning('iocp cmd recv error: %s', err)
+                    logger.warning('iocp cmd recv error: %s', err)
                 err, n = win32file.WSARecv(self.cmd_rsock._fileno, self.cmd_rsock_buf,
                                            self.cmd_rsock._read_overlap, 0)
                 if err and err != winerror.ERROR_IO_PENDING:
-                    logging.warning('WSARecv error: %s', err)
+                    logger.warning('WSARecv error: %s', err)
 
             def interrupt(self, timeout=None):
                 if timeout is None:
@@ -947,7 +954,7 @@ if platform.system() == 'Windows':
                     if overlap and overlap.object:
                         overlap.object(err, n)
                     else:
-                        logging.warning('invalid overlap!')
+                        logger.warning('invalid overlap!')
                     err, n, key, overlap = win32file.GetQueuedCompletionStatus(self.iocp, 0)
                 self.poll_timeout = 0
                 if timeout == 0:
@@ -988,8 +995,8 @@ if platform.system() == 'Windows':
                             fd._timeout_id = None
                             break
                         if fd._timeout_id != self._timeouts[i]:
-                            logging.warning('fd %s with %s is not found',
-                                            fd._fileno, fd._timeout_id)
+                            logger.warning('fd %s with %s is not found',
+                                           fd._fileno, fd._timeout_id)
                             break
                     self._lock.release()
 
@@ -1405,7 +1412,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                 self.timeout_multiplier = 1
 
                 if hasattr(select, 'epoll'):
-                    # print ('poller: epoll')
+                    logger.debug('poller: epoll')
                     self._poller = select.epoll()
                     _AsyncPoller._Read = select.EPOLLIN | select.EPOLLPRI
                     _AsyncPoller._Write = select.EPOLLOUT
@@ -1413,7 +1420,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                     _AsyncPoller._Error = select.EPOLLHUP | select.EPOLLERR
                     _AsyncPoller._Block = -1
                 elif hasattr(select, 'kqueue'):
-                    # print ('poller: kqueue')
+                    logger.debug('poller: kqueue')
                     self._poller = _KQueueNotifier()
                     # kqueue filter values are negative numbers so using
                     # them as flags won't work, so define them as necessary
@@ -1423,7 +1430,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                     _AsyncPoller._Error = 0x08
                     _AsyncPoller._Block = None
                 elif hasattr(select, 'devpoll'):
-                    # print ('poller: devpoll')
+                    logger.debug('poller: devpoll')
                     self._poller = select.devpoll()
                     _AsyncPoller._Read = select.POLLIN | select.POLLPRI
                     _AsyncPoller._Write = select.POLLOUT
@@ -1432,7 +1439,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                     _AsyncPoller._Block = -1
                     self.timeout_multiplier = 1000
                 elif hasattr(select, 'poll'):
-                    # print ('poller: poll')
+                    logger.debug('poller: poll')
                     self._poller = select.poll()
                     _AsyncPoller._Read = select.POLLIN | select.POLLPRI
                     _AsyncPoller._Write = select.POLLOUT
@@ -1441,7 +1448,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                     _AsyncPoller._Block = -1
                     self.timeout_multiplier = 1000
                 else:
-                    # print ('poller: select')
+                    logger.debug('poller: select')
                     self._poller = _SelectNotifier()
                     _AsyncPoller._Read = 0x01
                     _AsyncPoller._Write = 0x02
@@ -1485,8 +1492,8 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
             try:
                 events = self._poller.poll(poll_timeout)
             except:
-                logging.debug('poll failed')
-                logging.debug(traceback.format_exc())
+                logger.debug('poll failed')
+                logger.debug(traceback.format_exc())
                 # prevent tight loops
                 time.sleep(5)
                 return
@@ -1496,7 +1503,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                     fd = self._fds.get(fileno, None)
                     if fd is None:
                         if event != _AsyncPoller._Hangup:
-                            logging.debug('invalid fd for event %s', event)
+                            logger.debug('invalid fd for event %s', event)
                         continue
                     if event & _AsyncPoller._Hangup:
                         self.unregister(fd)
@@ -1507,16 +1514,16 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                         continue
                     if event & _AsyncPoller._Read:
                         if fd._read_task is None:
-                            logging.error('fd %s is not registered for read!', fd._fileno)
+                            logger.error('fd %s is not registered for read!', fd._fileno)
                         else:
                             fd._read_task()
                     if event & _AsyncPoller._Write:
                         if fd._write_task is None:
-                            logging.error('fd %s is not registered for write!', fd._fileno)
+                            logger.error('fd %s is not registered for write!', fd._fileno)
                         else:
                             fd._write_task()
             except:
-                logging.debug(traceback.format_exc())
+                logger.debug(traceback.format_exc())
 
             if timeout == 0:
                 now = _time()
@@ -1538,8 +1545,8 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                     try:
                         self._poller.unregister(fd._fileno)
                     except:
-                        logging.warning('unregister of %s failed with %s',
-                                        fd._fileno, traceback.format_exc())
+                        logger.warning('unregister of %s failed with %s',
+                                       fd._fileno, traceback.format_exc())
             self._poller = None
             self._timeouts = []
             self._timeout_fds = []
@@ -1568,12 +1575,12 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                         fd._timeout_id = None
                         break
                     if fd._timeout_id != self._timeouts[i]:
-                        logging.warning('fd %s with %s is not found', fd._fileno, fd._timeout_id)
+                        logger.warning('fd %s with %s is not found', fd._fileno, fd._timeout_id)
                         break
 
         def unregister(self, fd):
             if self._fds.pop(fd._fileno, None) is None:
-                # logging.debug('fd %s is not registered', fd._fileno)
+                # logger.debug('fd %s is not registered', fd._fileno)
                 return
             self._events.pop(fd._fileno, None)
             self._poller.unregister(fd._fileno)
@@ -1732,9 +1739,9 @@ class Coro(object):
         self._daemon = False
         self._complete = threading.Event()
         # if coro is not ready to be resumed, resume requests are
-        # queued. For now, only one type of resumes are queued up, so
+        # queued. For now, only one type of messages are queued up, so
         # no need to use dictionary
-        self._resumes = []
+        self._msgs = []
         self._monitor = None
         self._new_generator = None
         self._hot_swappable = False
@@ -1767,7 +1774,7 @@ class Coro(object):
             self._asyncoro._set_daemon(self)
             return 0
         else:
-            logging.warning('set_daemon must be called from running coro')
+            logger.warning('set_daemon must be called from running coro')
             return -1
 
     def suspend(self, timeout=None, alarm_value=None):
@@ -1784,7 +1791,7 @@ class Coro(object):
         if self._asyncoro:
             return self._asyncoro._suspend(self, timeout, alarm_value, AsynCoro._Suspended)
         else:
-            logging.warning('suspend: coroutine %s removed?', self.name)
+            logger.warning('suspend: coroutine %s removed?', self.name)
             return -1
 
     sleep = suspend
@@ -1809,7 +1816,7 @@ class Coro(object):
         if self._asyncoro:
             return self._asyncoro._resume(self, update, AsynCoro._Suspended)
         else:
-            logging.warning('resume: coroutine %s removed?', self.name)
+            logger.warning('resume: coroutine %s removed?', self.name)
             return -1
 
     wakeup = resume
@@ -1826,7 +1833,7 @@ class Coro(object):
         coro only.
         """
         if len(args) == 0:
-            logging.warning('throw: invalid argument(s)')
+            logger.warning('throw: invalid argument(s)')
             return -1
         if len(args) == 1:
             if isinstance(args[0], tuple) and len(args[0]) > 1:
@@ -1836,7 +1843,7 @@ class Coro(object):
         if self._asyncoro:
             return self._asyncoro._throw(self, *args)
         else:
-            logging.warning('throw: coroutine %s removed?', self.name)
+            logger.warning('throw: coroutine %s removed?', self.name)
             return -1
 
     def value(self):
@@ -1863,7 +1870,7 @@ class Coro(object):
         if self._asyncoro:
             return self._asyncoro._terminate_coro(self)
         else:
-            logging.warning('terminate: coroutine %s removed?', self.name)
+            logger.warning('terminate: coroutine %s removed?', self.name)
             return -1
 
     def hot_swappable(self, flag):
@@ -1874,26 +1881,27 @@ class Coro(object):
                 self._hot_swappable = False
             return 0
         else:
-            logging.warning('hot_swappable must be called from running coro')
+            logger.warning('hot_swappable must be called from running coro')
             return -1
 
     def hot_swap(self, target, *args, **kwargs):
         """Replaces coro's generator function with given target(*args, **kwargs).
 
         The new generator starts executing from the beginning. If
-        there are any pending resumes, they will not be reset, so new
+        there are any pending messages, they will not be reset, so new
         generator can process them (or clear them with successive
-        'receive' calls with timeout=0 until it returns 'alarm_value').
+        'receive' calls with timeout=0 until it returns
+        'alarm_value').
         """
         try:
             generator = self.__get_generator__(target, *args, **kwargs)
         except:
-            logging.warning('%s is not a generator!' % target.__name__)
+            logger.warning('%s is not a generator!' % target.__name__)
             return -1
         if self._asyncoro:
             return self._asyncoro._swap_generator(self, generator)
         else:
-            logging.warning('hot_swap: coroutine %s removed?', self.name)
+            logger.warning('hot_swap: coroutine %s removed?', self.name)
             return -1
 
     def monitor(self, monitor):
@@ -1906,7 +1914,7 @@ class Coro(object):
         if self._asyncoro and monitor._asyncoro:
             return self._asyncoro._monitor(self, monitor)
         else:
-            logging.warning('monitor: coroutine %s removed?', self.name)
+            logger.warning('monitor: coroutine %s removed?', self.name)
             return -1
         
     def restart(self, target, *args, **kwargs):
@@ -1916,6 +1924,12 @@ class Coro(object):
         Resume updates are not reset, so new generator can process
         pending updates/messages.
         """
+        if self._generator:
+            try:
+                self._generator.close()
+            except:
+                logger.warning('closing %s raised exception: %s',
+                               self._generator.__name__, traceback.format_exc())
         self._generator = self.__get_generator__(target, *args, **kwargs)
         self.name = target.__name__
         self._value = None
@@ -2258,15 +2272,14 @@ class AsynCoro(object):
         coro = self._coros.get(cid, None)
         if coro is None:
             self._lock.release()
-            logging.warning('monitor: invalid coroutine')
+            logger.warning('monitor: invalid coroutine')
             return -1
         mid = id(monitor)
         monitor = self._coros.get(mid, None)
         if monitor is None or coro._monitor:
             self._lock.release()
-            logging.warning('invalid monitor')
+            logger.warning('invalid monitor')
             return -1
-        # logging.debug('%s/%s monitoring %s/%s', monitor.name, mid, coro.name, id(coro))
         coro._monitor = mid
         self._lock.release()
         return 0
@@ -2276,19 +2289,19 @@ class AsynCoro(object):
         """
         if timeout is not None:
             if not isinstance(timeout, (float, int)) or timeout < 0:
-                logging.warning('invalid timeout %s', timeout)
+                logger.warning('invalid timeout %s', timeout)
                 return -1
         self._lock.acquire()
         cid = id(coro)
         coro = self._coros.get(cid, None)
         if coro is None or coro._state != AsynCoro._Running:
             self._lock.release()
-            logging.warning('invalid coroutine %s to suspend', cid)
+            logger.warning('invalid coroutine %s to suspend', cid)
             return -1
-        if coro._resumes:
-            s, update = coro._resumes[0]
+        if coro._msgs:
+            s, update = coro._msgs[0]
             if s == state:
-                del coro._resumes[0]
+                del coro._msgs[0]
                 self._lock.release()
                 return update
         if timeout is None:
@@ -2315,11 +2328,11 @@ class AsynCoro(object):
         coro = self._coros.get(cid, None)
         if coro is None:
             self._lock.release()
-            logging.warning('invalid coroutine %s to resume', cid)
+            logger.warning('invalid coroutine %s to resume', cid)
             return -1
         if coro._state != state:
             assert state == AsynCoro._Suspended
-            coro._resumes.append((state, update))
+            coro._msgs.append((state, update))
             self._lock.release()
             return 0
         coro._timeout = None
@@ -2343,7 +2356,7 @@ class AsynCoro(object):
         coro = self._coros.get(cid, None)
         if coro is None or coro._state not in [AsynCoro._Scheduled, AsynCoro._Await_,
                                                AsynCoro._Suspended]:
-            logging.warning('invalid coroutine %s to throw exception', cid)
+            logger.warning('invalid coroutine %s to throw exception', cid)
             self._lock.release()
             return -1
         # prevent throwing more than once?
@@ -2365,14 +2378,14 @@ class AsynCoro(object):
         cid = id(coro)
         coro = self._coros.get(cid, None)
         if coro is None:
-            logging.warning('invalid coroutine %s to terminate', cid)
+            logger.warning('invalid coroutine %s to terminate', cid)
             self._lock.release()
             return -1
         if coro._state == AsynCoro._Await_ or coro._state == AsynCoro._Suspended:
             self._suspended.discard(cid)
             self._scheduled.add(cid)
         elif coro._state == AsynCoro._Running:
-            logging.warning('coroutine to terminate %s/%s is running', coro.name, cid)
+            logger.warning('coroutine to terminate %s/%s is running', coro.name, cid)
             # if coro raises exception during current run, this
             # exception will be ignored (coro won't terminated)!
         coro._exceptions.append((GeneratorExit, GeneratorExit('close')))
@@ -2390,13 +2403,13 @@ class AsynCoro(object):
         cid = id(coro)
         coro = self._coros.get(cid, None)
         if coro is None:
-            logging.warning('invalid coroutine %s to terminate', cid)
+            logger.warning('invalid coroutine %s to terminate', cid)
             self._lock.release()
             return -1
         # TODO: prevent overwriting another generator already queued?
         if coro._callers or coro._state not in [AsynCoro._Scheduled, AsynCoro._Suspended] or \
                not coro._hot_swappable:
-            logging.debug('postponing hot swapping of %s/%s', coro.name, cid)
+            logger.debug('postponing hot swapping of %s/%s', coro.name, cid)
             coro._new_generator = generator
             self._lock.release()
             return 1
@@ -2442,8 +2455,8 @@ class AsynCoro(object):
                     if coro is None or coro._timeout != timeout:
                         continue
                     if coro._state != AsynCoro._Await_ and coro._state != AsynCoro._Suspended:
-                        logging.warning('coro %s/%s is in state %s for resume; ignored',
-                                        coro.name, id(coro), coro._state)
+                        logger.warning('coro %s/%s is in state %s for resume; ignored',
+                                       coro.name, id(coro), coro._state)
                         continue
                     coro._timeout = None
                     self._suspended.discard(cid)
@@ -2460,7 +2473,7 @@ class AsynCoro(object):
                 self._lock.acquire()
                 if coro._state != AsynCoro._Scheduled:
                     self._lock.release()
-                    logging.warning('ignoring %s with state %s', coro.name, coro._state)
+                    logger.warning('ignoring %s with state %s', coro.name, coro._state)
                     continue
                 coro._state = AsynCoro._Running
                 self._cur_coro = coro
@@ -2495,19 +2508,19 @@ class AsynCoro(object):
                             try:
                                 coro._generator.close()
                             except:
-                                logging.warning('closing %s raised exception: %s',
-                                                coro._generator.__name__, traceback.format_exc())
+                                logger.warning('closing %s raised exception: %s',
+                                               coro._generator.__name__, traceback.format_exc())
                             coro._generator = v[0]
                             coro.name = coro._generator.__name__
                             # TODO: leave exceptions?
                             coro._exceptions = []
                             coro._value = None
-                            # coro._resumes is not reset, so new
+                            # coro._msgs is not reset, so new
                             # generator can process pending messages
                             coro._state = AsynCoro._Scheduled
                         else:
-                            logging.warning('invalid HotSwap exception from %s/%s ignored',
-                                            coro.name, id(coro))
+                            logger.warning('invalid HotSwap exception from %s/%s ignored',
+                                           coro.name, id(coro))
                         self._lock.release()
                         continue
                     else:
@@ -2531,12 +2544,12 @@ class AsynCoro(object):
                                 exc = ''.join(traceback.format_exception_only(*exc))
                             else:
                                 exc = ''.join(traceback.format_exception(*exc))
-                            logging.warning('uncaught exception in %s:\n%s', coro.name, exc)
+                            logger.warning('uncaught exception in %s:\n%s', coro.name, exc)
                             try:
                                 coro._generator.close()
                             except:
-                                logging.warning('closing %s raised exception: %s',
-                                                coro._generator.__name__, traceback.format_exc())
+                                logger.warning('closing %s raised exception: %s',
+                                               coro._generator.__name__, traceback.format_exc())
 
                         # delete this coro
                         if self._coros.pop(id(coro), None) == coro:
@@ -2545,6 +2558,7 @@ class AsynCoro(object):
                             coro._asyncoro = None
                             coro._complete.set()
                             coro._state = None
+                            coro._generator = None
                             if coro._daemon is True:
                                 self._daemons -= 1
                             if len(self._coros) == self._daemons:
@@ -2552,6 +2566,7 @@ class AsynCoro(object):
                             if coro._monitor:
                                 if coro._exceptions:
                                     exc = Exception(coro, coro._exceptions[0])
+                                    coro._exceptions = []
                                 else:
                                     exc = Exception(coro, (StopIteration, StopIteration()))
 
@@ -2565,9 +2580,9 @@ class AsynCoro(object):
                                         monitor._state = AsynCoro._Scheduled
                                 coro._monitor = None
                             else:
-                                coro._resumes = []
+                                coro._msgs = []
                         else:
-                            logging.warning('coro %s/%s already removed?', coro.name, id(coro))
+                            logger.warning('coro %s/%s already removed?', coro.name, id(coro))
                     self._lock.release()
                 else:
                     self._lock.acquire()
@@ -2597,15 +2612,15 @@ class AsynCoro(object):
             coro = self._coros.get(cid, None)
             if coro is None:
                 continue
-            logging.debug('terminating Coro %s/%s', coro.name, id(coro))
+            logger.debug('terminating Coro %s/%s', coro.name, id(coro))
             self._cur_coro = coro
             coro._state = AsynCoro._Scheduled
             while coro._generator:
                 try:
                     coro._generator.close()
                 except:
-                    logging.warning('closing %s raised exception: %s',
-                                    coro._generator.__name__, traceback.format_exc())
+                    logger.warning('closing %s raised exception: %s',
+                                   coro._generator.__name__, traceback.format_exc())
                 if coro._callers:
                     coro._generator, coro._value = coro._callers.pop(-1)
                 else:
@@ -2624,14 +2639,14 @@ class AsynCoro(object):
         """
         if not self._terminate:
             if await_non_daemons and len(self._coros) > self._daemons:
-                logging.debug('waiting for %s coroutines to terminate',
-                              len(self._coros) - self._daemons)
+                logger.debug('waiting for %s coroutines to terminate',
+                             len(self._coros) - self._daemons)
                 self._complete.wait()
             self._terminate = True
             self._notifier.interrupt()
             self._complete.wait()
             self._notifier.terminate()
-            logging.debug('AsynCoro terminated')
+            logger.debug('AsynCoro terminated')
 
     def join(self):
         """Wait for currently scheduled coroutines to finish. AsynCoro
@@ -2640,7 +2655,7 @@ class AsynCoro(object):
         """
         self._lock.acquire()
         for coro in self._coros.itervalues():
-            logging.debug('waiting for %s', coro.name)
+            logger.debug('waiting for %s', coro.name)
         self._lock.release()
 
         self._complete.wait()
