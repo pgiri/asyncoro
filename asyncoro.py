@@ -1718,7 +1718,10 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
     AsynCoroSocket = _AsynCoroSocket
     _AsyncNotifier = _AsyncPoller
 
-class HotSwap(Exception):
+class HotSwapException(Exception):
+    pass
+
+class MonitorException(Exception):
     pass
 
 class Coro(object):
@@ -2415,7 +2418,7 @@ class AsynCoro(object):
             return 1
         else:
             coro._timeout = None
-            coro._exceptions.append((HotSwap, HotSwap(generator)))
+            coro._exceptions.append((HotSwapException, HotSwapException(generator)))
             if coro._state == AsynCoro._Suspended:
                 self._suspended.discard(cid)
                 self._scheduled.add(cid)
@@ -2501,7 +2504,7 @@ class AsynCoro(object):
                             else:
                                 coro._value = v
                         coro._exceptions = []
-                    elif exc[0] == HotSwap:
+                    elif exc[0] == HotSwapException:
                         v = exc[1].args
                         if isinstance(v, tuple) and len(v) == 1 and inspect.isgenerator(v[0]) and \
                                coro._hot_swappable and not coro._callers:
@@ -2519,7 +2522,7 @@ class AsynCoro(object):
                             # generator can process pending messages
                             coro._state = AsynCoro._Scheduled
                         else:
-                            logger.warning('invalid HotSwap exception from %s/%s ignored',
+                            logger.warning('invalid HotSwapException from %s/%s ignored',
                                            coro.name, id(coro))
                         self._lock.release()
                         continue
@@ -2565,10 +2568,10 @@ class AsynCoro(object):
                                 self._complete.set()
                             if coro._monitor:
                                 if coro._exceptions:
-                                    exc = Exception(coro, coro._exceptions[0])
+                                    exc = MonitorException(coro, coro._exceptions[0])
                                     coro._exceptions = []
                                 else:
-                                    exc = Exception(coro, (StopIteration, StopIteration()))
+                                    exc = MonitorException(coro, (StopIteration, StopIteration()))
 
                                 monitor = self._coros.get(coro._monitor, None)
                                 if monitor:
@@ -2597,7 +2600,8 @@ class AsynCoro(object):
                     if coro._new_generator is not None and not coro._callers and \
                            coro._hot_swappable and coro._state in [AsynCoro._Scheduled,
                                                                    AsynCoro._Suspended]:
-                        coro._exceptions.append((HotSwap, HotSwap(coro._new_generator)))
+                        coro._exceptions.append((HotSwapException,
+                                                 HotSwapException(coro._new_generator)))
                         coro._new_generator = None
                     elif isinstance(retval, types.GeneratorType):
                         # push current generator onto stack and activate
