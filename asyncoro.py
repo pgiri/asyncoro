@@ -1722,6 +1722,26 @@ class Coro(object):
     this object.
     """
     def __init__(self, target, *args, **kwargs):
+        self._generator = self.__get_generator__(target, *args, **kwargs)
+        self.name = target.__name__
+        self._state = None
+        self._value = None
+        self._exceptions = []
+        self._callers = []
+        self._timeout = None
+        self._daemon = False
+        self._complete = threading.Event()
+        # if coro is not ready to be resumed, resume requests are
+        # queued. For now, only one type of resumes are queued up, so
+        # no need to use dictionary
+        self._resumes = []
+        self._monitor = None
+        self._new_generator = None
+        self._hot_swappable = False
+        self._asyncoro = AsynCoro.instance()
+        self._asyncoro._add(self)
+
+    def __get_generator__(self, target, *args, **kwargs):
         if not inspect.isgeneratorfunction(target):
             raise Exception('%s is not a generator!' % target.__name__)
         if not args and kwargs:
@@ -1735,23 +1755,7 @@ class Coro(object):
             raise Exception('Coro function "%s" should have "coro" argument with ' \
                             'default value None' % target.__name__)
         kwargs['coro'] = self
-        self.name = target.__name__
-        self._generator = target(*args, **kwargs)
-        self._state = None
-        self._value = None
-        self._exception = None
-        self._callers = []
-        self._timeout = None
-        self._daemon = False
-        self._complete = threading.Event()
-        # if coro is not ready to be resumed, resume requests are
-        # queued. For now, only one type of resumes are queued up, so
-        # no need to use dictionary
-        self._resumes = []
-        self._new_generator = None
-        self._hot_swappable = False
-        self._asyncoro = AsynCoro.instance()
-        self._asyncoro._add(self)
+        return target(*args, **kwargs)
 
     def set_daemon(self):
         """Set coroutine is daemon.
@@ -1881,32 +1885,45 @@ class Coro(object):
         generator can process them (or clear them with successive
         'receive' calls with timeout=0 until it returns 'alarm_value').
         """
-        if not inspect.isgeneratorfunction(target):
+        try:
+            generator = self.__get_generator__(target, *args, **kwargs)
+        except:
             logging.warning('%s is not a generator!' % target.__name__)
             return -1
-        if not args and kwargs:
-            args = kwargs.pop('args', ())
-            kwargs = kwargs.pop('kwargs', kwargs)
-        if kwargs.get('coro', None) is not None:
-            logging.warning('Coro function %s should not be called with ' \
-                            '"coro" parameter' % target.__name__)
-            return -1
-        try:
-            callargs = inspect.getcallargs(target, *args, **kwargs)
-        except TypeError as exc:
-            logging.warning(str(exc))
-            return -1
-        if 'coro' not in callargs or callargs['coro'] is not None:
-            logging.warning('Coro function "%s" should have "coro" argument with ' \
-                            'default value None' % target.__name__)
-            return -1
-        kwargs['coro'] = self
-        generator = target(*args, **kwargs)
         if self._asyncoro:
             return self._asyncoro._swap_generator(self, generator)
         else:
             logging.warning('hot_swap: coroutine %s removed?', self.name)
             return -1
+
+    def monitor(self, monitor):
+        """When this coroutine is finished (raises StopIteration or
+        terminated due to uncaught exception), that exception is
+        thrown to 'monitor' coroutine.
+
+        'monitor' can inspect the exception and restart coroutine.
+        """
+        if self._asyncoro and monitor._asyncoro:
+            return self._asyncoro._monitor(self, monitor)
+        else:
+            logging.warning('monitor: coroutine %s removed?', self.name)
+            return -1
+        
+    def restart(self, target, *args, **kwargs):
+        """If this coroutine is monitored by another coroutine, that
+        monitor can restart the coroutine with the (new) generator.
+
+        Resume updates are not reset, so new generator can process
+        pending updates/messages.
+        """
+        self._generator = self.__get_generator__(target, *args, **kwargs)
+        self.name = target.__name__
+        self._value = None
+        self._exceptions = []
+        self._callers = []
+        self._timeout = None
+        self._asyncoro = AsynCoro.instance()
+        self._asyncoro._add(self)
 
 class Lock(object):
     """'Lock' primitive for coroutines.
@@ -2234,6 +2251,25 @@ class AsynCoro(object):
             self._daemons += 1
         self._lock.release()
 
+    def _monitor(self, coro, monitor):
+        self._lock.acquire()
+        cid = id(coro)
+        coro = self._coros.get(cid, None)
+        if coro is None:
+            self._lock.release()
+            logging.warning('monitor: invalid coroutine')
+            return -1
+        mid = id(monitor)
+        monitor = self._coros.get(mid, None)
+        if monitor is None or coro._monitor:
+            self._lock.release()
+            logging.warning('invalid monitor')
+            return -1
+        # logging.debug('%s/%s monitoring %s/%s', monitor.name, mid, coro.name, id(coro))
+        coro._monitor = mid
+        self._lock.release()
+        return 0
+
     def _suspend(self, coro, timeout, alarm_value, state):
         """Internal use only. See sleep/suspend in Coro.
         """
@@ -2311,7 +2347,7 @@ class AsynCoro(object):
             return -1
         # prevent throwing more than once?
         coro._timeout = None
-        coro._exception = args
+        coro._exceptions.append(args)
         if coro._state == AsynCoro._Await_ or coro._state == AsynCoro._Suspended:
             self._suspended.discard(cid)
             self._scheduled.add(cid)
@@ -2338,7 +2374,7 @@ class AsynCoro(object):
             logging.warning('coroutine to terminate %s/%s is running', coro.name, cid)
             # if coro raises exception during current run, this
             # exception will be ignored (coro won't terminated)!
-        coro._exception = (GeneratorExit, GeneratorExit('close'))
+        coro._exception.append((GeneratorExit, GeneratorExit('close')))
         coro._timeout = None
         coro._state = AsynCoro._Scheduled
         if len(self._scheduled) == 1:
@@ -2365,7 +2401,7 @@ class AsynCoro(object):
             return 1
         else:
             coro._timeout = None
-            coro._exception = (HotSwap, HotSwap(generator))
+            coro._exception.append((HotSwap, HotSwap(generator)))
             if coro._state == AsynCoro._Suspended:
                 self._suspended.discard(cid)
                 self._scheduled.add(cid)
@@ -2430,8 +2466,8 @@ class AsynCoro(object):
                 self._lock.release()
 
                 try:
-                    if coro._exception:
-                        exc, coro._exception = coro._exception, None
+                    if coro._exceptions:
+                        exc = coro._exceptions.pop(0)
                         if exc[0] == GeneratorExit:
                             # assert str(exc[1]) == 'close'
                             coro._generator.close()
@@ -2442,17 +2478,17 @@ class AsynCoro(object):
                 except:
                     self._lock.acquire()
                     self._cur_coro = None
-                    coro._exception = sys.exc_info()
-                    if coro._exception[0] == StopIteration:
-                        v = coro._exception[1].args
+                    exc = sys.exc_info()
+                    if exc[0] == StopIteration:
+                        v = exc[1].args
                         if v:
                             if len(v) == 1:
                                 coro._value = v[0]
                             else:
                                 coro._value = v
                         coro._exception = None
-                    elif coro._exception[0] == HotSwap:
-                        v = coro._exception[1].args
+                    elif exc[0] == HotSwap:
+                        v = exc[1].args
                         if isinstance(v, tuple) and len(v) == 1 and inspect.isgenerator(v[0]) and \
                                coro._hot_swappable and not coro._callers:
                             try:
@@ -2462,7 +2498,8 @@ class AsynCoro(object):
                                                 coro._generator.__name__, traceback.format_exc())
                             coro._generator = v[0]
                             coro.name = coro._generator.__name__
-                            coro._exception = None
+                            # TODO: leave exceptions?
+                            coro._exceptions = []
                             coro._value = None
                             # coro._resumes is not reset, so new
                             # generator can process pending messages
@@ -2472,41 +2509,60 @@ class AsynCoro(object):
                                             coro.name, id(coro))
                         self._lock.release()
                         continue
+                    else:
+                        coro._exceptions.append(exc)
 
                     if coro._callers:
                         # return to caller
                         caller = coro._callers.pop(-1)
                         coro._generator = caller[0]
-                        if coro._exception:
+                        if coro._exceptions:
                             # callee raised exception, restore saved value
                             coro._value = caller[1]
                             coro._state = AsynCoro._Scheduled
                         elif coro._state == AsynCoro._Running:
                             coro._state = AsynCoro._Scheduled
                     else:
-                        if coro._exception:
-                            assert isinstance(coro._exception, tuple)
-                            if len(coro._exception) == 2:
-                                exc = ''.join(traceback.format_exception_only(*coro._exception))
+                        if coro._exceptions:
+                            exc = coro._exceptions[0]
+                            assert isinstance(exc, tuple)
+                            if len(exc) == 2:
+                                exc = ''.join(traceback.format_exception_only(*exc))
                             else:
-                                exc = ''.join(traceback.format_exception(*coro._exception))
+                                exc = ''.join(traceback.format_exception(*exc))
                             logging.warning('uncaught exception in %s:\n%s', coro.name, exc)
+                            try:
+                                coro._generator.close()
+                            except:
+                                pass
 
                         # delete this coro
                         if self._coros.pop(id(coro), None) == coro:
-                            if coro._state == AsynCoro._Await_ or \
-                                   coro._state == AsynCoro._Suspended:
-                                self._suspended.discard(id(coro))
-                            else:
-                                assert coro._state in [AsynCoro._Scheduled, AsynCoro._Running]
-                                self._scheduled.discard(id(coro))
+                            assert coro._state in (AsynCoro._Scheduled, AsynCoro._Running)
+                            self._scheduled.discard(id(coro))
                             coro._asyncoro = None
                             coro._complete.set()
                             coro._state = None
-                            if coro._daemon:
+                            if coro._daemon is True:
                                 self._daemons -= 1
                             if len(self._coros) == self._daemons:
                                 self._complete.set()
+                            if coro._monitor:
+                                if coro._exceptions:
+                                    exc = Exception(coro, coro._exceptions[0])
+                                else:
+                                    exc = Exception(coro, (StopIteration, StopIteration()))
+
+                                monitor = self._coros.get(coro._monitor, None)
+                                if monitor:
+                                    monitor._timeout = None
+                                    monitor._exceptions.append((Exception, exc))
+                                    if monitor._state in (AsynCoro._Await_, AsynCoro._Suspended):
+                                        self._suspended.discard(coro._monitor)
+                                        self._scheduled.add(coro._monitor)
+                                        monitor._state = AsynCoro._Scheduled
+                            else:
+                                coro._resumes = []
                         else:
                             logging.warning('coro %s/%s already removed?', coro.name, id(coro))
                     self._lock.release()
@@ -2523,7 +2579,7 @@ class AsynCoro(object):
                     if coro._new_generator is not None and not coro._callers and \
                            coro._hot_swappable and coro._state in [AsynCoro._Scheduled,
                                                                    AsynCoro._Suspended]:
-                        coro._exception = (HotSwap, HotSwap(coro._new_generator))
+                        coro._exception.append((HotSwap, HotSwap(coro._new_generator)))
                         coro._new_generator = None
                     elif isinstance(retval, types.GeneratorType):
                         # push current generator onto stack and activate
