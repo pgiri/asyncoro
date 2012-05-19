@@ -894,6 +894,7 @@ if platform.system() == 'Windows':
                     self._timeout_fds = []
                     self.poll_timeout = 0
                     self._lock = threading.Lock()
+                    self.polling = False
                     self.async_poller = _AsyncPoller(self)
                     self.cmd_rsock, self.cmd_wsock = _AsyncPoller._socketpair()
                     self.cmd_wsock.setblocking(0)
@@ -948,7 +949,7 @@ if platform.system() == 'Windows':
                 self._lock.release()
                 if timeout and timeout != _AsyncNotifier._Block:
                     timeout = int(timeout * 1000)
-
+                self.polling = True
                 err, n, key, overlap = win32file.GetQueuedCompletionStatus(self.iocp, timeout)
                 while err != winerror.WAIT_TIMEOUT:
                     if overlap and overlap.object:
@@ -957,6 +958,7 @@ if platform.system() == 'Windows':
                         logger.warning('invalid overlap!')
                     err, n, key, overlap = win32file.GetQueuedCompletionStatus(self.iocp, 0)
                 self.poll_timeout = 0
+                self.polling = False
                 if timeout == 0:
                     now = _time()
                     self._lock.acquire()
@@ -1460,6 +1462,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                 self._events = {}
                 self._timeouts = []
                 self._timeout_fds = []
+                self.polling = False
                 self.cmd_rsock, self.cmd_wsock = _AsyncPoller._socketpair()
                 self.cmd_wsock.setblocking(0)
                 self.cmd_rsock = AsynCoroSocket(self.cmd_rsock)
@@ -1489,15 +1492,17 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
             if poll_timeout and poll_timeout != _AsyncPoller._Block:
                 poll_timeout *= self.timeout_multiplier
 
+            self.polling = True
             try:
                 events = self._poller.poll(poll_timeout)
             except:
+                self.polling = False
                 logger.debug('poll failed')
                 logger.debug(traceback.format_exc())
                 # prevent tight loops
                 time.sleep(5)
                 return
-
+            self.polling = False
             try:
                 for fileno, event in events:
                     fd = self._fds.get(fileno, None)
@@ -1799,12 +1804,15 @@ class Coro(object):
 
     sleep = suspend
 
-    receive = suspend
-
     def _await_(self, timeout=None, alarm_value=None):
         """Internal use only.
         """
-        return self._asyncoro._suspend(self, timeout, alarm_value, AsynCoro._Await_)
+        return self._asyncoro._suspend(self, timeout, alarm_value, AsynCoro._AwaitIO_)
+
+    def receive(self, timeout=None, alarm_value=None):
+        """Internal use only.
+        """
+        return self._asyncoro._suspend(self, timeout, alarm_value, AsynCoro._AwaitMsg_)
 
     def resume(self, update=None):
         """Resume/wakeup this coro and send 'update' to it.
@@ -1824,12 +1832,17 @@ class Coro(object):
 
     wakeup = resume
 
-    send = resume
-
     def _proceed_(self, update=None):
         """Internal use only.
         """
-        return self._asyncoro._resume(self, update, AsynCoro._Await_)
+        return self._asyncoro._resume(self, update, AsynCoro._AwaitIO_)
+
+    def send(self, msg):
+        if self._asyncoro:
+            return self._asyncoro._resume(self, msg, AsynCoro._AwaitMsg_)
+        else:
+            logger.warning('send: coroutine %s removed?', self.name)
+            return -1
 
     def throw(self, *args):
         """Throw exception in coroutine. This method must be called from
@@ -2207,7 +2220,9 @@ class AsynCoro(object):
     # in _suspended
     _Suspended = 3
     # in _suspended; for internal use
-    _Await_ = 4
+    _AwaitIO_ = 4
+    # in _suspended; for internal use
+    _AwaitMsg_ = 5
 
     def __init__(self, notifier=None):
         if self.__class__.__instance is None:
@@ -2254,7 +2269,7 @@ class AsynCoro(object):
         self._complete.clear()
         coro._state = AsynCoro._Scheduled
         self._scheduled.add(id(coro))
-        if len(self._scheduled) == 1:
+        if self._notifier.polling and len(self._scheduled) == 1:
             self._notifier.interrupt()
         self._lock.release()
 
@@ -2279,7 +2294,7 @@ class AsynCoro(object):
             return -1
         mid = id(monitor)
         monitor = self._coros.get(mid, None)
-        if monitor is None or coro._monitor:
+        if monitor is None or coro._monitor is not None or coro == monitor:
             self._lock.release()
             logger.warning('invalid monitor')
             return -1
@@ -2294,6 +2309,7 @@ class AsynCoro(object):
             if not isinstance(timeout, (float, int)) or timeout < 0:
                 logger.warning('invalid timeout %s', timeout)
                 return -1
+        assert state in (AsynCoro._AwaitIO_, AsynCoro._Suspended, AsynCoro._AwaitMsg_)
         self._lock.acquire()
         cid = id(coro)
         coro = self._coros.get(cid, None)
@@ -2301,7 +2317,7 @@ class AsynCoro(object):
             self._lock.release()
             logger.warning('invalid coroutine %s to suspend', cid)
             return -1
-        if coro._msgs:
+        if state == AsynCoro._AwaitMsg_ and coro._msgs:
             s, update = coro._msgs[0]
             if s == state:
                 del coro._msgs[0]
@@ -2318,7 +2334,6 @@ class AsynCoro(object):
             coro._timeout = timeout
         self._scheduled.discard(cid)
         self._suspended.add(cid)
-        assert state == AsynCoro._Await_ or state == AsynCoro._Suspended
         coro._state = state
         self._lock.release()
         return 0
@@ -2333,21 +2348,20 @@ class AsynCoro(object):
             self._lock.release()
             logger.warning('invalid coroutine %s to resume', cid)
             return -1
-        if coro._state != state:
-            assert state == AsynCoro._Suspended
+        if state == AsynCoro._AwaitMsg_ and coro._state != state:
             coro._msgs.append((state, update))
             self._lock.release()
             return 0
-        coro._timeout = None
-        coro._value = update
-        self._suspended.discard(cid)
-        self._scheduled.add(cid)
-        coro._state = AsynCoro._Scheduled
-        # if resumed by coro or notifier(s), we don't need to interrupt
-        # notifier, but if resumed from threads, we need to interrupt
-        # notifier
-        if len(self._scheduled) == 1:
-            self._notifier.interrupt()
+        if coro._state == state:
+            coro._timeout = None
+            coro._value = update
+            self._suspended.discard(cid)
+            self._scheduled.add(cid)
+            coro._state = AsynCoro._Scheduled
+            if self._notifier.polling and len(self._scheduled) == 1:
+                self._notifier.interrupt()
+        else:
+            logger.warning('ignoring resume for %s/%s', coro.name, cid)
         self._lock.release()
         return 0
 
@@ -2357,19 +2371,18 @@ class AsynCoro(object):
         self._lock.acquire()
         cid = id(coro)
         coro = self._coros.get(cid, None)
-        if coro is None or coro._state not in [AsynCoro._Scheduled, AsynCoro._Await_,
-                                               AsynCoro._Suspended]:
+        if coro is None or coro._state not in (AsynCoro._Scheduled, AsynCoro._Suspended,
+                                               AsynCoro._AwaitIO_, AsynCoro._AwaitMsg_):
             logger.warning('invalid coroutine %s to throw exception', cid)
             self._lock.release()
             return -1
-        # prevent throwing more than once?
         coro._timeout = None
         coro._exceptions.append(args)
-        if coro._state == AsynCoro._Await_ or coro._state == AsynCoro._Suspended:
+        if coro._state in (AsynCoro._AwaitIO_, AsynCoro._Suspended, AsynCoro._AwaitMsg_):
             self._suspended.discard(cid)
             self._scheduled.add(cid)
         coro._state = AsynCoro._Scheduled
-        if len(self._scheduled) == 1:
+        if self._notifier.polling and len(self._scheduled) == 1:
             self._notifier.interrupt()
         self._lock.release()
         return 0
@@ -2384,7 +2397,7 @@ class AsynCoro(object):
             logger.warning('invalid coroutine %s to terminate', cid)
             self._lock.release()
             return -1
-        if coro._state == AsynCoro._Await_ or coro._state == AsynCoro._Suspended:
+        if coro._state in (AsynCoro._AwaitIO_, AsynCoro._Suspended, AsynCoro._AwaitMsg_):
             self._suspended.discard(cid)
             self._scheduled.add(cid)
         elif coro._state == AsynCoro._Running:
@@ -2394,7 +2407,7 @@ class AsynCoro(object):
         coro._exceptions.append((GeneratorExit, GeneratorExit('close')))
         coro._timeout = None
         coro._state = AsynCoro._Scheduled
-        if len(self._scheduled) == 1:
+        if self._notifier.polling and len(self._scheduled) == 1:
             self._notifier.interrupt()
         self._lock.release()
         return 0
@@ -2410,7 +2423,7 @@ class AsynCoro(object):
             self._lock.release()
             return -1
         # TODO: prevent overwriting another generator already queued?
-        if coro._callers or coro._state not in [AsynCoro._Scheduled, AsynCoro._Suspended] or \
+        if coro._callers or coro._state not in (AsynCoro._Scheduled, AsynCoro._Suspended) or \
                not coro._hot_swappable:
             logger.debug('postponing hot swapping of %s/%s', coro.name, cid)
             coro._new_generator = generator
@@ -2423,7 +2436,7 @@ class AsynCoro(object):
                 self._suspended.discard(cid)
                 self._scheduled.add(cid)
                 coro._state = AsynCoro._Scheduled
-                if len(self._scheduled) == 1:
+                if self._notifier.polling and len(self._scheduled) == 1:
                     self._notifier.interrupt()
         self._lock.release()
         return 0
@@ -2457,7 +2470,8 @@ class AsynCoro(object):
                     coro = self._coros.get(cid, None)
                     if coro is None or coro._timeout != timeout:
                         continue
-                    if coro._state != AsynCoro._Await_ and coro._state != AsynCoro._Suspended:
+                    if coro._state not in (AsynCoro._AwaitIO_, AsynCoro._Suspended,
+                                           AsynCoro._AwaitMsg_):
                         logger.warning('coro %s/%s is in state %s for resume; ignored',
                                        coro.name, id(coro), coro._state)
                         continue
@@ -2577,7 +2591,8 @@ class AsynCoro(object):
                                 if monitor:
                                     monitor._timeout = None
                                     monitor._exceptions.append((Exception, exc))
-                                    if monitor._state in (AsynCoro._Await_, AsynCoro._Suspended):
+                                    if monitor._state in (AsynCoro._AwaitIO_, AsynCoro._Suspended,
+                                                          AsynCoro._AwaitMsg_):
                                         self._suspended.discard(coro._monitor)
                                         self._scheduled.add(coro._monitor)
                                         monitor._state = AsynCoro._Scheduled
