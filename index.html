@@ -209,26 +209,25 @@ other <em>process</em> coroutines).
   methods:
     <ul>
       <li><b>suspend(timeout=None, alarm_value=None)</b> method should
-      be used with <em>yield</em> statement. <b>sleep</b>
-      and <b>receive</b> are synonyms for <em>suspend</em>. If
-      timeout is a positive number (float or int), AsynCoro suspends
-      execution of coroutine until that many seconds (or fractions of
-      second). If timeout is None, the coroutine is not woken up by
-      AsynCoro - some other coroutine needs to resume it. The value
-      yielded by this method is the value it is resumed with or
-      alarm_value if resumed by AsynCoro due to timeout.  For example,
-      if a coroutine executes <tt>v = yield coro.sleep(2.9)</tt>, it
-      is suspended for 2.9 seconds. If before timeout, another
-      coroutine wakes up this coroutine (with
+      be used with <em>yield</em> statement. <b>sleep</b> is synonym
+      for <em>suspend</em>. If timeout is a positive number (float or
+      int), AsynCoro suspends execution of coroutine until that many
+      seconds (or fractions of second). If timeout is None, the
+      coroutine is not woken up by AsynCoro - some other coroutine
+      needs to resume it. The value yielded by this method is the
+      value it is resumed with or alarm_value if resumed by AsynCoro
+      due to timeout.  If timeout=0, this method returns alarm_value
+      without suspending the coroutine.  For example, if a coroutine
+      executes <tt>v = yield coro.sleep(2.9)</tt>, it is suspended for
+      2.9 seconds. If before timeout, another coroutine wakes up this
+      coroutine (with
       <em>resume</em> method) with a value, <em>v</em> is set to that
       value. Otherwise, after 2.9 seconds, this coroutine is resumed
       with None (default alarm_value) so <em>v</em> is set to None and
       coroutine continues execution. During the time coroutine is
       suspended, scheduler executes other scheduled coroutines. Within
       a coroutine coro.sleep must be used (with <em>yield</em>)
-      instead of time.sleep. If called with timeout=0, this method
-      will not suspend the coroutine; it will return either earliest
-      'update' from resume queue if any available or alarm_value.
+      instead of time.sleep.
       </li>
       <li>
 	<b>resume(update=None)</b> method should be invoked on a
@@ -236,20 +235,36 @@ other <em>process</em> coroutines).
 	synonyms for <em>resume</em>. As explained above, the
 	suspended coroutine gets <em>update</em> (any Python object)
 	as the value of yield statement that caused it to
-	suspend. If <em>resume</em>/<em>wakeup</em>/<em>send</em> is
-	called on a coroutine that is not currently
-	suspended/sleeping/waiting on receive, the 'update' is queued
-	so that when the coroutine next calls suspend, it will receive
-	'update' without suspension. Although it is possible to use
-	this mechanism as producer/consumer recipe, it is not very
-	efficient for high bandwidth use; see chat server in Examples
-	section where deque is used along with asyncoro's Event
-	locking primitive. If sleep/resume synchronization is needed
-	(so that resume waits until specific suspend is ready to
-	receive), Event locking primitive can be used so that resuming
-	coroutine waits on an event variable and suspending coroutine
-	sets the event before going to sleep.
+	suspend. If <em>resume</em>/<em>wakeup</em> is called on a
+	coroutine that is not currently suspended/sleeping, the resume
+	is ignored. If sleep/resume synchronization is needed (so that
+	resume waits until specific suspend is ready to receive),
+	Event locking primitive can be used so that resuming coroutine
+	waits on an event variable and suspending coroutine sets the
+	event before going to sleep.
 	</li>
+      <li><b>send(msg)</b> method sends message <em>msg</em>, which
+      can be any Python object. If the coroutine is currently waiting
+      for messages (with <em>receive</em>), then it is resumed
+      with <em>msg</em>. If it is not currently waiting for messages,
+      the message is queued so that next <em>receive</em> returns the
+      message without suspending.
+	</li>
+      <li><b>receive(timeout=None, alarm_value=None)</b> method should
+      be used with <em>yield</em>.  If there are any messages
+      available (that have been sent earlier with <em>send</em>), this
+      method returns earliest queued message; otherwise, the coroutine
+      is suspended until <em>timeout</em>, same as in the case of
+      <em>suspend</em>.  If called with timeout=0, this method will
+      not suspend the coroutine; it will return either earliest
+      queued message if available or alarm_value.
+      <p>
+	Although it is possible to use <em>send</em>/<em>receive</em>
+	as producer/consumer recipe, it is not very efficient for high
+	bandwidth use; see chat server in Examples section where deque
+	is used along with asyncoro's Event locking primitive.
+	</p>
+      </li>
       <li>
 	<b>set_daemon()</b> method marks the coroutine a daemon
 	(process that never terminates). Similar to threading module,
@@ -288,30 +303,65 @@ other <em>process</em> coroutines).
 	<b>hot_swap(target [, arg1, arg2, ...])</b> method requests
 	AsynCoro to replace coroutine's generator function
 	with <em>target(arg1, arg2, ...)</em>. AsynCoro then throws
-	HotSwap exception in the coroutine when a) coro indicated it
-	can handle hot swap (i.e., called hot_swappable with
+	HotSwapException in the coroutine when a) coro indicated it
+	can handle hot swap (i.e., last called hot_swappable with
 	flag=True), b) it is currently executing at top-level (i.e.,
 	has not called other generator functions) and c) has no
 	pending asynchronous operations (socket I/O, tasks scheduled
 	with AsyncThreadPool, and database cursor tasks). The new
-	generator is set as args[0] of HotSwap exception, so the coro
+	generator is set as args[0] of HotSwapException, so the coro
 	can inspect new generator, if necessary, and can do any
 	preparation for hot swapping, e.g., saving state (perhaps by
 	sending state as a message to itself which can be retrieved in
 	the new generator with <em>receive</em>), or even ignore
-	HotSwap request. If/when it is ready for swap, it must
-	re-raise the same HotSwap exception (with the new generator as
-	args[0]). This causes AsynCoro to close current generator,
-	replace it with the new generator and schedule new generator
-	for execution (from the beginning). Any messages (i.e., resume
-	updates) queued in the previous generator are not reset, so
-	new generator can process queued messages (e.g.,
+	hot swap request. If/when it is ready for swap, it
+	must re-raise the same HotSwapException (with the new
+	generator as args[0]). This causes AsynCoro to close current
+	generator, replace it with the new generator and schedule new
+	generator for execution (from the beginning). Any messages
+	(i.e., resume updates) queued in the previous generator are
+	not reset, so new generator can process queued messages (e.g.,
 	use <em>receive</em> in a loop with timeout=0
 	until <em>receive</em> returns alarm_value). Note that
 	<em>hot_swap</em> changes generator function of a particular
 	coroutine for which it is called. If there are many coroutines
 	using that generator function, <em>hot_swap</em> may be called
 	for each such coroutine.
+	</li>
+      <li>
+	<b>monitor(m)</b> method registers <em>m</em> as monitor of
+	the coroutine.  Then, when the coroutine is finished, either
+	because coroutine's generator function finished exceution
+	(i.e., raised StopIteration exception) or was terminated by
+	AsynCoro because of an uncaught exception, AsynCoro throws
+	MonitorException in coroutine's monitor <em>m</em>, which must
+	also be a coroutine. MonitorException's args[0] is set to the
+	affected coroutine and args[1] is set to the exception tuple:
+	If coroutine finished execution, the tuple is a pair, with
+	first element set to (type) StopIteration and second element
+	instance of StopIteration, and if coroutine was terminated due
+	to uncaught exception, the tuple will have either 2 or 3
+	elements, with first element set to the type of exception,
+	second element set to the uncaught exception, and third
+	element set to trace, if available. The monitor can inspect
+	MonitorException and possibly restart the affected coroutine
+	(see below). A coroutine can be monitored by at most one
+	monitor, and a monitor can monitor any number of
+	coroutines. Monitors can also be chained, so if a monitor
+	itself finishes (e.g., fails to process MonitorException),
+	then the exception is thrown in its monitor, if it has one,
+	etc.
+	</li>
+      <li>
+	<b>restart(target[, arg1, arg2, ...])</b> method requests
+	AsynCoro to restart the coroutine with generator
+	function <em>target(arg1, arg2, ...)</em>. A monitoring
+	coroutine, for example, can restart a finished or terminated
+	coroutine, possibly with a different generator and
+	arguments. AsynCoro keeps any pending messages from previous
+	generator, so new generator function can process those
+	messages. With <em>monitor</em> and <em>restart</em>,
+	fault-tolerant coroutines and applications can be created.
 	</li>
     </ul>
   </li>
@@ -449,7 +499,7 @@ for x in range(num_threads):
     async_cursors.append(asyncoro.AsynCoroDBCursor(thread_pool, cursor))
 
 # 3 cursors are used in 10 coroutines
-for _, async_cursor in itertools.izip(xrange(10), itertools.cycle(async_cursors)):
+for _, async_cursor in itertools.izip(range(10), itertools.cycle(async_cursors)):
     asyncoro.Coro(db_proc, async_cursor)
 
 def db_proc(cursor, coro=None):
