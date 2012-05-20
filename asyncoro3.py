@@ -2518,17 +2518,17 @@ class AsynCoro(object, metaclass=MetaSingleton):
                     self._scheduled.add(cid)
                     coro._state = AsynCoro._Scheduled
                     coro._value = alarm_value
-            scheduled = [self._coros.get(cid, None) for cid in self._scheduled]
+            scheduled = self._scheduled.copy()
             # random.shuffle(scheduled)
             self._lock.release()
 
-            for coro in scheduled:
-                if coro is None:
-                    continue
+            for cid in scheduled:
                 self._lock.acquire()
-                if coro._state != AsynCoro._Scheduled:
+                coro = self._coros.get(cid, None)
+                if coro is None or coro._state != AsynCoro._Scheduled:
                     self._lock.release()
-                    logger.warning('ignoring %s with state %s', coro.name, coro._state)
+                    if coro is not None:
+                        logger.warning('ignoring %s/%s with state %s', coro.name, cid, coro._state)
                     continue
                 coro._state = AsynCoro._Running
                 self._cur_coro = coro
@@ -2563,11 +2563,10 @@ class AsynCoro(object, metaclass=MetaSingleton):
                             try:
                                 coro._generator.close()
                             except:
-                                logger.warning('closing %s raised exception: %s',
-                                               coro._generator.__name__, traceback.format_exc())
+                                logger.warning('closing %s/%s raised exception: %s',
+                                               coro.name, cid, traceback.format_exc())
                             coro._generator = v[0]
                             coro.name = coro._generator.__name__
-                            # TODO: leave exceptions?
                             coro._exceptions = []
                             coro._value = None
                             # coro._msgs is not reset, so new
@@ -2575,7 +2574,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                             coro._state = AsynCoro._Scheduled
                         else:
                             logger.warning('invalid HotSwapException from %s/%s ignored',
-                                           coro.name, id(coro))
+                                           coro.name, cid)
                         self._lock.release()
                         continue
                     else:
@@ -2604,11 +2603,11 @@ class AsynCoro(object, metaclass=MetaSingleton):
                                 coro._generator.close()
                             except:
                                 logger.warning('closing %s raised exception: %s',
-                                               coro._generator.__name__, traceback.format_exc())
+                                               coro.name, traceback.format_exc())
                         # delete this coro
-                        if self._coros.pop(id(coro), None) == coro:
+                        if self._coros.pop(cid, None) == coro:
                             assert coro._state in (AsynCoro._Scheduled, AsynCoro._Running)
-                            self._scheduled.discard(id(coro))
+                            self._scheduled.discard(cid)
                             coro._asyncoro = None
                             coro._complete.set()
                             coro._state = None
@@ -2638,7 +2637,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                             else:
                                 coro._msgs = []
                         else:
-                            logger.warning('coro %s/%s already removed?', coro.name, id(coro))
+                            logger.warning('coro %s/%s already removed?', coro.name, cid)
                     self._lock.release()
                 else:
                     self._lock.acquire()
