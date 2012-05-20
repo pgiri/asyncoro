@@ -231,10 +231,10 @@ other <em>process</em> coroutines).
       </li>
       <li>
 	<b>resume(update=None)</b> method should be invoked on a
-	suspended coroutine. <b>wakeup</b> and <b>send</b> are
-	synonyms for <em>resume</em>. As explained above, the
-	suspended coroutine gets <em>update</em> (any Python object)
-	as the value of yield statement that caused it to
+	suspended coroutine. <b>wakeup</b> is synonym
+	for <em>resume</em>. As explained above, the suspended
+	coroutine gets <em>update</em> (any Python object) as the
+	value of yield statement that caused it to
 	suspend. If <em>resume</em>/<em>wakeup</em> is called on a
 	coroutine that is not currently suspended/sleeping, the resume
 	is ignored. If sleep/resume synchronization is needed (so that
@@ -339,18 +339,18 @@ other <em>process</em> coroutines).
 	affected coroutine and args[1] is set to the exception tuple:
 	If coroutine finished execution, the tuple is a pair, with
 	first element set to (type) StopIteration and second element
-	instance of StopIteration, and if coroutine was terminated due
-	to uncaught exception, the tuple will have either 2 or 3
-	elements, with first element set to the type of exception,
-	second element set to the uncaught exception, and third
-	element set to trace, if available. The monitor can inspect
-	MonitorException and possibly restart the affected coroutine
-	(see below). A coroutine can be monitored by at most one
-	monitor, and a monitor can monitor any number of
-	coroutines. Monitors can also be chained, so if a monitor
-	itself finishes (e.g., fails to process MonitorException),
-	then the exception is thrown in its monitor, if it has one,
-	etc.
+	instance of StopIteration with the last value yielded by
+	coroutine, and if coroutine was terminated due to uncaught
+	exception, the tuple will have either 2 or 3 elements, with
+	first element set to the type of exception, second element set
+	to the uncaught exception, and third element set to trace, if
+	available. The monitor can inspect MonitorException and
+	possibly restart the affected coroutine (see below). A
+	coroutine can be monitored by at most one monitor, and a
+	monitor can monitor any number of coroutines. Monitors can
+	also be chained, so if a monitor itself finishes (e.g., fails
+	to process MonitorException), then the exception is thrown in
+	its monitor, if it has one, etc.
 	</li>
       <li>
 	<b>restart(target[, arg1, arg2, ...])</b> method requests
