@@ -39,7 +39,7 @@ import atexit
 logger = logging.getLogger('asyncoro')
 logger.setLevel(logging.INFO)
 handler = logging.StreamHandler()
-handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(message)s'))
 logger.addHandler(handler)
 del handler
 
@@ -1725,9 +1725,15 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
     _AsyncNotifier = _AsyncPoller
 
 class HotSwapException(Exception):
+    """This exception is used to indicate hot-swap request and
+    response.
+    """
     pass
 
 class MonitorException(Exception):
+    """This execption is used to indicate that a coroutine being
+    monitored has finished or terminated.
+    """
     pass
 
 class Coro(object):
@@ -1747,9 +1753,6 @@ class Coro(object):
         self._timeout = None
         self._daemon = False
         self._complete = threading.Event()
-        # if coro is not ready to be resumed, resume requests are
-        # queued. For now, only one type of messages are queued up, so
-        # no need to use dictionary
         self._msgs = []
         self._monitor = None
         self._new_generator = None
@@ -1787,8 +1790,9 @@ class Coro(object):
             return -1
 
     def suspend(self, timeout=None, alarm_value=None):
-        """Suspend/sleep coro (until woken up, usually by AsyncNotifier
-        in the case of AsynCoroSockets).
+        """This method should be used with 'yield'. Suspend/sleep coro
+        (until woken up, usually by AsyncNotifier in the case of
+        AsynCoroSockets).
 
         If timeout is a (floating point) number, this coro is
         suspended for that many seconds (or fractions of second). This
@@ -1810,20 +1814,12 @@ class Coro(object):
         """
         return self._asyncoro._suspend(self, timeout, alarm_value, AsynCoro._AwaitIO_)
 
-    def receive(self, timeout=None, alarm_value=None):
-        """Internal use only.
-        """
-        return self._asyncoro._suspend(self, timeout, alarm_value, AsynCoro._AwaitMsg_)
-
     def resume(self, update=None):
         """Resume/wakeup this coro and send 'update' to it.
 
         The resuming coro gets 'update' for the 'yield' that caused it
-        to suspend.
-
-        If coro is currently not suspended/sleeping, 'update' is
-        queued. Then next suspend/sleep call will return queued
-        'update' so coro is not suspended at all.
+        to suspend. If coro is currently not suspended/sleeping,
+        resume is ignored.
         """
         if self._asyncoro:
             return self._asyncoro._resume(self, update, AsynCoro._Suspended)
@@ -1838,12 +1834,27 @@ class Coro(object):
         """
         return self._asyncoro._resume(self, update, AsynCoro._AwaitIO_)
 
-    def send(self, msg):
+    def send(self, message):
+        """Sends 'message' to coro.
+
+        If coro is currently waiting with 'receive', it is resumed
+        with 'message'. Otherwise, 'message' is queued so that next
+        receive call will return message.
+        """
         if self._asyncoro:
-            return self._asyncoro._resume(self, msg, AsynCoro._AwaitMsg_)
+            return self._asyncoro._resume(self, message, AsynCoro._AwaitMsg_)
         else:
             logger.warning('send: coroutine %s removed?', self.name)
             return -1
+
+    def receive(self, timeout=None, alarm_value=None):
+        """Should be used with 'yield'. Gets/waits for message.
+
+        Gets earliest queued message if available (that has been sent
+        earlier with 'send'). Otherwise, suspends until 'timeout'. If
+        timeout happens, coro receives alarm_value.
+        """
+        return self._asyncoro._suspend(self, timeout, alarm_value, AsynCoro._AwaitMsg_)
 
     def throw(self, *args):
         """Throw exception in coroutine. This method must be called from
@@ -2611,7 +2622,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
                                     exc = MonitorException(coro, coro._exceptions[0])
                                     coro._exceptions = []
                                 else:
-                                    exc = MonitorException(coro, (StopIteration, StopIteration()))
+                                    exc = MonitorException(coro, (StopIteration,
+                                                                  StopIteration(coro._value)))
 
                                 monitor = self._coros.get(coro._monitor, None)
                                 if monitor:
