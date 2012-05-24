@@ -370,8 +370,7 @@ class _AsynCoroSocket(object):
                 self._read_result = None
                 return ''
             view = view[recvd:]
-        buf = str(self._read_result)
-        self._read_result = None
+        buf, self._read_result = str(self._read_result), None
         return buf
 
     def _async_recvfrom(self, *args):
@@ -2202,6 +2201,105 @@ class Semaphore(object):
         if self._waitlist:
             wake = self._waitlist.pop(0)
             wake._proceed_()
+
+class ChannelMessage(object):
+    """Message sent over channel.
+
+    With AsyncChannel, messages can be received from multiple
+    channels. A recipient may want to know not just the message, but
+    on which channel it is received. For consistency, same structure
+    is used for SyncChannel messages too.
+    """
+
+    __slots__ = ('channel', 'message')
+
+    def __init__(self, channel, message):
+        self.channel = channel
+        if isinstance(message, ChannelMessage):
+            self.message = message.message
+        else:
+            self.message = message
+
+class _Channel(object):
+    """Internal use only.
+    """
+
+    names = set()
+
+class AsyncChannel(_Channel):
+    """Asynchronous channel. Broadcasts a message to all registered
+    recipients, whether they are currently waiting for message or
+    not. To get a message, a coro must use 'yield coro.receive()',
+    with timeout and alarm_value, if necessary.
+
+    Channels can be hierarchical!
+    """
+
+    def __init__(self, name, transform=None):
+        """'transform' is a function that can either filter or
+        transform a message. If the function returns 'None', the
+        message is filtered (ignored). The function is called with
+        first parameter set to the channel and second parameter set to
+        the message.
+        """
+        if name in self.__class__.names:
+            logger.warning('duplicate channel name "%s"' % name)
+        else:
+            _Channel.names.add(name)
+        self._name = name
+        self._transform = transform
+        self._recipients = set()
+
+    def name(self):
+        return self._name
+
+    def add_recipient(self, coro):
+        self._recipients.add(coro)
+
+    def del_recipient(self, coro):
+        self._recipients.discard(coro)
+
+    def send(self, message):
+        if self._transform:
+            message = self._transform(self._name, message)
+            if message is None:
+                return
+        msg = ChannelMessage(self._name, message)
+        for r in self._recipients:
+            r.send(msg)
+
+class SyncChannel(_Channel):
+    """Synchronous channel. Broadcasts a message to currently waiting
+    coros. To receive a message, a coro should use
+    'yield channel.receive(coro)', with timeout and alarm_value, if
+    necessary.
+    """
+
+    def __init__(self, name, transform=None):
+        if name in self.__class__.names:
+            logger.warning('duplicate channel name "%s"' % name)
+        else:
+            _Channel.names.add(name)
+        self._name = name
+        self._transform = transform
+        self._recipients = []
+        
+    def name(self):
+        return self._name
+
+    def send(self, message):
+        if self._transform:
+            message = self._transform(self._name, message)
+            if message is None:
+                return
+        msg = ChannelMessage(self._name, message)
+        for r in self._recipients:
+            r._proceed_(msg)
+        self._recipients = []
+
+    def receive(self, coro, timeout=None, alarm_value=None):
+        self._recipients.append(coro)
+        coro._await_(timeout, alarm_value)
 
 class AsynCoro(object):
     """Coroutine scheduler.
