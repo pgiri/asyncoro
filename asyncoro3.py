@@ -2260,7 +2260,7 @@ class _Channel(object):
 
 class AsyncChannel(_Channel):
     """Asynchronous channel. Broadcasts a message to all registered
-    recipients, whether they are currently waiting for message or
+    subscribers, whether they are currently waiting for message or
     not. To get a message, a coro must use 'yield coro.receive()',
     with timeout and alarm_value, if necessary.
 
@@ -2271,25 +2271,38 @@ class AsyncChannel(_Channel):
         """'transform' is a function that can either filter or
         transform a message. If the function returns 'None', the
         message is filtered (ignored). The function is called with
-        first parameter set to the channel and second parameter set to
-        the message.
+        first parameter set to channel name and second parameter set
+        to the message.
         """
-        if name in self.__class__.names:
+        if name in _Channel.names:
             logger.warning('duplicate channel name "%s"' % name)
         else:
             _Channel.names.add(name)
         self._name = name
+        if transform is not None:
+            try:
+                argspec = inspect.getargspec(transform)
+                assert len(argspec.args) == 2
+            except:
+                logger.warning('invalid "transform" function ignored')
+                transform = None
         self._transform = transform
-        self._recipients = set()
+        self._subscribers = set()
 
     def name(self):
         return self._name
 
-    def add_recipient(self, coro):
-        self._recipients.add(coro)
+    def subscribe(self, coro):
+        """Subscribe to receive messages. Senders don't need to
+        subscribe. Amessage sent to this channel is delivered to all
+        subscribers.
+        """
+        self._subscribers.add(coro)
 
-    def del_recipient(self, coro):
-        self._recipients.discard(coro)
+    def unsubscribe(self, coro):
+        """Future messages will not be delivered after unsubscribing.
+        """
+        self._subscribers.discard(coro)
 
     def send(self, message):
         if self._transform:
@@ -2297,8 +2310,8 @@ class AsyncChannel(_Channel):
             if message is None:
                 return
         msg = ChannelMessage(self._name, message)
-        for r in self._recipients:
-            r.send(msg)
+        for coro in self._subscribers:
+            coro.send(msg)
 
 class SyncChannel(_Channel):
     """Synchronous channel. Broadcasts a message to currently waiting
@@ -2308,11 +2321,18 @@ class SyncChannel(_Channel):
     """
 
     def __init__(self, name, transform=None):
-        if name in self.__class__.names:
+        if name in _Channel.names:
             logger.warning('duplicate channel name "%s"' % name)
         else:
             _Channel.names.add(name)
         self._name = name
+        if transform is not None:
+            try:
+                argspec = inspect.getargspec(transform)
+                assert len(argspec.args) == 2
+            except:
+                logger.warning('invalid "transform" function ignored')
+                transform = None
         self._transform = transform
         self._recipients = []
         
@@ -2320,7 +2340,7 @@ class SyncChannel(_Channel):
         return self._name
 
     def send(self, message):
-        if self._transform:
+        if self._transform is not None:
             message = self._transform(self._name, message)
             if message is None:
                 return
@@ -2330,6 +2350,8 @@ class SyncChannel(_Channel):
         self._recipients = []
 
     def receive(self, coro, timeout=None, alarm_value=None):
+        """Must be used with 'yield'.
+        """
         self._recipients.append(coro)
         coro._await_(timeout, alarm_value)
 
