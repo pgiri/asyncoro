@@ -1745,9 +1745,9 @@ class Coro(object):
     this object.
     """
 
-    __slots__ = ['_generator', 'name', '_state', '_value', '_exceptions',
-                 '_callers', '_timeout', '_daemon', '_complete', '_msgs',
-                 '_monitor', '_new_generator', '_hot_swappable', '_asyncoro']
+    __slots__ = ('_generator', 'name', '_state', '_value', '_exceptions', '_callers',
+                 '_timeout', '_daemon', '_complete', '_msgs', '_monitor', '_new_generator',
+                 '_hot_swappable', '_asyncoro')
 
     def __init__(self, target, *args, **kwargs):
         self._generator = self.__get_generator__(target, *args, **kwargs)
@@ -1810,7 +1810,7 @@ class Coro(object):
         if self._asyncoro:
             return self._asyncoro._suspend(self, timeout, alarm_value, AsynCoro._Suspended)
         else:
-            logger.warning('suspend: coroutine %s removed?', self.name)
+            logger.warning('suspend: coroutine %s/%s removed?', self.name, id(self))
             return -1
 
     sleep = suspend
@@ -1830,7 +1830,7 @@ class Coro(object):
         if self._asyncoro:
             return self._asyncoro._resume(self, update, AsynCoro._Suspended)
         else:
-            logger.warning('resume: coroutine %s removed?', self.name)
+            logger.warning('resume: coroutine %s/%s removed?', self.name, id(self))
             return -1
 
     wakeup = resume
@@ -1838,7 +1838,11 @@ class Coro(object):
     def _proceed_(self, update=None):
         """Internal use only.
         """
-        return self._asyncoro._resume(self, update, AsynCoro._AwaitIO_)
+        if self._asyncoro:
+            return self._asyncoro._resume(self, update, AsynCoro._AwaitIO_)
+        else:
+            logger.warning('_proceed_: coroutine %s/%s removed?', self.name, id(self))
+            return -1
 
     def send(self, message):
         """Sends 'message' to coro.
@@ -1850,7 +1854,7 @@ class Coro(object):
         if self._asyncoro:
             return self._asyncoro._resume(self, message, AsynCoro._AwaitMsg_)
         else:
-            logger.warning('send: coroutine %s removed?', self.name)
+            logger.warning('send: coroutine %s/%s removed?', self.name, id(self))
             return -1
 
     def receive(self, timeout=None, alarm_value=None):
@@ -1860,7 +1864,11 @@ class Coro(object):
         earlier with 'send'). Otherwise, suspends until 'timeout'. If
         timeout happens, coro receives alarm_value.
         """
-        return self._asyncoro._suspend(self, timeout, alarm_value, AsynCoro._AwaitMsg_)
+        if self._asyncoro:
+            return self._asyncoro._suspend(self, timeout, alarm_value, AsynCoro._AwaitMsg_)
+        else:
+            logger.warning('receive: coroutine %s/%s removed?', self.name, id(self))
+            return -1
 
     def throw(self, *args):
         """Throw exception in coroutine. This method must be called from
@@ -1877,7 +1885,7 @@ class Coro(object):
         if self._asyncoro:
             return self._asyncoro._throw(self, *args)
         else:
-            logger.warning('throw: coroutine %s removed?', self.name)
+            logger.warning('throw: coroutine %s/%s removed?', self.name, id(self))
             return -1
 
     def value(self):
@@ -1904,7 +1912,7 @@ class Coro(object):
         if self._asyncoro:
             return self._asyncoro._terminate_coro(self)
         else:
-            logger.warning('terminate: coroutine %s removed?', self.name)
+            logger.warning('terminate: coroutine %s/%s removed?', self.name, id(self))
             return -1
 
     def hot_swappable(self, flag):
@@ -1935,7 +1943,7 @@ class Coro(object):
         if self._asyncoro:
             return self._asyncoro._swap_generator(self, generator)
         else:
-            logger.warning('hot_swap: coroutine %s removed?', self.name)
+            logger.warning('hot_swap: coroutine %s%s removed?', self.name, id(self))
             return -1
 
     def monitor(self, monitor):
@@ -2267,12 +2275,18 @@ class AsyncChannel(_Channel):
     Channels can be hierarchical!
     """
 
-    def __init__(self, name, transform=None):
-        """'transform' is a function that can either filter or
+    def __init__(self, name, transform=None, min_receivers=0):
+        """'name' must be unique across all channels.
+
+        'transform' is a function that can either filter or
         transform a message. If the function returns 'None', the
         message is filtered (ignored). The function is called with
         first parameter set to channel name and second parameter set
         to the message.
+
+        'min_receivers' is minimum number of receivers that a message
+        should be delivered to. This should be used in conjunction
+        with 'deliver' method.
         """
         if name in _Channel.names:
             logger.warning('duplicate channel name "%s"' % name)
@@ -2288,21 +2302,29 @@ class AsyncChannel(_Channel):
                 transform = None
         self._transform = transform
         self._subscribers = set()
+        self._min_receivers = min_receivers
+        self._event = Event()
+        if not min_receivers:
+            self._event.set()
 
     def name(self):
         return self._name
 
     def subscribe(self, coro):
         """Subscribe to receive messages. Senders don't need to
-        subscribe. Amessage sent to this channel is delivered to all
+        subscribe. A message sent to this channel is delivered to all
         subscribers.
         """
         self._subscribers.add(coro)
+        if len(self._subscribers) == self._min_receivers:
+            self._event.set()
 
     def unsubscribe(self, coro):
         """Future messages will not be delivered after unsubscribing.
         """
         self._subscribers.discard(coro)
+        if len(self._subscribers) < self._min_receivers:
+            self._event.clear()
 
     def send(self, message):
         if self._transform:
@@ -2310,8 +2332,27 @@ class AsyncChannel(_Channel):
             if message is None:
                 return
         msg = ChannelMessage(self._name, message)
+        for c in self._subscribers:
+            c.send(msg)
+
+    def deliver(self, message, timeout=None, alarm_value=None):
+        """Must be used with 'yield'. Does not work with
+        hierarchical channels.
+
+        Blocking 'send': Wait until at least 'min_receivers' are
+        waiting for message.
+        """
+        if len(self._subscribers) < self._min_receivers:
+            if not (yield self._event.wait(timeout)):
+                raise StopIteration(alarm_value)
+        if self._transform:
+            message = self._transform(self._name, message)
+            if message is None:
+                raise StopIteration(True)
+        msg = ChannelMessage(self._name, message)
         for coro in self._subscribers:
             coro.send(msg)
+        raise StopIteration(True)
 
 class SyncChannel(_Channel):
     """Synchronous channel. Broadcasts a message to currently waiting
@@ -2320,7 +2361,19 @@ class SyncChannel(_Channel):
     necessary.
     """
 
-    def __init__(self, name, transform=None):
+    def __init__(self, name, transform=None, min_receivers=0):
+        """'name' must be unique across all channels.
+
+        'transform' is a function that can either filter or
+        transform a message. If the function returns 'None', the
+        message is filtered (ignored). The function is called with
+        first parameter set to channel name and second parameter set
+        to the message.
+
+        'min_receivers' is minimum number of receivers that a message
+        should be delivered to. This should be used in conjunction
+        with 'deliver' method.
+        """
         if name in _Channel.names:
             logger.warning('duplicate channel name "%s"' % name)
         else:
@@ -2335,6 +2388,10 @@ class SyncChannel(_Channel):
                 transform = None
         self._transform = transform
         self._recipients = []
+        self._min_receivers = min_receivers
+        self._event = Event()
+        if not min_receivers:
+            self._event.set()
         
     def name(self):
         return self._name
@@ -2345,14 +2402,37 @@ class SyncChannel(_Channel):
             if message is None:
                 return
         msg = ChannelMessage(self._name, message)
-        for r in self._recipients:
-            r._proceed_(msg)
+        for coro in self._recipients:
+            coro._proceed_(msg)
         self._recipients = []
+        self._event.clear()
+
+    def deliver(self, message, timeout=None, alarm_value=None):
+        """Must be used with 'yield'.
+
+        Blocking 'send': Wait until at least 'min_receivers' are
+        waiting for message.
+        """
+        if len(self._recipients) < self._min_receivers:
+            if not (yield self._event.wait()):
+                raise StopIteration(alarm_value)
+        if self._transform is not None:
+            message = self._transform(self._name, message)
+            if message is None:
+                raise StopIteration(True)
+        msg = ChannelMessage(self._name, message)
+        for coro in self._recipients:
+            coro._proceed_(msg)
+        self._recipients = []
+        self._event.clear()
+        raise StopIteration(True)
 
     def receive(self, coro, timeout=None, alarm_value=None):
         """Must be used with 'yield'.
         """
         self._recipients.append(coro)
+        if len(self._recipients) == self._min_receivers:
+            self._event.set()
         coro._await_(timeout, alarm_value)
 
 class AsynCoro(object, metaclass=MetaSingleton):
