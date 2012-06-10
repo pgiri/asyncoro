@@ -1786,11 +1786,21 @@ class Coro(object):
         return target(*args, **kwargs)
 
     def register(self, name=None):
+        """Register this coroutine so coroutines running on a remote
+        (peer) asyncoro can locate it (with 'locate_coro') so they can
+        exchange messages, monitored etc.
+        """
+
         if name is None:
             name = self.name
         return self._asyncoro._register_coro(self, name)
 
     def reference(self):
+        """Get a representation that can be sent over the network. The
+        refenrece is an instance of _RemoteCoro, so messages can be
+        sent over it, monitored etc.
+        """
+
         return _RemoteCoro(self.name, id(self), self._location)
 
     def set_daemon(self):
@@ -1954,7 +1964,7 @@ class Coro(object):
         if self._asyncoro:
             return self._asyncoro._swap_generator(self, generator)
         else:
-            logger.warning('hot_swap: coroutine %s%s removed?', self.name, id(self))
+            logger.warning('hot_swap: coroutine %s/%s removed?', self.name, id(self))
             return -1
 
     def monitor(self, coro):
@@ -1963,7 +1973,8 @@ class Coro(object):
         coroutine (monitor).
 
         Monitor can inspect the exception and restart coro if
-        necessary.
+        necessary. 'coro' can be a remote coroutine (an instance of
+        _RemoteCoro).
         """
         if self._asyncoro:
             if isinstance(coro, Coro):
@@ -2272,6 +2283,9 @@ def unserialize(pkl):
     return pickle.loads(pkl)
 
 class Location(object):
+    """Distributed asyncoro, coroutines, channels use Location to
+    identify where they are running, where to send a message to etc.
+    """
 
     __slots__ = ('addr', 'port')
 
@@ -2313,8 +2327,8 @@ class _NetRequest(object):
             setattr(self, k, v)
 
 class _RemoteCoro(object):
-    """Instances are created by asyncoro. Users can use methods on the
-    instances.
+    """Instances of _RemoteCoro are created by asyncoro. Users can use
+    methods on the instances.
     """
 
     __slots__ = ('name', '_id', '_location', '_asyncoro')
@@ -2335,6 +2349,10 @@ class _RemoteCoro(object):
         self._asyncoro = AsynCoro.instance()
 
     def send(self, message):
+        """Send message to coroutine to the 'real' coroutine to which
+        this instance refers to.
+        """
+
         request = _NetRequest('send', kwargs={'coro_id':self._id, 'message':message},
                               dst=self._location)
         # for consistency with Coro.send (which doesn't need "yield"),
@@ -2343,6 +2361,10 @@ class _RemoteCoro(object):
         self._asyncoro._requests_queue_not_empty.set()
 
     def deliver(self, message):
+        """Deliver message to coroutine to the 'real' coroutine to
+        which this instance refers to.
+        """
+
         request = _NetRequest('send', kwargs={'coro_id':self._id, 'message':message},
                               dst=self._location)
         reply = yield self._asyncoro._sync_reply(request)
@@ -2417,9 +2439,14 @@ class AsyncChannel(object):
         self._asyncoro._lock.release()
 
     def reference(self):
+        """Get a reference that can be sent over network.
+        """
         return _RemoteChannel(self.name, self._location)
 
     def register(self, name=None):
+        """A registered channel can be located (with 'locate_channel')
+        by a coroutine on a remote asyncoro.
+        """
         if name is None:
             name = self.name
         return self._asyncoro._register_channel(self, name)
@@ -2441,6 +2468,8 @@ class AsyncChannel(object):
             self._event.clear()
 
     def send(self, message):
+        """Message is sent to currently registered subscribers.
+        """
         if self._transform:
             message = self._transform(self.name, message)
             if message is None:
@@ -2472,8 +2501,8 @@ class AsyncChannel(object):
         raise StopIteration(True)
 
 class _RemoteChannel(object):
-    """Instances are created by asyncoro. Users can use methods on the
-    instances.
+    """Instances of _RemoteChannel are created by asyncoro. Users can
+    use methods on the instances.
     """
 
     __slots__ = ('name', '_location', '_transform', '_asyncoro')
@@ -2547,6 +2576,8 @@ class SyncChannel(object):
     coros. To receive a message, a coro should use
     'yield channel.receive(coro)', with timeout and alarm_value, if
     necessary.
+
+    SyncChannel can not be sent over network.
     """
 
     def __init__(self, name, transform=None, min_receivers=0):
@@ -2588,6 +2619,8 @@ class SyncChannel(object):
         self._asyncoro._lock.release()
         
     def send(self, message):
+        """Send message to currently waiting recipients (coroutines).
+        """
         if self._transform is not None:
             message = self._transform(self.name, message)
             if message is None:
@@ -2620,6 +2653,9 @@ class SyncChannel(object):
 
     def receive(self, coro, timeout=None, alarm_value=None):
         """Must be used with 'yield'.
+
+        A message sent over the channel is sent to currently waiting
+        coroutines (with 'yield coro.receive(channel)'.
         """
         self._recipients.append(coro)
         if len(self._recipients) == self._min_receivers:
@@ -2627,10 +2663,8 @@ class SyncChannel(object):
         coro._await_(timeout, alarm_value)
 
 class AsynCoro(object, metaclass=MetaSingleton):
-    """Coroutine scheduler.
-
-    The only methods available to users are 'cur_coro', 'terminate' and
-    'join' and class method 'instance'.
+    """Coroutine scheduler. Methods starting with '_' are for internal
+    use only.
 
     AsynCoro can be initialized with an event notifier that provides
     'poll' and 'interrupt' methods. AsynCoro calls 'poll' method to
@@ -2642,6 +2676,16 @@ class AsynCoro(object, metaclass=MetaSingleton):
     timeout is None, 'poll' may block (i.e., can wait indefinitely for
     events to occur) and if timeout is a number, 'poll' should wait at
     most that many seconds before returning (control to AsynCoro).
+
+    If either 'node' or 'port' is not None, asyncoro runs network
+    services so distributed coroutines can exhcnage messages. If
+    'node' is not None, it must be either hostname or IP address where
+    asyncoro runs network services. If 'port' is not None, it is base
+    port number where asyncoro runs network services. If 'port' is 0,
+    the default port number 51350 is used. If multiple instances of
+    asyncoro are to be running on same host, they all can be started
+    with the same 'port', so that asyncoro initializes on successive
+    ports.
     """
 
     __instance = None
@@ -2681,18 +2725,16 @@ class AsynCoro(object, metaclass=MetaSingleton):
             self._udp_sock = None
             self._channels = {}
 
-            if port is not None:
-                if node:
-                    node = socket.gethostbyname(node)
-                else:
-                    node = socket.gethostbyname(socket.gethostname())
-
             self._scheduler = threading.Thread(target=self._schedule)
             self._scheduler.daemon = True
             self._scheduler.start()
             self._location = None
             self._requests_queue = collections.deque()
-            if port is not None:
+            if port is not None or node is not None:
+                if node:
+                    node = socket.gethostbyname(node)
+                else:
+                    node = socket.gethostbyname(socket.gethostname())
                 self._rcoros = {}
                 self._rchannels = {}
                 self._requests = {}
@@ -2746,6 +2788,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
         return self._cur_coro
 
     def location(self):
+        """Get Location instance where this asyncoro is running.
+        """
         return self._location
 
     def _add(self, coro):
@@ -2772,6 +2816,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
         self._lock.release()
 
     def _monitor(self, monitor, coro):
+        """Internal use only. See monitor in Coro.
+        """
         self._lock.acquire()
         cid = id(coro)
         coro = self._coros.get(cid, None)
@@ -3210,6 +3256,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
         continues to execute, so new coroutines can be added if
         necessary.
         """
+
         self._lock.acquire()
         for coro in self._coros.values():
             logger.debug('waiting for %s', coro.name)
@@ -3218,6 +3265,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
         self._complete.wait()
 
     def _tcp_proc(self, coro=None):
+        """Internal use only.
+        """
         coro.set_daemon()
         # TODO: broadcast our info
         while 1:
@@ -3225,6 +3274,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
             Coro(self._tcp_task, conn, addr)
 
     def _udp_proc(self, coro=None):
+        """Internal use only.
+        """
         coro.set_daemon()
         ping_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -3255,6 +3306,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 logger.warning('ignoring UDP message from %s:%s', addr[0], addr[1])
 
     def _net_requests_proc(self, coro=None):
+        """Internal use only.
+        """
         coro.set_daemon()
         while 1:
             if not self._requests_queue:
@@ -3270,6 +3323,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
                                net_request.dst.addr, net_request.dst.port)
 
     def _tcp_task(self, conn, addr, coro=None):
+        """Internal use only.
+        """
         msg = yield conn.recv_msg()
         try:
             req = unserialize(msg)
@@ -3425,6 +3480,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
             conn.close()
 
     def _async_reply(self, req, dst=None, timeout=None):
+        """Internal use only.
+        """
         self._requests[req.id] = req
         sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
         if timeout:
@@ -3436,6 +3493,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
         sock.close()
 
     def _sync_reply(self, req, timeout=None):
+        """Internal use only.
+        """
         sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
         if timeout:
             sock.settimeout(timeout)
@@ -3446,6 +3505,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
         raise StopIteration(unserialize(reply))
 
     def _register_channel(self, channel, name):
+        """Internal use only.
+        """
         if self._rchannels.get(name, None) is None:
             self._rchannels[name] = channel
             # TODO: broadcast channel info?
@@ -3455,6 +3516,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
             return -1
 
     def _register_coro(self, coro, name):
+        """Internal use only.
+        """
         if self._rcoros.get(name, None) is None:
             self._rcoros[name] = coro
             # TODO: broadcast coro info?
@@ -3464,6 +3527,10 @@ class AsynCoro(object, metaclass=MetaSingleton):
             return -1
 
     def locate_channel(self, name, coro, location=None, timeout=None):
+        """A coroutine running on a peer asyncoro can locate
+        registered channels so messages can be exhcnaged over the
+        channel.
+        """
         rchannel = self._rchannels.get(name, None)
         if rchannel:
             raise StopIteration(rchannel)
@@ -3490,6 +3557,9 @@ class AsynCoro(object, metaclass=MetaSingleton):
         raise StopIteration(rchannel)
 
     def locate_coro(self, name, coro, location=None, timeout=None):
+        """A coroutine running on a peer asyncoro can locate
+        registered coroutines so they can exchange messages.
+        """
         rcoro = self._rcoros.get(name, None)
         if rcoro:
             raise StopIteration(rcoro)
@@ -3518,6 +3588,10 @@ class AsynCoro(object, metaclass=MetaSingleton):
         raise StopIteration(rcoro)
 
     def peer(self, node, port=51350):
+        """Add node, port as peer to communicate. Coroutines running
+        at peer can locate channels and coroutines so they can
+        exchange messages.
+        """
         if isinstance(node, Location):
             node = node.addr
             port = node.port
