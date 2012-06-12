@@ -2271,23 +2271,22 @@ class _NetRequest(object):
     """Internal use only.
     """
 
-    __slots__ = ('request', 'kwargs', 'dst', 'event', 'src', 'id', 'async_result')
+    __slots__ = ('request', 'kwargs', 'dst', 'event', 'src', 'id', 'async_result', 'timeout')
 
-    def __init__(self, request, kwargs={}, src=None, dst=None, coro=None):
+    def __init__(self, request, kwargs={}, src=None, dst=None, timeout=None):
         self.request = request
         self.kwargs = kwargs
         self.dst = dst
-        if src is None:
-            self.src = AsynCoro.instance()._location
-        else:
-            self.src = src
+        self.src = src
         self.id = id(self)
         self.event = Event()
         self.async_result = None
+        self.timeout = timeout
 
     def __getstate__(self):
         state = {'request':self.request, 'kwargs':self.kwargs, 'dst':self.dst,
-                 'src':self.src, 'id':self.id, 'async_result':self.async_result}
+                 'src':self.src, 'id':self.id, 'async_result':self.async_result,
+                 'timeout':self.timeout}
         return state
 
     def __setstate__(self, state):
@@ -2320,21 +2319,19 @@ class _RemoteCoro(object):
         """Send message to coroutine to the 'real' coroutine to which
         this instance refers to.
         """
-
         request = _NetRequest('send', kwargs={'coro_id':self._id, 'message':message},
-                              dst=self._location)
+                              src=self._asyncoro._location, dst=self._location, timeout=1)
         # for consistency with Coro.send (which doesn't need "yield"),
         # request is queued for asynchronous processing
         self._asyncoro._requests_queue.append(request)
         self._asyncoro._requests_queue_not_empty.set()
 
-    def deliver(self, message):
+    def deliver(self, message, timeout=None):
         """Deliver message to coroutine to the 'real' coroutine to
         which this instance refers to.
         """
-
         request = _NetRequest('send', kwargs={'coro_id':self._id, 'message':message},
-                              dst=self._location)
+                              src=self._asyncoro._location, dst=self._location, timeout=timeout)
         reply = yield self._asyncoro._sync_reply(request)
         if reply == 'ACK':
             raise StopIteration(0)
@@ -2508,7 +2505,8 @@ class _RemoteChannel(object):
             kwargs['channel'] = subscriber.reference()
         else:
             raise Exception('invalid subscribe request')
-        request = _NetRequest('subscribe', kwargs=kwargs, dst=self._location)
+        request = _NetRequest('subscribe', kwargs=kwargs, src=self._asyncoro._location,
+                              dst=self._location, timeout=1)
         # for consistency with AsyncChannel.subscribe (which doesn't
         # need "yield"), request is queued for asynchronous processing
         self._asyncoro._requests_queue.append(request)
@@ -2520,19 +2518,19 @@ class _RemoteChannel(object):
             if message is None:
                 return 0
         request = _NetRequest('send', kwargs={'channel_name':self.name, 'message':message},
-                              dst=self._location)
+                              src=self._asyncoro._location, dst=self._location, timeout=1)
         # for consistency with AsyncChannel.send (which doesn't need "yield"),
         # request is queued for asynchronous processing
         self._asyncoro._requests_queue.append(request)
         self._asyncoro._requests_queue_not_empty.set()
 
-    def deliver(self, message):
+    def deliver(self, message, timeout=None):
         if self._transform:
             message = self._transform(self.name, message)
             if message is None:
                 raise StopIteration(0)
         request = _NetRequest('send', kwargs={'channel_name':self.name, 'message':message},
-                              dst=self._location)
+                              src=self._asyncoro._location, dst=self._location, timeout=timeout)
         reply = yield self._asyncoro._async_reply(request)
         if reply == 'ACK':
             raise StopIteration(0)
@@ -2669,7 +2667,7 @@ class AsynCoro(object):
     # in _suspended, waiting for message
     _AwaitMsg_ = 5
 
-    def __init__(self, node=None, port=None, notifier=None):
+    def __init__(self, node=None, port=None, name=None, notifier=None):
         if self.__class__.__instance is None:
             self.__class__.__instance = self
             self._coros = {}
@@ -2698,6 +2696,7 @@ class AsynCoro(object):
             self._scheduler.start()
             self._location = None
             self._requests_queue = collections.deque()
+            self.name = name
             if port is not None or node is not None:
                 if node:
                     node = socket.gethostbyname(node)
@@ -2705,6 +2704,7 @@ class AsynCoro(object):
                     node = socket.gethostbyname(socket.gethostname())
                 self._rcoros = {}
                 self._rchannels = {}
+                self._reactors = {}
                 self._requests = {}
                 self._requests_queue_not_empty = Event()
                 self._tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -2723,6 +2723,8 @@ class AsynCoro(object):
                 self._location = Location(*self._tcp_sock.getsockname())
                 if not self._location.port:
                     raise Exception('could not start network server at %s:%s' % (node, port))
+                if not name:
+                    self.name = str(self._location)
                 self._tcp_sock.listen(32)
                 logger.info('asyncoro network server at %s:%s',
                             self._location.addr, self._location.port)
@@ -3132,7 +3134,7 @@ class AsynCoro(object):
                                     request = _NetRequest('exception', {'exception':exc,
                                                                         'coro':monitor},
                                                           src=self._location,
-                                                          dst=monitor._location)
+                                                          dst=monitor._location, timeout=1)
                                     self._requests_queue.append(request)
                                     # Event.set may call _proceed_
                                     # which needs (recursive) lock
@@ -3199,7 +3201,6 @@ class AsynCoro(object):
         Should be called from main program (or a thread, but _not_
         from coroutines).
         """
-
         if not self._terminate:
             if await_non_daemons and len(self._coros) > self._daemons:
                 logger.debug('waiting for %s coroutines to terminate',
@@ -3262,9 +3263,8 @@ class AsynCoro(object):
                     info = unserialize(msg[len('PONG:'):])
                     if not (info['addr'] == self._location.addr and \
                             info['port'] == self._location.port):
-                        if (info['addr'], info['port']) not in self._nodes:
-                            logger.debug('found asyncoro at %s:%s', info['addr'], info['port'])
-                            yield self.peer(info['addr'], info['port'])
+                        logger.debug('found asyncoro at %s:%s', info['addr'], info['port'])
+                        yield self.peer(info['addr'], info['port'])
                 except:
                     # logger.debug(traceback.format_exc())
                     logger.warning('ignoring invalid pong message from %s:%s', addr[0], addr[1])
@@ -3280,13 +3280,9 @@ class AsynCoro(object):
                 self._requests_queue_not_empty.clear()
                 yield self._requests_queue_not_empty.wait()
             net_request = self._requests_queue.popleft()
-            try:
-                reply = yield self._sync_reply(net_request, timeout=1)
-            except:
-                reply = None
+            reply = yield self._sync_reply(net_request, timeout=net_request.timeout)
             if reply != 'ACK':
-                logger.warning('error sending "%s" to %s:%s', net_request.request,
-                               net_request.dst.addr, net_request.dst.port)
+                logger.warning('error sending "%s" to %s', net_request.request, net_request.dst)
 
     def _tcp_task(self, conn, addr, coro=None):
         """Internal use only.
@@ -3295,7 +3291,6 @@ class AsynCoro(object):
         try:
             req = unserialize(msg)
         except:
-            logger.debug(traceback.format_exc())
             logger.warning('invalid request ignored')
             conn.close()
             raise StopIteration
@@ -3382,6 +3377,22 @@ class AsynCoro(object):
                 else:
                     yield conn.send_msg(serialize(rcoro))
             conn.close()
+        elif req.request == 'run_reactor':
+            if req.dst == self._location:
+                method = self._reactors.get(req.kwargs['name'], None)
+                if method is None:
+                    reply = 'reactor "%s" is not registered' % req.kwargs['name']
+                else:
+                    args = req.kwargs['args']
+                    kwargs = req.kwargs['kwargs']
+                    try:
+                        coro = Coro(method, *args, **kwargs)
+                    except:
+                        reply = traceback.format_exc()
+                    else:
+                        reply = _RemoteCoro(method.__name__, id(coro), self._location)
+                yield conn.send_msg(serialize(reply))
+            conn.close()
         elif req.request == 'subscribe':
             reply = 'NAK'
             if req.dst == self._location:
@@ -3429,7 +3440,7 @@ class AsynCoro(object):
             conn.close()
         elif req.request == 'ping':
             # TODO: async reply?
-            logger.debug('found asyncoro at %s:%s', req.src.addr, req.src.port)
+            logger.debug('found asyncoro at %s', req.src)
             self._nodes.add((req.src.addr, req.src.port))
             reply = self._location
             yield conn.send_msg(serialize(reply))
@@ -3441,34 +3452,63 @@ class AsynCoro(object):
                 yield sock.connect((req.src.addr, req.src.port))
                 yield sock.send_msg(serialize(pending_req))
                 sock.close()
+        elif req.request == 'locate_peer':
+            if req.src == self._location:
+                peer = req.kwargs.get('peer', None)
+                if peer is not None:
+                    req.async_result = peer
+                    req.event.set()
+            elif req.kwargs['name'] == self.name:
+                peer = self._location
+                if req.src:
+                    req.kwargs['peer'] = peer
+                    sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
+                    yield sock.connect((req.src.addr, req.src.port))
+                    yield sock.send_msg(serialize(req))
+                    sock.close()
+                else:
+                    yield conn.send_msg(serialize(peer))
+            conn.close()
         else:
             logger.warning('invalid request ignored')
             conn.close()
 
-    def _async_reply(self, req, dst=None, timeout=None):
+    def _async_reply(self, req, dst=None):
         """Internal use only.
         """
         self._requests[req.id] = req
         sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
-        if timeout:
-            sock.settimeout(timeout)
+        if req.timeout:
+            sock.settimeout(req.timeout)
         if dst is None:
             dst = req.dst
-        yield sock.connect((dst.addr, dst.port))
-        yield sock.send_msg(serialize(req))
-        sock.close()
+        try:
+            yield sock.connect((dst.addr, dst.port))
+            yield sock.send_msg(serialize(req))
+            sock.close()
+        except:
+            logger.debug('sending "%s" to %s timedout', req.request, dst)
+            pass
 
-    def _sync_reply(self, req, timeout=None):
+    def _sync_reply(self, req):
         """Internal use only.
         """
         sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
-        if timeout:
-            sock.settimeout(timeout)
-        yield sock.connect((req.dst.addr, req.dst.port))
-        yield sock.send_msg(serialize(req))
-        reply = yield sock.recv_msg()
-        sock.close()
-        raise StopIteration(unserialize(reply))
+        if req.timeout:
+            sock.settimeout(req.timeout)
+        reply = None
+        try:
+            yield sock.connect((req.dst.addr, req.dst.port))
+            yield sock.send_msg(serialize(req))
+            reply = yield sock.recv_msg()
+            sock.close()
+        except:
+            logger.debug('sending "%s" to %s timedout', req.request, req.dst)
+            pass
+        if reply is None:
+            raise StopIteration(None)
+        else:
+            raise StopIteration(unserialize(reply))
 
     def _register_channel(self, channel, name):
         """Internal use only.
@@ -3492,7 +3532,33 @@ class AsynCoro(object):
             logger.warning('coro "%s" is already registered', name)
             return -1
 
-    def locate_channel(self, name, coro, location=None, timeout=None):
+    def register_reactor(self, method):
+        if inspect.isgeneratorfunction(method):
+            # TODO: check args
+            self._reactors[method.__name__] = method
+            return 0
+        else:
+            return -1
+
+    def remote_reactor(self, location, method, *args, **kwargs):
+        if inspect.isgeneratorfunction(method):
+            name = method.__name__
+        elif isinstance(method, str):
+            name = method
+        else:
+            raise Exception('method must be either generator function or name')
+        if not args and kwargs:
+            args = kwargs.pop('args', ())
+            kwargs = kwargs.pop('kwargs', kwargs)
+        req = _NetRequest(request='run_reactor', kwargs={'name':name, 'args':args, 'kwargs':kwargs},
+                          dst=location, timeout=2)
+        rcoro = yield self._sync_reply(req)
+        if isinstance(rcoro, _RemoteCoro):
+            raise StopIteration(rcoro)
+        else:
+            raise Exception(rcoro)
+
+    def locate_channel(self, name, location=None, timeout=None):
         """A coroutine running on a peer asyncoro can locate
         registered channels so messages can be exhcnaged over the
         channel.
@@ -3502,13 +3568,12 @@ class AsynCoro(object):
             raise StopIteration(rchannel)
         if location:
             req = _NetRequest(request='locate_channel', kwargs={'name':name},
-                              src=self._location, dst=location)
-            req.src = None
+                              dst=location, timeout=timeout)
             rchannel = yield self._sync_reply(req)
         else:
             # TODO: UDP broadcast?
             req = _NetRequest(request='locate_channel', kwargs={'name':name},
-                              src=self._location, coro=coro)
+                              src=self._location, timeout=None)
             req.event.clear()
             if self._nodes:
                 for node, port in self._nodes:
@@ -3522,7 +3587,7 @@ class AsynCoro(object):
             rchannel = req.async_result
         raise StopIteration(rchannel)
 
-    def locate_coro(self, name, coro, location=None, timeout=None):
+    def locate_coro(self, name, location=None, timeout=None):
         """A coroutine running on a peer asyncoro can locate
         registered coroutines so they can exchange messages.
         """
@@ -3531,15 +3596,12 @@ class AsynCoro(object):
             raise StopIteration(rcoro)
         if location:
             req = _NetRequest(request='locate_coro', kwargs={'name':name},
-                              src=self._location, dst=location, coro=coro)
-            req.event.clear()
-            yield self._async_reply(req)
-            yield req.event.wait()
-            rcoro = req.async_result
+                              dst=location, timeout=timeout)
+            rcoro = yield self._sync_reply(req)
         else:
             # TODO: UDP broadcast?
             req = _NetRequest(request='locate_coro', kwargs={'name':name},
-                              src=self._location, coro=coro)
+                              src=self._location, timeout=None)
             req.event.clear()
             if self._nodes:
                 for node, port in self._nodes:
@@ -3551,6 +3613,22 @@ class AsynCoro(object):
                 self._requests[req.id] = req
             yield req.event.wait(timeout)
             rcoro = req.async_result
+        raise StopIteration(rcoro)
+
+    def locate_peer(self, name, timeout=None):
+        req = _NetRequest(request='locate_peer', kwargs={'name':name},
+                          src=self._location, timeout=None)
+        req.event.clear()
+        if self._nodes:
+            for node, port in self._nodes:
+                if req.event.is_set():
+                    break
+                # req.dst = Location(node, port)
+                yield self._async_reply(req, dst=Location(node, port))
+        else:
+            self._requests[req.id] = req
+        yield req.event.wait(timeout)
+        rcoro = req.async_result
         raise StopIteration(rcoro)
 
     def peer(self, node, port=51350):
@@ -3567,15 +3645,16 @@ class AsynCoro(object):
                 logger.warning('invalid node: "%s"', str(node))
                 raise StopIteration(-1)
         request = _NetRequest(request='ping', kwargs={},
-                              src=self._location, dst=Location(node, port))
+                              src=self._location, dst=Location(node, port), timeout=1)
         try:
-            reply = yield self._sync_reply(request, timeout=1)
+            reply = yield self._sync_reply(request)
             if reply:
                 self._nodes.add((reply.addr, reply.port))
                 # send pending (async) requests
                 pending_reqs = self._requests.values()
                 for pending_req in pending_reqs:
                     sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
+                    sock.settimeout(1)
                     yield sock.connect((reply.addr, reply.port))
                     yield sock.send_msg(serialize(pending_req))
                     sock.close()
