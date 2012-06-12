@@ -1960,7 +1960,9 @@ class Coro(object):
             return -1
 
     def monitor(self, coro):
-        """When 'coro' is finished (raises StopIteration or terminated
+        """Must be called with 'yield'.
+
+        When 'coro' is finished (raises StopIteration or terminated
         due to uncaught exception), that exception is thrown to this
         coroutine (monitor).
 
@@ -2704,7 +2706,7 @@ class AsynCoro(object):
                     node = socket.gethostbyname(socket.gethostname())
                 self._rcoros = {}
                 self._rchannels = {}
-                self._reactors = {}
+                self._rcis = {}
                 self._requests = {}
                 self._requests_queue_not_empty = Event()
                 self._tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -3280,7 +3282,7 @@ class AsynCoro(object):
                 self._requests_queue_not_empty.clear()
                 yield self._requests_queue_not_empty.wait()
             net_request = self._requests_queue.popleft()
-            reply = yield self._sync_reply(net_request, timeout=net_request.timeout)
+            reply = yield self._sync_reply(net_request)
             if reply != 'ACK':
                 logger.warning('error sending "%s" to %s', net_request.request, net_request.dst)
 
@@ -3377,11 +3379,11 @@ class AsynCoro(object):
                 else:
                     yield conn.send_msg(serialize(rcoro))
             conn.close()
-        elif req.request == 'run_reactor':
+        elif req.request == 'run_rci':
             if req.dst == self._location:
-                method = self._reactors.get(req.kwargs['name'], None)
+                method = self._rcis.get(req.kwargs['name'], None)
                 if method is None:
-                    reply = 'reactor "%s" is not registered' % req.kwargs['name']
+                    reply = 'RCI "%s" is not registered' % req.kwargs['name']
                 else:
                     args = req.kwargs['args']
                     kwargs = req.kwargs['kwargs']
@@ -3532,25 +3534,25 @@ class AsynCoro(object):
             logger.warning('coro "%s" is already registered', name)
             return -1
 
-    def register_reactor(self, method):
+    def register_RCI(self, method):
         if inspect.isgeneratorfunction(method):
             # TODO: check args
-            self._reactors[method.__name__] = method
+            self._rcis[method.__name__] = method
             return 0
         else:
             return -1
 
-    def remote_reactor(self, location, method, *args, **kwargs):
-        if inspect.isgeneratorfunction(method):
-            name = method.__name__
-        elif isinstance(method, str):
+    def run_RCI(self, location, method, *args, **kwargs):
+        if isinstance(method, str):
             name = method
+        elif inspect.isgeneratorfunction(method):
+            name = method.__name__
         else:
             raise Exception('method must be either generator function or name')
         if not args and kwargs:
             args = kwargs.pop('args', ())
             kwargs = kwargs.pop('kwargs', kwargs)
-        req = _NetRequest(request='run_reactor', kwargs={'name':name, 'args':args, 'kwargs':kwargs},
+        req = _NetRequest(request='run_rci', kwargs={'name':name, 'args':args, 'kwargs':kwargs},
                           dst=location, timeout=2)
         rcoro = yield self._sync_reply(req)
         if isinstance(rcoro, _RemoteCoro):
