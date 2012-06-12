@@ -2685,6 +2685,10 @@ class AsynCoro(object, metaclass=MetaSingleton):
     asyncoro are to be running on same host, they all can be started
     with the same 'port', so that asyncoro initializes on successive
     ports.
+
+    'name' is used in locating peers. They must be unique. If used in
+    network mode and 'name' is not given, it is set to string
+    'node:port'.
     """
 
     __instance = None
@@ -3566,6 +3570,9 @@ class AsynCoro(object, metaclass=MetaSingleton):
             return -1
 
     def register_RCI(self, method):
+        """Register 'method' (must be a generator function) as
+        remotely callable.
+        """
         if inspect.isgeneratorfunction(method):
             # TODO: check args
             self._rcis[method.__name__] = method
@@ -3574,6 +3581,10 @@ class AsynCoro(object, metaclass=MetaSingleton):
             return -1
 
     def run_RCI(self, location, method, *args, **kwargs):
+        """Run 'method' at 'location' with args and kwargs. Returns
+        _RemoeCoro instance (reference) for the coro. 'method' must be
+        registered with 'register_RCI' at 'location'.
+        """
         if inspect.isgeneratorfunction(method):
             name = method.__name__
         elif isinstance(method, str):
@@ -3649,6 +3660,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
         raise StopIteration(rcoro)
 
     def locate_peer(self, name, timeout=None):
+        """Find and return location of peer with 'name'.
+        """
         req = _NetRequest(request='locate_peer', kwargs={'name':name},
                           src=self._location, timeout=None)
         req.event.clear()
