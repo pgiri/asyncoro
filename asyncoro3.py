@@ -2301,6 +2301,9 @@ class Location(object):
     def __eq__(self, other):
         return other and self.addr == other.addr and self.port == other.port
 
+    def __ne__(self, other):
+        return not other or self.addr != other.addr or self.port != other.port
+
     def __repr__(self):
         return '%s:%s' % (self.addr, self.port)
 
@@ -2711,6 +2714,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
     communication (see Python 'ssl' module). This key may be stored in
     'certfile' itself, in which case this should be None.
 
+    'ext_ip_addr' is the IP address of NAT firewall/gateway if
+    asyncoro is behind that firewall/gateway.
     """
 
     __instance = None
@@ -2726,8 +2731,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
     # in _suspended, waiting for message
     _AwaitMsg_ = 5
 
-    def __init__(self, node=None, udp_port=None, tcp_port=0, name=None, secret='',
-                 certfile=None, keyfile=None, notifier=None):
+    def __init__(self, node=None, udp_port=None, tcp_port=0, ext_ip_addr=None,
+                 name=None, secret='', certfile=None, keyfile=None, notifier=None):
         if self.__class__.__instance is None:
             self.__class__.__instance = self
             self._coros = {}
@@ -2768,8 +2773,6 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 self._rcis = {}
                 self._requests = {}
                 self._requests_queue_not_empty = Event()
-                self._tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                self._tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 if not udp_port:
                     udp_port = 51350
                 self._udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -2785,6 +2788,13 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 self._location = Location(*self._tcp_sock.getsockname())
                 if not self._location.port:
                     raise Exception('could not start network server at %s' % (self._location))
+                if ext_ip_addr:
+                    try:
+                        ext_ip_addr = socket.gethostbyname(ext_ip_addr)
+                    except:
+                        logger.warning('invalid ext_ip_addr ignored')
+                    else:
+                        self._location.addr = ext_ip_addr
                 if not name:
                     self.name = str(self._location)
 
@@ -3308,9 +3318,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
         """Internal use only.
         """
         coro.set_daemon()
-        ping_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        ping_sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
         ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        ping_sock = AsynCoroSocket(ping_sock, blocking=False)
         ping_sock.settimeout(1)
         ping_msg = {'location':self._location, 'signature':self._signature}
         ping_msg = b'PING:' + serialize(ping_msg)
@@ -3340,14 +3349,13 @@ class AsynCoro(object, metaclass=MetaSingleton):
                         info = yield sock.recv_msg()
                         if info == b'ACK':
                             self._peers[(peer.addr, peer.port)] = auth_code
-                            logger.debug('found asyncoro at %s', self._location, peer)
+                            logger.debug('found asyncoro at %s', peer)
                         yield sock.send_msg(b'ACK')
                         sock.close()
                 except:
                     logger.warning(traceback.format_exc())
             else:
                 logger.warning('ignoring UDP message from %s:%s', addr[0], addr[1])
-
 
     def _net_requests_proc(self, coro=None):
         """Internal use only.
@@ -3570,6 +3578,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                                           keyfile=self._keyfile, certfile=self._certfile)
                     if pending_req.timeout:
                         sock.settimeout(req.timeout)
+                    pending_req.auth = auth_code
                     try:
                         yield sock.connect((peer.addr, peer.port))
                         yield sock.send_msg(serialize(pending_req))
@@ -3674,9 +3683,12 @@ class AsynCoro(object, metaclass=MetaSingleton):
         """Find and return location where RCI is registered.
         """
         if location:
+            auth = self._peers.get((location.addr, location.port), None)
+            if auth is None:
+                logger.debug('%s is not a valid peer', location)
+                raise StopIteration(None)
             req = _NetRequest(request='locate_rci', kwargs={'name':name},
-                              dst=location, auth=self._peers[(location.addr, location.port)],
-                              timeout=timeout)
+                              dst=location, auth=auth, timeout=timeout)
             loc = yield self._sync_reply(req)
         else:
             # TODO: UDP broadcast?
@@ -3707,29 +3719,35 @@ class AsynCoro(object, metaclass=MetaSingleton):
             name = method.__name__
         else:
             raise Exception('method must be either generator function or name')
+        auth = self._peers.get((location.addr, location.port), None)
+        if auth is None:
+            raise Exception('%s is not a valid peer' % location)
         if not args and kwargs:
             args = kwargs.pop('args', ())
             kwargs = kwargs.pop('kwargs', kwargs)
         req = _NetRequest(request='run_rci', kwargs={'name':name, 'args':args, 'kwargs':kwargs},
-                          dst=location, auth=self._peers[(location.addr, location.port)], timeout=2)
-        rcoro = yield self._sync_reply(req)
-        if isinstance(rcoro, _RemoteCoro):
-            raise StopIteration(rcoro)
+                          dst=location, auth=auth, timeout=2)
+        reply = yield self._sync_reply(req)
+        if isinstance(reply, _RemoteCoro):
+            raise StopIteration(reply)
         else:
-            raise Exception(rcoro)
+            raise Exception(reply)
 
     def locate_channel(self, name, location=None, timeout=None):
         """A coroutine running on a peer asyncoro can locate
         registered channels so messages can be exhcnaged over the
-        channel. Returns instance of _RemoteChannel.
+        channel. Returns instance of _RemotChannel.
         """
         rchannel = self._rchannels.get(name, None)
         if rchannel:
             raise StopIteration(rchannel)
         if location:
+            auth = self._peers.get((location.addr, location.port), None)
+            if auth is None:
+                logger.debug('%s is not a valid peer', location)
+                raise StopIteration(None)
             req = _NetRequest(request='locate_channel', kwargs={'name':name},
-                              dst=location, auth=self._peers[(location.addr, location.port)],
-                              timeout=timeout)
+                              dst=location, auth=auth, timeout=timeout)
             rchannel = yield self._sync_reply(req)
         else:
             # TODO: UDP broadcast?
@@ -3758,9 +3776,12 @@ class AsynCoro(object, metaclass=MetaSingleton):
         if rcoro:
             raise StopIteration(rcoro)
         if location:
+            auth = self._peers.get((location.addr, location.port), None)
+            if auth is None:
+                logger.debug('%s is not a valid peer', location)
+                raise StopIteration(None)
             req = _NetRequest(request='locate_coro', kwargs={'name':name},
-                              dst=location, auth=self._peers[(location.addr, location.port)],
-                              timeout=timeout)
+                              dst=location, auth=auth, timeout=timeout)
             rcoro = yield self._sync_reply(req)
         else:
             # TODO: UDP broadcast?
@@ -3813,7 +3834,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
         ping_sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
         ping_sock.settimeout(1)
         ping_msg = {'location':self._location, 'signature':self._signature}
-        ping_msg = 'PING:' + serialize(ping_msg)
+        ping_msg = b'PING:' + serialize(ping_msg)
         try:
             yield ping_sock.sendto(ping_msg, (node, udp_port))
         except:
