@@ -2384,20 +2384,22 @@ class _RemoteCoro(object):
         else:
             raise StopIteration(-1)
         
-class ChannelMessage(object):
-    """Message sent over channel.
+class _ChannelMessage(object):
+    """ Message sent over channel. Instances of _ChannelMessage are
+    created by asyncoro.
 
-    With AsyncChannel, messages can be received from multiple
-    channels. A recipient may want to know not just the message, but
-    on which channel it is received. For consistency, same structure
-    is used for SyncChannel messages too.
+    Recipients may receive messages from multiple channels. A
+    recipient may want to know not just the message, but on which
+    channel it is received, so when delivering messages, asyncoro
+    wraps them with _ChannelMessage. Users can get channel name with
+    'channel' and message with 'message' attributes.
     """
 
     __slots__ = ('channel', 'message')
 
     def __init__(self, channel, message):
         self.channel = channel
-        if isinstance(message, ChannelMessage):
+        if isinstance(message, _ChannelMessage):
             self.message = message.message
         else:
             self.message = message
@@ -2485,7 +2487,7 @@ class AsyncChannel(object):
             message = self._transform(self.name, message)
             if message is None:
                 return 0
-        msg = ChannelMessage(self.name, message)
+        msg = _ChannelMessage(self.name, message)
         ret = 0
         for subscriber in self._subscribers:
             if subscriber.send(msg):
@@ -2506,7 +2508,7 @@ class AsyncChannel(object):
             message = self._transform(self.name, message)
             if message is None:
                 raise StopIteration(True)
-        msg = ChannelMessage(self.name, message)
+        msg = _ChannelMessage(self.name, message)
         for subscriber in self._subscribers:
             subscriber.send(msg)
         raise StopIteration(True)
@@ -2641,7 +2643,7 @@ class SyncChannel(object):
             message = self._transform(self.name, message)
             if message is None:
                 return
-        msg = ChannelMessage(self.name, message)
+        msg = _ChannelMessage(self.name, message)
         for c in self._recipients:
             c._proceed_(msg)
         self._recipients = []
@@ -2660,7 +2662,7 @@ class SyncChannel(object):
             message = self._transform(self.name, message)
             if message is None:
                 raise StopIteration(True)
-        msg = ChannelMessage(self.name, message)
+        msg = _ChannelMessage(self.name, message)
         for c in self._recipients:
             c._proceed_(msg)
         self._recipients = []
@@ -3708,9 +3710,10 @@ class AsynCoro(object, metaclass=MetaSingleton):
             loc = req.async_result
         raise StopIteration(loc)
 
-    def run_RCI(self, location, method, *args, **kwargs):
-        """Run 'method' at 'location' with args and kwargs. Returns
-        _RemoeCoro instance (reference) for the coro. 'method' must be
+    def run_RCI(self, location, name, *args, **kwargs):
+        """Run method with 'name' at 'location' with args and
+        kwargs. Returns _RemoeCoro instance (reference) for the
+        coro. The generator method with 'name' must have been
         registered with 'register_RCI' at 'location'.
         """
         if isinstance(method, str):
@@ -3736,7 +3739,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
     def locate_channel(self, name, location=None, timeout=None):
         """A coroutine running on a peer asyncoro can locate
         registered channels so messages can be exhcnaged over the
-        channel. Returns instance of _RemotChannel.
+        channel. Returns instance of _RemoteChannel.
         """
         rchannel = self._rchannels.get(name, None)
         if rchannel:

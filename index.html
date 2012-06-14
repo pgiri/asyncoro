@@ -13,11 +13,13 @@
  
   </head> 
   <body> 
-    <center><h4>asyncoro : Framework for Asynchronous, Concurrent Programming</h4></center>
+    <center><h4>asyncoro : Framework for Asynchronous, Concurrent,
+    Distributed Programming</h4></center>
     <div id="content-mask">
       <div id="content-container"> 
 	<div id="content-menu">
 	  <ul>
+            <li><a href="discoro.html">API for Distributed Coroutines</a></li> 
             <li><a href="examples.html">Examples</a></li> 
 	  </ul>
 	  <hr />
@@ -122,7 +124,26 @@ the scheduler executes other coroutines (in this case,
 other <em>process</em> coroutines).
 </p>
 
-<h4>API</h4>
+<p>
+  asyncoro has been tested with Python versions 2.7 and 3.2 under
+  Linux, OS X and Windows. Under Windows asyncoro uses IOCP only
+  if <a href="https://sourceforge.net/projects/pywin32/files/pywin32/">Python
+  for Windows Extensions</a> (pywin32) is installed. pywin32 works
+  with Windows 32-bit and 64-bit.
+</p>
+
+<p>
+  asyncoro can be used to concurrent programs with coroutines running
+  on a single instance of asyncoro, or distributed and concurrent
+  programs with coroutines running on multiple instances either on a
+  single node, or multpiple nodes over network.
+  </p>
+
+<h4>API for Coroutines (Concurrent Programs)</h4>
+
+<p>See also <a href="discoro.html">API for Distributed Coroutines</a>.
+  </p>
+
 <p>
   asyncoro framework consists of AsynCoro scheduler, Coro factory to
   create coroutines from generator functions, AsynCoroSocket to
@@ -131,12 +152,7 @@ other <em>process</em> coroutines).
   operations <em>execute</em>, <em>executemany</em>
   and <em>callproc</em> to asynchronous operations, and locking,
   condition, event, semaphore primitives similar to thread
-  primitives. asyncoro has been tested with Python versions 2.7 and
-  3.2 under Linux, OS X and Windows. Under Windows asyncoro uses IOCP
-  only
-  if <a href="https://sourceforge.net/projects/pywin32/files/pywin32/">Python
-  for Windows Extensions</a> (pywin32) is installed. pywin32 works
-  with Windows 32-bit and 64-bit.
+  primitives.
   </p>
 
 <ul>
@@ -329,16 +345,17 @@ other <em>process</em> coroutines).
 	for each such coroutine.
 	</li>
       <li>
-	<b>monitor(m)</b> method registers <em>m</em> as monitor of
-	the coroutine.  Then, when the coroutine is finished, either
-	because coroutine's generator function finished exceution
-	(i.e., raised StopIteration exception) or was terminated by
-	AsynCoro because of an uncaught exception, AsynCoro throws
-	MonitorException in coroutine's monitor <em>m</em>, which must
-	also be a coroutine. MonitorException's args[0] is set to the
-	affected coroutine and args[1] is set to the exception tuple:
-	If coroutine finished execution, the tuple is a pair, with
-	first element set to (type) StopIteration and second element
+	<b>monitor(coro)</b> method should be used
+	with <em>yield</em>. It sets the caller as the monitor of
+	coroutine <em>coro</em>. Then, when the coroutine is finished,
+	either because coroutine's generator function finished
+	exceution (i.e., raised StopIteration exception) or was
+	terminated by AsynCoro because of an uncaught exception,
+	AsynCoro throws MonitorException in coroutine's
+	monitor. MonitorException's args[0] is set to the affected
+	coroutine and args[1] is set to the exception tuple: If
+	coroutine finished execution, the tuple is a pair, with first
+	element set to (type) StopIteration and second element
 	instance of StopIteration with the last value yielded by
 	coroutine, and if coroutine was terminated due to uncaught
 	exception, the tuple will have either 2 or 3 elements, with
@@ -360,10 +377,16 @@ other <em>process</em> coroutines).
 	coroutine, possibly with a different generator and
 	arguments. AsynCoro keeps any pending messages from previous
 	generator, so new generator function can process those
-	messages. With <em>monitor</em> and <em>restart</em>,
-	fault-tolerant coroutines and applications can be created.
+	messages.
 	</li>
     </ul>
+    Methods <em>register</em> and <em>reference</em> are useful only
+    when asyncoro is used for distributed programming;
+    see <a href="discoro.html">API for Distributed Coroutines</a> for
+    details.
+
+    <p>With <em>monitor</em>, <em>restart</em> and <em>hot_swap</em>,
+      fault-tolerant coroutines and applications can be developed.</p>
   </li>
   <li>
     A synchronous (regular) socket <em>sock</em> can be converted to
@@ -433,6 +456,81 @@ other <em>process</em> coroutines).
     it should be called as <tt>v = yield g()</tt>. Regular
     functions/methods can be called without <em>yield</em>.
     </li>
+
+  <li><b>AsyncChannel</b> is a (virtual) channel through which
+    coroutines can exchange messages. Messages sent to AsyncChannel
+    are delivered to current subscribers (recipients). An AsyncChannel
+    can be created with <em>AsyncChannel(name, transform=None,
+    min_receivers=0)</em> where
+    <ul>
+      <li><em>name</em> is name of channel (which must be unique)</li>
+      <li><em>transform</em>, if given, must a function that is called
+	before a message is delivered to subscribers. The function is
+	called with name of the channel and the message. It should
+	return transformed message or <em>None</em>. If <em>None</em>
+	is returned, the message is dropped - subscribers will not
+	receive the message. Otherwise, transformed message is sent to
+	subscribers.</li>
+      <li><em>min_receivers</em> is minimum number of recipients that
+	each message must be delivered to (see below).</li>
+    </ul>
+    A channel has following methods.
+    <ul>
+      <li>A coroutine (or even another channel) can subscribe to a
+	channel with <b>subsribe(subscriber)</b>. Any messages sent to
+	the channel are then sent to each subscriber; i.e., messages
+	are broadcast to all subscribers. It is possible to chain or
+	create hierarchical channels with channels subscribing to
+	other channels.
+      </li>
+      <li><b>send(message)</b> calls <em>transform</em> function of
+	the channel (see above) if it has one. If the function
+	returns <em>None</em>, the message is ignored. Otherwise an
+	instance of _ChannelMessage, created with the name of the
+	channel and (transformed) message, is sent to current
+	subscribers. A coroutine <em>coro</em>, for example, that has
+	subscribed to the channel can receive messages with <em>msg =
+	coro.receive()</em>. <em>msg</em> has two
+	attributes: <em>channel</em> which is the name of the channel
+	and <em>message</em> which is the original message sent to the
+	channel. Note that a coroutine can also send messages to other
+	coroutines. Such messages are not instances of
+	_ChannelMessage, so if there is a chance that a recipient can
+	receive message sent by either channels or coroutines, they
+	may need to check message type, for example,
+	with <em>isinstance</em>, and process accordingly.
+      </li>
+      <li><b>deliver(message)</b> is similar to <em>send</em>, except
+	that it blocks until at least <em>min_receivers</em> are
+	subscribed. Thus, deliver guarantees that a message is sent to
+	at least <em>min_receivers</em>. This method must be called
+	with <em>yield</em>.
+      </li>
+      <li><b>unsubscribe(subscriber)</b> unsubscribes the subscriber
+	(coroutine or another channel), so future messages to the
+	channel are not sent to that subscriber.
+      </li>
+    </ul>
+    Methods <em>register</em> and <em>reference</em> are useful only
+    when asyncoro is used for distributed programming;
+    see <a href="discoro.html">API for Distributed Coroutines</a> for
+    details.
+  </li>
+
+  <li><b>SyncChannel</b> is similar to <em>AsyncChannel</em>, except
+    that whereas messages to AsyncChannel are sent to current
+    subscribers, messages to SyncChannel are sent to coroutines
+    currently waiting to receive from that channel. Thus, to recieve
+    messages, a coroutine must use <em>msg = channel.receive(coro,
+    timeout=None, alarm_value=None)</em>, where <em>coro</em> is the
+    coroutine that will block until a message is sent to the
+    channel, <em>timeout</em> is number (or fractions) of seconds to
+    block and <em>alarm_value</em> is the value received in case of
+    timeout. The message received by coroutine is an instance of
+    _ChannelMessage. Note that other channels cannot receive messages
+    sent to a SyncChannel.
+    </li>
+
   <li>
     <b>AsynCoroThreadPool</b> can be used to schedule synchronous,
     time consuming operations with a pool of threads for asynchronous
