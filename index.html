@@ -35,20 +35,20 @@
 
 <center><h2>asyncoro</h2></center>
 <p>
-  asyncoro is a Python framework for developing concurrent programs
-  with asynchronous completions and coroutines. Asynchronous
-  completions currently implemented in asyncoro are socket I/O
-  operations (for non-blocking sockets), database cursors, sleep
-  timers and locking primitives.  The coroutines should
-  use <em>yield</em> with these completions. Each yield statement
-  gives control to asyncoro's scheduler, which interleaves executions
-  of coroutines, similar to the way an operating system executes
-  multiple processes. Programs developed with asyncoro have same logic
-  and structure as programs with threads, except for a few syntactic
-  changes. asyncoro supports socket I/O notification mechanisms epoll,
-  kqueue, /dev/poll (and poll and select, where necessary), and
-  Windows I/O Completion Ports (IOCP) for high performance and
-  scalability, and SSL for security.
+  asyncoro is a Python framework for developing concurrent,
+  distributed programs with asynchronous completions and
+  coroutines. Asynchronous completions currently implemented in
+  asyncoro are socket I/O operations (for non-blocking sockets),
+  database cursors, sleep timers and locking primitives.  The
+  coroutines should use <em>yield</em> with these completions. Each
+  yield statement gives control to asyncoro's scheduler, which
+  interleaves executions of coroutines, similar to the way an
+  operating system executes multiple processes. Programs developed
+  with asyncoro have same logic and structure as programs with
+  threads, except for a few syntactic changes. asyncoro supports
+  socket I/O notification mechanisms epoll, kqueue, /dev/poll (and
+  poll and select, where necessary), and Windows I/O Completion Ports
+  (IOCP) for high performance and scalability, and SSL for security.
 </p>
 
 <h4>Details</h4>
@@ -73,7 +73,7 @@ GIL</a>).</p>
   mechanically (although it cannot be automated). In fact, it may be
   easier to use asyncoro than threads, as locking is not required with
   asyncoro (see below). Moreover, asyncoro framework is very small
-  (about 2000 lines in a single file 'asyncoro.py'), so it is easy to
+  (about 3000 lines in a single file 'asyncoro.py'), so it is easy to
   understand how it works and how to program with it. While not
   required to program with asyncoro,
   <a href="http://www.dabeaz.com/coroutines/index.html">A Curious
@@ -496,9 +496,9 @@ other <em>process</em> coroutines).
 	channel. Note that a coroutine can also send messages to other
 	coroutines. Such messages are not instances of
 	_ChannelMessage, so if there is a chance that a recipient can
-	receive message sent by either channels or coroutines, they
-	may need to check message type, for example,
-	with <em>isinstance</em>, and process accordingly.
+	receive messages sent by either channels or coroutines, it may
+	check message type, for example, with <em>isinstance</em>, and
+	process accordingly.
       </li>
       <li><b>deliver(message)</b> is similar to <em>send</em>, except
 	that it blocks until at least <em>min_receivers</em> are

@@ -2257,7 +2257,7 @@ def unserialize(pkl):
 
 class Location(object):
     """Distributed asyncoro, coroutines, channels use Location to
-    identify where they are running, where to send a message to etc.
+    identify where they are running, where to send a message etc.
     """
 
     __slots__ = ('addr', 'port')
@@ -3388,7 +3388,21 @@ class AsynCoro(object):
                 logger.warning('ignoring invalid "send" to %s / %s', req.dst, self._location)
                 resp = 'NAK'
             yield conn.send_msg(serialize(resp))
-            conn.close()
+        elif req.request == 'run_rci':
+            if req.dst == self._location:
+                method = self._rcis.get(req.kwargs['name'], None)
+                if method is None:
+                    reply = Exception('RCI "%s" is not registered' % req.kwargs['name'])
+                else:
+                    args = req.kwargs['args']
+                    kwargs = req.kwargs['kwargs']
+                    try:
+                        coro = Coro(method, *args, **kwargs)
+                    except:
+                        reply = Exception(traceback.format_exc())
+                    else:
+                        reply = _RemoteCoro(method.__name__, id(coro), self._location)
+                yield conn.send_msg(serialize(reply))
         elif req.request == 'locate_channel':
             if req.src == self._location:
                 # cache the result. TODO: prune if too many?
@@ -3413,7 +3427,6 @@ class AsynCoro(object):
                         sock.close()
                     else:
                         yield conn.send_msg(serialize(rchannel))
-            conn.close()
         elif req.request == 'locate_coro':
             if req.src == self._location:
                 rcoro = req.kwargs.get('coro', None)
@@ -3438,23 +3451,6 @@ class AsynCoro(object):
                         sock.close()
                     else:
                         yield conn.send_msg(serialize(rcoro))
-            conn.close()
-        elif req.request == 'run_rci':
-            if req.dst == self._location:
-                method = self._rcis.get(req.kwargs['name'], None)
-                if method is None:
-                    reply = 'RCI "%s" is not registered' % req.kwargs['name']
-                else:
-                    args = req.kwargs['args']
-                    kwargs = req.kwargs['kwargs']
-                    try:
-                        coro = Coro(method, *args, **kwargs)
-                    except:
-                        reply = traceback.format_exc()
-                    else:
-                        reply = _RemoteCoro(method.__name__, id(coro), self._location)
-                yield conn.send_msg(serialize(reply))
-            conn.close()
         elif req.request == 'locate_rci':
             if req.src == self._location:
                 loc = req.kwargs.get('location', None)
@@ -3479,7 +3475,6 @@ class AsynCoro(object):
                         sock.close()
                     else:
                         yield conn.send_msg(serialize(loc))
-            conn.close()
         elif req.request == 'subscribe':
             reply = 'NAK'
             if req.dst == self._location:
@@ -3499,7 +3494,6 @@ class AsynCoro(object):
             else:
                 logger.warning('ignoring subscribe to channel "%s"', req.kwargs.get('name', None))
             yield conn.send_msg(serialize(reply))
-            conn.close()
         elif req.request == 'monitor':
             reply = 'NAK'
             if req.dst == self._location:
@@ -3511,7 +3505,6 @@ class AsynCoro(object):
                         if self._monitor(monitor, coro) == 0:
                             reply = 'ACK'
             yield conn.send_msg(serialize(reply))
-            conn.close()
         elif req.request == 'exception':
             reply = 'NAK'
             if req.dst == self._location:
@@ -3524,7 +3517,6 @@ class AsynCoro(object):
                             if self._throw(coro, *exc) == 0:
                                 reply = 'ACK'
             yield conn.send_msg(serialize(reply))
-            conn.close()
         elif req.request == 'ping':
             # TODO: async reply?
             peer = req.kwargs['peer']
@@ -3534,10 +3526,8 @@ class AsynCoro(object):
                 reply = yield conn.recv_msg()
                 assert reply == 'ACK'
             except:
-                conn.close()
-                logger.debug('ignoring %s', peer)
+                logger.debug('ignoring peer %s', peer)
             else:
-                conn.close()
                 self._peers[(peer.addr, peer.port)] = auth_code
                 logger.debug('found asyncoro at %s', peer)
                 # send pending (async) requests
@@ -3546,7 +3536,7 @@ class AsynCoro(object):
                     sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                                           keyfile=self._keyfile, certfile=self._certfile)
                     if pending_req.timeout:
-                        sock.settimeout(req.timeout)
+                        sock.settimeout(pending_req.timeout)
                     pending_req.auth = auth_code
                     try:
                         yield sock.connect((peer.addr, peer.port))
@@ -3572,10 +3562,9 @@ class AsynCoro(object):
                     sock.close()
                 else:
                     yield conn.send_msg(serialize(peer))
-            conn.close()
         else:
             logger.warning('invalid request ignored')
-            conn.close()
+        conn.close()
 
     def _async_reply(self, req, dst=None):
         """Internal use only.
@@ -3590,9 +3579,9 @@ class AsynCoro(object):
         try:
             yield sock.connect((dst.addr, dst.port))
             yield sock.send_msg(serialize(req))
-            sock.close()
         except:
             logger.debug('could not send "%s" to %s', req.request, req.dst)
+        sock.close()
 
     def _sync_reply(self, req):
         """Internal use only.
@@ -3605,10 +3594,10 @@ class AsynCoro(object):
             yield sock.connect((req.dst.addr, req.dst.port))
             yield sock.send_msg(serialize(req))
             reply = yield sock.recv_msg()
-            sock.close()
         except:
             logger.debug('could not send "%s" to %s', req.request, req.dst)
             reply = None
+        sock.close()
 
         if reply is None:
             raise StopIteration(None)
@@ -3673,7 +3662,9 @@ class AsynCoro(object):
                     yield self._async_reply(req, dst=dst)
             else:
                 self._requests[req.id] = req
-            yield req.event.wait(timeout)
+            if (yield req.event.wait(timeout)) is False:
+                # timed out
+                self._requests.pop(req.id, None)
             loc = req.async_result
         raise StopIteration(loc)
 
@@ -3683,15 +3674,11 @@ class AsynCoro(object):
         coro. The generator method with 'name' must have been
         registered with 'register_RCI' at 'location'.
         """
-        if isinstance(name, str):
-        else:
+        if not isinstance(name, str):
             raise Exception('name must be a string')
         auth = self._peers.get((location.addr, location.port), None)
         if auth is None:
             raise Exception('%s is not a valid peer' % location)
-        if not args and kwargs:
-            args = kwargs.pop('args', ())
-            kwargs = kwargs.pop('kwargs', kwargs)
         req = _NetRequest(request='run_rci', kwargs={'name':name, 'args':args, 'kwargs':kwargs},
                           dst=location, auth=auth, timeout=2)
         reply = yield self._sync_reply(req)
@@ -3730,7 +3717,8 @@ class AsynCoro(object):
                     yield self._async_reply(req, dst=dst)
             else:
                 self._requests[req.id] = req
-            yield req.event.wait(timeout)
+            if (yield req.event.wait(timeout)) is False:
+                self._requests.pop(req.id, None)
             rchannel = req.async_result
         raise StopIteration(rchannel)
 
@@ -3764,7 +3752,8 @@ class AsynCoro(object):
                     yield self._async_reply(req, dst=dst)
             else:
                 self._requests[req.id] = req
-            yield req.event.wait(timeout)
+            if (yield req.event.wait(timeout)) is False:
+                self._requests.pop(req.id, None)
             rcoro = req.async_result
         raise StopIteration(rcoro)
 
@@ -3783,7 +3772,8 @@ class AsynCoro(object):
                 yield self._async_reply(req, dst=dst)
         else:
             self._requests[req.id] = req
-        yield req.event.wait(timeout)
+        if (yield req.event.wait(timeout)) is False:
+            self._requests.pop(req.id, None)
         loc = req.async_result
         raise StopIteration(loc)
 

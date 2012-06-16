@@ -101,7 +101,7 @@
 
 <ul>
   <li>The (singleton) AsynCoro instance, which can be obtained
-    with <em>AsynCoro.instance()</em> has following additional methods:
+    with <em>AsynCoro.instance()</em>, has following additional methods:
     <ul>
       <li><b>locate_peer(name, timeout=None)</b> finds and returns
 	location where peer AsynCoro with <em>name</em> is running. This
@@ -167,14 +167,14 @@ if not valid_creds(creds):
       </li>
 
       <li><b>peer(node, udp_port=51350)</b> locates peer asyncoro at
-	given <em>node</em> and <em>udp_port</em>. If all asyncoros are
-	running on a local network, they can find each other automatically
-	through UDP broadcasting. Howver, if some asyncoros are running on
-	a remote network, those asyncoros need to be explicitly located
-	with this <em>peer</em> method. It is not needed to run this
-	method on both sides - if one asyncoro successfully runs this
-	method, they will find each other. This method must be used
-	with <em>yield</em>.
+	given <em>node</em> and <em>udp_port</em>. If all asyncoros
+	are running on a local network, they can find each other
+	automatically through UDP broadcasting. However, if an
+	asyncoro is running on a remote network, it needs to be
+	explicitly located with this <em>peer</em> method. It is not
+	needed to run this method on both sides - if one asyncoro
+	successfully runs this method, they will find each other. This
+	method must be used with <em>yield</em>.
       </li>
     </ul>
   </li>
