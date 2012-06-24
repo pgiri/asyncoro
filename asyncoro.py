@@ -2350,8 +2350,7 @@ class _RemoteCoro(object):
         """
         auth = self._asyncoro._peers[(self._location.addr, self._location.port)]
         request = _NetRequest('deliver', kwargs={'coro_id':self._id, 'message':message},
-                              src=self._asyncoro._location, dst=self._location,
-                              auth=auth, timeout=timeout)
+                              dst=self._location, auth=auth, timeout=timeout)
         reply = yield self._asyncoro._sync_reply(request)
         raise StopIteration(reply)
         
@@ -2502,10 +2501,15 @@ class AsyncChannel(object):
                     count['reply'] += reply
                 count['pending'] -= 1
             else:
+                # remote channel/coro
                 def _deliver(subscriber, c, event, timeout, coro=None):
-                    reply = yield subscriber.deliver(msg, timeout)
-                    if reply:
-                        c['reply'] += reply
+                    try:
+                        reply = yield subscriber.deliver(msg, timeout)
+                    except:
+                        pass
+                    else:
+                        if reply:
+                            c['reply'] += reply
                     c['pending'] -= 1
                     if c['pending'] == 0:
                         event.set()
@@ -3448,12 +3452,15 @@ class AsynCoro(object):
                     else:
                         logger.warning('ignoring invalid recipient to "send"')
                 req.kwargs['delivered'] = resp
-                req.auth = self._peers[(req.src.addr, req.src.port)]
-                sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
-                                      keyfile=self._keyfile, certfile=self._certfile)
-                yield sock.connect((req.src.addr, req.src.port))
-                yield sock.send_msg(serialize(req))
-                sock.close()
+                if req.src:
+                    req.auth = self._peers[(req.src.addr, req.src.port)]
+                    sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                          keyfile=self._keyfile, certfile=self._certfile)
+                    yield sock.connect((req.src.addr, req.src.port))
+                    yield sock.send_msg(serialize(req))
+                    sock.close()
+                else:
+                    yield conn.send_msg(serialize(resp))
             elif req.src == self._location:
                 if 'delivered' in req.kwargs:
                     req.async_result = req.kwargs['delivered']
