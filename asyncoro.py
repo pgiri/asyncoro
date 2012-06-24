@@ -1984,10 +1984,13 @@ class Coro(object):
                     raise StopIteration(-1)
             elif isinstance(coro, _RemoteCoro):
                 rmonitor = _RemoteCoro(self.name, id(self), self._location)
-                auth = self._asyncoro._peers[(coro._location.addr, coro._location.port)]
-                request = _NetRequest('monitor', kwargs={'monitor':rmonitor, 'coro':coro},
-                                      dst=coro._location, auth=auth)
-                reply = yield self._asyncoro._sync_reply(request)
+                auth = self._asyncoro._peers.get((coro._location.addr, coro._location.port), None)
+                if auth:
+                    request = _NetRequest('monitor', kwargs={'monitor':rmonitor, 'coro':coro},
+                                          dst=coro._location, auth=auth)
+                    reply = yield self._asyncoro._sync_reply(request)
+                else:
+                    reply = -1
                 raise StopIteration(reply)
         else:
             logger.warning('monitor: coroutine %s removed?', self.name)
@@ -2335,23 +2338,34 @@ class _RemoteCoro(object):
         """Send message to coroutine to the 'real' coroutine to which
         this instance refers to.
         """
-        auth = self._asyncoro._peers[(self._location.addr, self._location.port)]
-        request = _NetRequest('send', kwargs={'coro_id':self._id, 'message':message},
-                              src=self._asyncoro._location, dst=self._location,
-                              auth=auth, timeout=1)
-        # for consistency with Coro.send (which doesn't need "yield"),
-        # request is queued for asynchronous processing
-        self._asyncoro._requests_queue.append(request)
-        self._asyncoro._requests_queue_not_empty.set()
+        auth = self._asyncoro._peers.get((self._location.addr, self._location.port), None)
+        if auth:
+            request = _NetRequest('send', kwargs={'coro_id':self._id, 'message':message},
+                                  src=self._asyncoro._location, dst=self._location,
+                                  auth=auth, timeout=1)
+            # for consistency with Coro.send (which doesn't need "yield"),
+            # request is queued for asynchronous processing
+            self._asyncoro._requests_queue.append(request)
+            self._asyncoro._requests_queue_not_empty.set()
+        else:
+            logger.warning('remote coro at %s is not valid, unsubscribing it', self._location)
+            for channel in self._asyncoro._rchannels.itervalues():
+                channel.unsubscribe(self)
 
     def deliver(self, message, timeout=None):
         """Deliver message to coroutine to the 'real' coroutine to
         which this instance refers to.
         """
-        auth = self._asyncoro._peers[(self._location.addr, self._location.port)]
-        request = _NetRequest('deliver', kwargs={'coro_id':self._id, 'message':message},
-                              dst=self._location, auth=auth, timeout=timeout)
-        reply = yield self._asyncoro._sync_reply(request)
+        auth = self._asyncoro._peers.get((self._location.addr, self._location.port), None)
+        if auth:
+            request = _NetRequest('deliver', kwargs={'coro_id':self._id, 'message':message},
+                                  dst=self._location, auth=auth, timeout=timeout)
+            reply = yield self._asyncoro._sync_reply(request)
+        else:
+            logger.warning('remote coro at %s is not valid, unsubscribing it', self._location)
+            for channel in self._asyncoro._rchannels.itervalues():
+                channel.unsubscribe(self)
+            reply = 0
         raise StopIteration(reply)
         
 class _ChannelMessage(object):
@@ -2445,10 +2459,26 @@ class AsyncChannel(object):
         if len(self._subscribers) == self._min_subscribers:
             self._event.set()
 
-    def unsubscribe(self, coro):
+    def unsubscribe(self, subscriber):
         """Future messages will not be delivered after unsubscribing.
         """
-        self._subscribers.discard(coro)
+        if isinstance(subscriber, Coro) or isinstance(subscriber, AsyncChannel) or \
+           isinstance(subscriber, SyncChannel):
+            self._subscribers.discard(subscriber)
+        elif isinstance(subscriber, _RemoteCoro):
+            for s in self._subscribers:
+                if isinstance(s, _RemoteCoro) and \
+                       s._id == subscriber._id and s._location == subscriber._location:
+                    subscriber = s
+                    break
+            self._subscribers.discard(subscriber)
+        elif isinstance(subscriber, _RemoteChannel):
+            for s in self._subscribers:
+                if isinstance(s, _RemoteChannel) and \
+                       s.name == subscriber.name and s._location == subscriber._location:
+                    subscriber = s
+                    break
+            self._subscribers.discard(subscriber)
         if len(self._subscribers) < self._min_subscribers:
             self._event.clear()
 
@@ -2460,7 +2490,9 @@ class AsyncChannel(object):
             if message is None:
                 return
         msg = _ChannelMessage(self.name, message)
-        for subscriber in self._subscribers:
+        # remote subscriber may call unsubscribe during send, so make copy
+        subscribers = self._subscribers.copy()
+        for subscriber in subscribers:
             subscriber.send(msg)
 
     def deliver(self, message, timeout=None, alarm_value=None):
@@ -2490,6 +2522,18 @@ class AsyncChannel(object):
         subscribers = self._subscribers.copy()
         count = {'pending':len(subscribers), 'reply':0}
         done = Event()
+
+        def _deliver(subscriber, c, event, timeout, coro=None):
+            try:
+                reply = yield subscriber.deliver(msg, timeout)
+            except:
+                pass
+            else:
+                if reply:
+                    c['reply'] += reply
+            c['pending'] -= 1
+            if c['pending'] == 0:
+                event.set()
         for subscriber in subscribers:
             if isinstance(subscriber, Coro):
                 subscriber.send(msg)
@@ -2502,17 +2546,6 @@ class AsyncChannel(object):
                 count['pending'] -= 1
             else:
                 # remote channel/coro
-                def _deliver(subscriber, c, event, timeout, coro=None):
-                    try:
-                        reply = yield subscriber.deliver(msg, timeout)
-                    except:
-                        pass
-                    else:
-                        if reply:
-                            c['reply'] += reply
-                    c['pending'] -= 1
-                    if c['pending'] == 0:
-                        event.set()
                 Coro(_deliver, subscriber, count, done, timeout)
         if count['pending']:
             yield done.wait(timeout)
@@ -2558,44 +2591,77 @@ class _RemoteChannel(object):
             kwargs['channel'] = subscriber.reference()
         else:
             raise Exception('invalid subscribe request')
-        auth = self._asyncoro._peers[(self._location.addr, self._location.port)]
-        request = _NetRequest('subscribe', kwargs=kwargs, src=self._asyncoro._location,
-                              dst=self._location, auth=auth, timeout=1)
-        # for consistency with AsyncChannel.subscribe (which doesn't
-        # need "yield"), request is queued for asynchronous processing
-        self._asyncoro._requests_queue.append(request)
-        self._asyncoro._requests_queue_not_empty.set()
+        auth = self._asyncoro._peers.get((self._location.addr, self._location.port), None)
+        if auth:
+            request = _NetRequest('subscribe', kwargs=kwargs, src=self._asyncoro._location,
+                                  dst=self._location, auth=auth, timeout=1)
+            # for consistency with AsyncChannel.subscribe (which doesn't
+            # need "yield"), request is queued for asynchronous processing
+            self._asyncoro._requests_queue.append(request)
+            self._asyncoro._requests_queue_not_empty.set()
+        else:
+            logger.warning('remote channel at %s is not valid', self._location)
+
+    def unsubscribe(self, subscriber):
+        kwargs = {'name':self.name}
+        if isinstance(subscriber, Coro):
+            kwargs['coro'] = subscriber.reference()
+        elif isinstance(subscriber, AsyncChannel):
+            kwargs['channel'] = subscriber.reference()
+        else:
+            raise Exception('invalid unsubscribe request')
+        auth = self._asyncoro._peers.get((self._location.addr, self._location.port), None)
+        if auth:
+            request = _NetRequest('unsubscribe', kwargs=kwargs, src=self._asyncoro._location,
+                                  dst=self._location, auth=auth, timeout=1)
+            # for consistency with AsyncChannel.subscribe (which doesn't
+            # need "yield"), request is queued for asynchronous processing
+            self._asyncoro._requests_queue.append(request)
+            self._asyncoro._requests_queue_not_empty.set()
+        else:
+            logger.warning('remote channel at %s is not valid', self._location)
 
     def send(self, message):
         if self._transform:
             message = self._transform(self.name, message)
             if message is None:
                 return
-        auth = self._asyncoro._peers[(self._location.addr, self._location.port)]
-        request = _NetRequest('send', kwargs={'channel_name':self.name, 'message':message},
-                              src=self._asyncoro._location, dst=self._location,
-                              auth=auth, timeout=1)
-        # for consistency with AsyncChannel.send (which doesn't need "yield"),
-        # request is queued for asynchronous processing
-        self._asyncoro._requests_queue.append(request)
-        self._asyncoro._requests_queue_not_empty.set()
+        auth = self._asyncoro._peers.get((self._location.addr, self._location.port), None)
+        if auth:
+            request = _NetRequest('send', kwargs={'channel_name':self.name, 'message':message},
+                                  src=self._asyncoro._location, dst=self._location,
+                                  auth=auth, timeout=1)
+            # for consistency with AsyncChannel.send (which doesn't need "yield"),
+            # request is queued for asynchronous processing
+            self._asyncoro._requests_queue.append(request)
+            self._asyncoro._requests_queue_not_empty.set()
+        else:
+            logger.warning('remote channel at %s is not valid, unsubscribing it', self._location)
+            for channel in self._asyncoro._rchannels.itervalues():
+                channel.unsubscribe(self)
 
     def deliver(self, message, timeout=None, alarm_value=None):
         if self._transform:
             message = self._transform(self.name, message)
             if message is None:
                 raise StopIteration(0)
-        auth = self._asyncoro._peers[(self._location.addr, self._location.port)]
-        request = _NetRequest('deliver', kwargs={'channel_name':self.name, 'message':message},
-                              src=self._asyncoro._location, dst=self._location,
-                              auth=auth, timeout=timeout)
-        request.event.clear()
-        yield self._asyncoro._async_reply(request)
-        if (yield request.event.wait(timeout)) is False:
-            # timed out
-            self._asyncoro._requests.pop(request.id, None)
-            request.async_result = alarm_value
-        raise StopIteration(request.async_result)
+        auth = self._asyncoro._peers.get((self._location.addr, self._location.port), None)
+        if auth:
+            request = _NetRequest('deliver', kwargs={'channel_name':self.name, 'message':message},
+                                  src=self._asyncoro._location, dst=self._location,
+                                  auth=auth, timeout=timeout)
+            request.event.clear()
+            yield self._asyncoro._async_reply(request)
+            if (yield request.event.wait(timeout)) is False:
+                # timed out
+                self._asyncoro._requests.pop(request.id, None)
+                request.async_result = alarm_value
+            raise StopIteration(request.async_result)
+        else:
+            logger.warning('remote channel at %s is not valid, unsubscribing it', self._location)
+            for channel in self._asyncoro._rchannels.itervalues():
+                channel.unsubscribe(self)
+            raise StopIteration(0)
 
 class SyncChannel(object):
     """Synchronous channel. Broadcasts a message to currently waiting
@@ -3215,16 +3281,17 @@ class AsynCoro(object):
                                                                        StopIteration(exc)))
                                     monitor, coro._monitor = coro._monitor, None
                                     exc = (MonitorException, exc)
-                                    auth = self._peers[(monitor._location.addr,
-                                                        monitor._location.port)]
-                                    request = _NetRequest('exception', {'exception':exc,
-                                                                        'coro':monitor},
-                                                          src=self._location, auth=auth,
-                                                          dst=monitor._location, timeout=1)
-                                    self._requests_queue.append(request)
-                                    # Event.set may call _proceed_
-                                    # which needs (recursive) lock
-                                    self._requests_queue_not_empty.set()
+                                    auth = self._peers.get((monitor._location.addr,
+                                                            monitor._location.port), None)
+                                    if auth:
+                                        request = _NetRequest('exception', {'exception':exc,
+                                                                            'coro':monitor},
+                                                              src=self._location, auth=auth,
+                                                              dst=monitor._location, timeout=1)
+                                        self._requests_queue.append(request)
+                                        # Event.set may call _proceed_
+                                        # which needs (recursive) lock
+                                        self._requests_queue_not_empty.set()
                             else:
                                 coro._msgs = []
                         else:
@@ -3292,10 +3359,21 @@ class AsynCoro(object):
                 logger.debug('waiting for %s coroutines to terminate',
                              len(self._coros) - self._daemons)
                 self._complete.wait()
-            for x in xrange(len(self._requests_queue)):
-                time.sleep(0.1)
-                if not len(self._requests_queue):
-                    break
+            if self._location:
+                for x in xrange(len(self._requests_queue)):
+                    time.sleep(0.1)
+                    if not len(self._requests_queue):
+                        break
+                def _terminate(self, req, coro=None):
+                    sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                          keyfile=self._keyfile, certfile=self._certfile)
+                    yield sock.connect((req.dst.addr, req.dst.port))
+                    yield sock.send_msg(serialize(req))
+                    sock.close()
+                for (addr, port), auth in self._peers.iteritems():
+                    req = _NetRequest('terminate', kwargs={'peer':self._location},
+                                      dst=Location(addr, port), auth=auth)
+                    Coro(_terminate, self, req).value()
             self._terminate = True
             if self._tcp_sock:
                 self._tcp_sock.close()
@@ -3451,14 +3529,15 @@ class AsynCoro(object):
                                                          timeout=req.timeout, alarm_value=0)
                     else:
                         logger.warning('ignoring invalid recipient to "send"')
-                req.kwargs['delivered'] = resp
                 if req.src:
-                    req.auth = self._peers[(req.src.addr, req.src.port)]
-                    sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
-                                          keyfile=self._keyfile, certfile=self._certfile)
-                    yield sock.connect((req.src.addr, req.src.port))
-                    yield sock.send_msg(serialize(req))
-                    sock.close()
+                    req.kwargs['delivered'] = resp
+                    req.auth = self._peers.get((req.src.addr, req.src.port), None)
+                    if req.auth:
+                        sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                              keyfile=self._keyfile, certfile=self._certfile)
+                        yield sock.connect((req.src.addr, req.src.port))
+                        yield sock.send_msg(serialize(req))
+                        sock.close()
                 else:
                     yield conn.send_msg(serialize(resp))
             elif req.src == self._location:
@@ -3500,12 +3579,13 @@ class AsynCoro(object):
                         rchannel = _RemoteChannel(channel.name, channel._location)
                     if req.src:
                         req.kwargs['channel'] = rchannel
-                        req.auth = self._peers[(req.src.addr, req.src.port)]
-                        sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
-                                              keyfile=self._keyfile, certfile=self._certfile)
-                        yield sock.connect((req.src.addr, req.src.port))
-                        yield sock.send_msg(serialize(req))
-                        sock.close()
+                        req.auth = self._peers.get((req.src.addr, req.src.port), None)
+                        if req.auth:
+                            sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                                  keyfile=self._keyfile, certfile=self._certfile)
+                            yield sock.connect((req.src.addr, req.src.port))
+                            yield sock.send_msg(serialize(req))
+                            sock.close()
                     else:
                         yield conn.send_msg(serialize(rchannel))
         elif req.request == 'locate_coro':
@@ -3524,12 +3604,13 @@ class AsynCoro(object):
                         rcoro = _RemoteCoro(coro.name, id(coro), self._location)
                     if req.src:
                         req.kwargs['coro'] = rcoro
-                        req.auth = self._peers[(req.src.addr, req.src.port)]
-                        sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
-                                              keyfile=self._keyfile, certfile=self._certfile)
-                        yield sock.connect((req.src.addr, req.src.port))
-                        yield sock.send_msg(serialize(req))
-                        sock.close()
+                        req.auth = self._peers.get((req.src.addr, req.src.port), None)
+                        if req.auth:
+                            sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                                  keyfile=self._keyfile, certfile=self._certfile)
+                            yield sock.connect((req.src.addr, req.src.port))
+                            yield sock.send_msg(serialize(req))
+                            sock.close()
                     else:
                         yield conn.send_msg(serialize(rcoro))
         elif req.request == 'locate_rci':
@@ -3548,12 +3629,13 @@ class AsynCoro(object):
                         loc = self._location
                     if req.src:
                         req.kwargs['location'] = loc
-                        req.auth = self._peers[(req.src.addr, req.src.port)]
-                        sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
-                                              keyfile=self._keyfile, certfile=self._certfile)
-                        yield sock.connect((req.src.addr, req.src.port))
-                        yield sock.send_msg(serialize(req))
-                        sock.close()
+                        req.auth = self._peers.get((req.src.addr, req.src.port), None)
+                        if req.auth:
+                            sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                                  keyfile=self._keyfile, certfile=self._certfile)
+                            yield sock.connect((req.src.addr, req.src.port))
+                            yield sock.send_msg(serialize(req))
+                            sock.close()
                     else:
                         yield conn.send_msg(serialize(loc))
         elif req.request == 'subscribe':
@@ -3626,6 +3708,24 @@ class AsynCoro(object):
                         logger.debug(traceback.format_exc())
                         pass
                     sock.close()
+        elif req.request == 'unsubscribe':
+            reply = 'NAK'
+            if req.dst == self._location:
+                channel = self._rchannels.get(req.kwargs['name'], None)
+                if channel is not None and channel._location == self._location:
+                    rcoro = req.kwargs.get('coro', None)
+                    if rcoro is not None:
+                        subscriber = rcoro
+                    else:
+                        rchannel = req.kwargs.get('channel', None)
+                        if rchannel is not None:
+                            subscriber = rchannel
+                    if subscriber is not None:
+                        channel.unsubscribe(subscriber)
+                        reply = 'ACK'
+            else:
+                logger.warning('ignoring subscribe to channel "%s"', req.kwargs.get('name', None))
+            yield conn.send_msg(serialize(reply))
         elif req.request == 'locate_peer':
             if req.src == self._location:
                 peer = req.kwargs.get('peer', None)
@@ -3636,14 +3736,19 @@ class AsynCoro(object):
                 peer = self._location
                 if req.src:
                     req.kwargs['peer'] = peer
-                    req.auth = self._peers[(req.src.addr, req.src.port)]
-                    sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
-                                          keyfile=self._keyfile, certfile=self._certfile)
-                    yield sock.connect((req.src.addr, req.src.port))
-                    yield sock.send_msg(serialize(req))
-                    sock.close()
+                    req.auth = self._peers.get((req.src.addr, req.src.port), None)
+                    if req.auth:
+                        sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                              keyfile=self._keyfile, certfile=self._certfile)
+                        yield sock.connect((req.src.addr, req.src.port))
+                        yield sock.send_msg(serialize(req))
+                        sock.close()
                 else:
                     yield conn.send_msg(serialize(peer))
+        elif req.request == 'terminate':
+            peer = req.kwargs.get('peer', None)
+            if peer:
+                self._peers.pop((peer.addr, peer.port), None)
         else:
             logger.warning('invalid request ignored')
         conn.close()
@@ -3661,6 +3766,11 @@ class AsynCoro(object):
         try:
             yield sock.connect((dst.addr, dst.port))
             yield sock.send_msg(serialize(req))
+        except socket.error as exc:
+            logger.debug('could not send "%s" to %s', req.request, req.dst)
+            if len(exc.args) == 1 and exc.args[0] == 'hangup':
+                logger.warning('removing peer "%s"', req.dst)
+                self._peers.pop((req.dst.addr, req.dst.port), None)
         except:
             logger.debug('could not send "%s" to %s', req.request, req.dst)
         sock.close()
@@ -3676,8 +3786,13 @@ class AsynCoro(object):
             yield sock.connect((req.dst.addr, req.dst.port))
             yield sock.send_msg(serialize(req))
             reply = yield sock.recv_msg()
-        except:
+        except socket.error as exc:
+            reply = None
             logger.debug('could not send "%s" to %s', req.request, req.dst)
+            if len(exc.args) == 1 and exc.args[0] == 'hangup':
+                logger.warning('removing peer "%s"', req.dst)
+                self._peers.pop((req.dst.addr, req.dst.port), None)
+        except:
             reply = None
         sock.close()
 
@@ -3731,7 +3846,6 @@ class AsynCoro(object):
                               dst=location, auth=auth, timeout=timeout)
             loc = yield self._sync_reply(req)
         else:
-            # TODO: UDP broadcast?
             req = _NetRequest(request='locate_rci', kwargs={'name':name},
                               src=self._location, timeout=None)
             req.event.clear()
@@ -3820,7 +3934,6 @@ class AsynCoro(object):
                               dst=location, auth=auth, timeout=timeout)
             rcoro = yield self._sync_reply(req)
         else:
-            # TODO: UDP broadcast?
             req = _NetRequest(request='locate_coro', kwargs={'name':name},
                               src=self._location, timeout=None)
             req.event.clear()
@@ -3858,17 +3971,18 @@ class AsynCoro(object):
         loc = req.async_result
         raise StopIteration(loc)
 
-    def peer(self, node, udp_port=51350):
-        """Add node, port as peer to communicate. Coroutines running
-        at peer can locate channels and coroutines so they can
-        exchange messages.
+    def peer(self, node, udp_port=0):
+        """Find peer running at node, udp_port to communicate.
+        Coroutines running at peer can locate channels and coroutines
+        so they can exchange messages.
         """
         try:
             node = socket.gethostbyname(node)
         except:
             logger.warning('invalid node: "%s"', str(node))
             raise StopIteration(-1)
-
+        if not udp_port:
+            udp_port = 51350
         ping_sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
         ping_sock.settimeout(1)
         ping_msg = {'location':self._location, 'signature':self._signature}
