@@ -1731,342 +1731,6 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
     AsynCoroSocket = _AsynCoroSocket
     _AsyncNotifier = _AsyncPoller
 
-class HotSwapException(Exception):
-    """This exception is used to indicate hot-swap request and
-    response.
-    """
-    pass
-
-class MonitorException(Exception):
-    """This execption is used to indicate that a coroutine being
-    monitored has finished or terminated.
-    """
-    pass
-
-class Coro(object):
-    """'Coroutine' factory to build coroutines to be scheduled with
-    AsynCoro. Automatically starts executing 'target'.  The generator
-    function definition should have 'coro' argument set to (default
-    value) None. When the function is called, that argument will be
-    this object.
-    """
-
-    __slots__ = ('_generator', 'name', '_id', '_state', '_value', '_exceptions', '_callers',
-                 '_timeout', '_daemon', '_complete', '_msgs', '_monitor', '_new_generator',
-                 '_hot_swappable', '_asyncoro', '_location')
-
-    def __init__(self, target, *args, **kwargs):
-        self._generator = self.__get_generator__(target, *args, **kwargs)
-        self.name = target.__name__
-        self._id = id(self)
-        self._state = None
-        self._value = None
-        self._exceptions = []
-        self._callers = []
-        self._timeout = None
-        self._daemon = False
-        self._complete = threading.Event()
-        self._msgs = []
-        self._monitor = None
-        self._new_generator = None
-        self._hot_swappable = False
-        self._asyncoro = AsynCoro.instance()
-        self._location = self._asyncoro._location
-        self._asyncoro._add(self)
-
-    def __get_generator__(self, target, *args, **kwargs):
-        if not inspect.isgeneratorfunction(target):
-            raise Exception('%s is not a generator!' % target.__name__)
-        if not args and kwargs:
-            args = kwargs.pop('args', ())
-            kwargs = kwargs.pop('kwargs', kwargs)
-        if kwargs.get('coro', None) is not None:
-            raise Exception('Coro function %s should not be called with ' \
-                            '"coro" parameter' % target.__name__)
-        callargs = inspect.getcallargs(target, *args, **kwargs)
-        if 'coro' not in callargs or callargs['coro'] is not None:
-            raise Exception('Coro function "%s" should have "coro" argument with ' \
-                            'default value None' % target.__name__)
-        kwargs['coro'] = self
-        return target(*args, **kwargs)
-
-    def register(self, name=None):
-        """Register this coroutine so coroutines running on a remote
-        (peer) asyncoro can locate it (with 'locate_coro') so they can
-        exchange messages, monitored etc.
-        """
-
-        if name is None:
-            name = self.name
-        return self._asyncoro._register_coro(self, name)
-
-    def __getstate__(self):
-        state = {'name':self.name, '_id':self._id, '_location':self._location}
-        return state
-    
-    def __setstate__(self, state):
-        self.name = state['name']
-        self._id = state['_id']
-        self._location = state['_location']
-        self._asyncoro = AsynCoro.instance()
-
-    def set_daemon(self):
-        """Set coroutine is daemon.
-
-        When exiting, AsynCoro scheduler waits for all non-daemon
-        coroutines to terminate.
-        """
-        if self._asyncoro and self._asyncoro.cur_coro() == self:
-            self._asyncoro._set_daemon(self)
-            return 0
-        else:
-            logger.warning('set_daemon must be called from running coro')
-            return -1
-
-    def suspend(self, timeout=None, alarm_value=None):
-        """This method should be used with 'yield'. Suspend/sleep coro
-        (until woken up, usually by AsyncNotifier in the case of
-        AsynCoroSockets).
-
-        If timeout is a (floating point) number, this coro is
-        suspended for that many seconds (or fractions of second). This
-        method should be used with 'yield' and from coro only.
-
-        If suspend times out (no other coroutine resumes it), AsynCoro
-        resumes it with the value 'alarm_value'.
-        """
-        if self._asyncoro:
-            return self._asyncoro._suspend(self, timeout, alarm_value, AsynCoro._Suspended)
-        else:
-            logger.warning('suspend: coroutine %s/%s removed?', self.name, self._id)
-            return -1
-
-    sleep = suspend
-
-    def _await_(self, timeout=None, alarm_value=None):
-        """Internal use only.
-        """
-        return self._asyncoro._suspend(self, timeout, alarm_value, AsynCoro._AwaitIO_)
-
-    def resume(self, update=None):
-        """Resume/wakeup this coro and send 'update' to it.
-
-        The resuming coro gets 'update' for the 'yield' that caused it
-        to suspend. If coro is currently not suspended/sleeping,
-        resume is ignored.
-        """
-        if self._asyncoro:
-            return self._asyncoro._resume(self, update, AsynCoro._Suspended)
-        else:
-            logger.warning('resume: coroutine %s/%s removed?', self.name, self._id)
-            return -1
-
-    wakeup = resume
-
-    def _proceed_(self, update=None):
-        """Internal use only.
-        """
-        if self._asyncoro:
-            return self._asyncoro._resume(self, update, AsynCoro._AwaitIO_)
-        else:
-            logger.warning('_proceed_: coroutine %s/%s removed?', self.name, self._id)
-            return -1
-
-    def send(self, message):
-        """Sends 'message' to coro.
-
-        If coro is currently waiting with 'receive', it is resumed
-        with 'message'. Otherwise, 'message' is queued so that next
-        receive call will return message.
-        """
-        if self._location == self._asyncoro._location:
-            if self._asyncoro:
-                return self._asyncoro._resume(self, message, AsynCoro._AwaitMsg_)
-            else:
-                logger.warning('send: coroutine %s/%s removed?', self.name, self._id)
-                return -1
-        else:
-            auth = self._asyncoro._peers.get((self._location.addr, self._location.port), None)
-            if auth:
-                request = _NetRequest('send', kwargs={'coro_id':self._id, 'message':message},
-                                      src=self._asyncoro._location, dst=self._location,
-                                      auth=auth, timeout=1)
-                # for consistency with Coro.send (which doesn't need "yield"),
-                # request is queued for asynchronous processing
-                self._asyncoro._requests_queue.append(request)
-                self._asyncoro._requests_queue_not_empty.set()
-            else:
-                logger.warning('remote coro at %s is not valid, unsubscribing it', self._location)
-                for channel in self._asyncoro._rchannels.itervalues():
-                    channel.unsubscribe(self)
-
-    def deliver(self, message, timeout=None):
-        """Deliver message to coroutine to the 'real' coroutine to
-        which this instance refers to.
-        """
-        if self._location == self._asyncoro._location:
-            if self._asyncoro:
-                reply = self._asyncoro._resume(self, message, AsynCoro._AwaitMsg_)
-            else:
-                logger.warning('send: coroutine %s/%s removed?', self.name, self._id)
-                reply = -1
-        else:
-            auth = self._asyncoro._peers.get((self._location.addr, self._location.port), None)
-            if auth:
-                request = _NetRequest('deliver', kwargs={'coro_id':self._id, 'message':message},
-                                      dst=self._location, auth=auth, timeout=timeout)
-                reply = yield self._asyncoro._sync_reply(request)
-            else:
-                logger.warning('remote coro at %s is not valid, unsubscribing it', self._location)
-                for channel in self._asyncoro._rchannels.itervalues():
-                    channel.unsubscribe(self)
-                reply = 0
-        raise StopIteration(reply)
-
-    def receive(self, timeout=None, alarm_value=None):
-        """Should be used with 'yield'. Gets/waits for message.
-
-        Gets earliest queued message if available (that has been sent
-        earlier with 'send'). Otherwise, suspends until 'timeout'. If
-        timeout happens, coro receives alarm_value.
-        """
-        if self._asyncoro:
-            return self._asyncoro._suspend(self, timeout, alarm_value, AsynCoro._AwaitMsg_)
-        else:
-            logger.warning('receive: coroutine %s/%s removed?', self.name, self._id)
-            return -1
-
-    def throw(self, *args):
-        """Throw exception in coroutine. This method must be called from
-        coro only.
-        """
-        if len(args) == 0:
-            logger.warning('throw: invalid argument(s)')
-            return -1
-        if len(args) == 1:
-            if isinstance(args[0], tuple) and len(args[0]) > 1:
-                args = args[0]
-            else:
-                args = (type(args[0]), args[0])
-        if self._asyncoro:
-            return self._asyncoro._throw(self, *args)
-        else:
-            logger.warning('throw: coroutine %s/%s removed?', self.name, self._id)
-            return -1
-
-    def value(self):
-        """Get last value 'yield'ed by coro.
-
-        NB: This method should _not_ be called from a coroutine! This
-        method is meant for main thread in the user program to wait for
-        (main) coroutine(s) it creates.
-
-        Once coroutine stops (finishes) executing, the last value
-        yielded by it is returned.
-        """
-        self._complete.wait()
-        return self._value
-
-    def terminate(self):
-        """Terminate coro.
-
-        If this method called by a thread (and not a coro), there is a
-        chance that coro being terminated is currently running and can
-        interfere with GenratorExit exception that will be thrown to
-        coro.
-        """
-        if self._asyncoro:
-            return self._asyncoro._terminate_coro(self)
-        else:
-            logger.warning('terminate: coroutine %s/%s removed?', self.name, self._id)
-            return -1
-
-    def hot_swappable(self, flag):
-        if self._asyncoro and self._asyncoro.cur_coro() == self:
-            if flag:
-                self._hot_swappable = True
-            else:
-                self._hot_swappable = False
-            return 0
-        else:
-            logger.warning('hot_swappable must be called from running coro')
-            return -1
-
-    def hot_swap(self, target, *args, **kwargs):
-        """Replaces coro's generator function with given target(*args, **kwargs).
-
-        The new generator starts executing from the beginning. If
-        there are any pending messages, they will not be reset, so new
-        generator can process them (or clear them with successive
-        'receive' calls with timeout=0 until it returns
-        'alarm_value').
-        """
-        try:
-            generator = self.__get_generator__(target, *args, **kwargs)
-        except:
-            logger.warning('%s is not a generator!' % target.__name__)
-            return -1
-        if self._asyncoro:
-            return self._asyncoro._swap_generator(self, generator)
-        else:
-            logger.warning('hot_swap: coroutine %s/%s removed?', self.name, self._id)
-            return -1
-
-    def monitor(self, coro):
-        """Must be called with 'yield'.
-
-        When 'coro' is finished (raises StopIteration or terminated
-        due to uncaught exception), that exception is thrown to this
-        coroutine (monitor).
-
-        Monitor can inspect the exception and restart coro if
-        necessary. 'coro' can be a remote coroutine.
-        """
-        if self._location == coro._location:
-            if self._asyncoro:
-                if coro._asyncoro:
-                    ret = self._asyncoro._monitor(self, coro)
-                    raise StopIteration(ret)
-                else:
-                    logger.warning('monitor: coroutine %s removed?', coro.name)
-                    raise StopIteration(-1)
-            else:
-                logger.warning('monitor: coroutine %s removed?', self.name)
-                raise StopIteration(-1)
-        else:
-            # remote coro
-            auth = self._asyncoro._peers.get((coro._location.addr, coro._location.port), None)
-            if auth:
-                request = _NetRequest('monitor', kwargs={'monitor':self, 'coro':coro},
-                                      dst=coro._location, auth=auth)
-                reply = yield self._asyncoro._sync_reply(request)
-            else:
-                reply = -1
-            raise StopIteration(reply)
-        
-    def restart(self, target, *args, **kwargs):
-        """If this coroutine is monitored by another coroutine, that
-        monitor can restart the coroutine with the (new) generator.
-
-        Pending messages are not reset, so new generator can process
-        them.
-        """
-        if self._generator:
-            try:
-                self._generator.close()
-            except:
-                logger.warning('closing %s raised exception: %s',
-                               self._generator.__name__, traceback.format_exc())
-        self._generator = self.__get_generator__(target, *args, **kwargs)
-        self.name = target.__name__
-        self._value = None
-        self._exceptions = []
-        self._timeout = None
-        self._daemon = False
-        self._hot_swappable = False
-        self._asyncoro = AsynCoro.instance()
-        self._asyncoro._add(self)
-
 class Lock(object):
     """'Lock' primitive for coroutines.
     """
@@ -2326,6 +1990,342 @@ class Semaphore(object):
             wake = self._waitlist.pop(0)
             wake._proceed_()
 
+class HotSwapException(Exception):
+    """This exception is used to indicate hot-swap request and
+    response.
+    """
+    pass
+
+class MonitorException(Exception):
+    """This execption is used to indicate that a coroutine being
+    monitored has finished or terminated.
+    """
+    pass
+
+class Coro(object):
+    """'Coroutine' factory to build coroutines to be scheduled with
+    AsynCoro. Automatically starts executing 'target'.  The generator
+    function definition should have 'coro' argument set to (default
+    value) None. When the function is called, that argument will be
+    this object.
+    """
+
+    __slots__ = ('_generator', 'name', '_id', '_state', '_value', '_exceptions', '_callers',
+                 '_timeout', '_daemon', '_complete', '_msgs', '_monitor', '_new_generator',
+                 '_hot_swappable', '_asyncoro', '_location')
+
+    def __init__(self, target, *args, **kwargs):
+        self._generator = self.__get_generator__(target, *args, **kwargs)
+        self.name = target.__name__
+        self._id = id(self)
+        self._state = None
+        self._value = None
+        self._exceptions = []
+        self._callers = []
+        self._timeout = None
+        self._daemon = False
+        self._complete = threading.Event()
+        self._msgs = []
+        self._monitor = None
+        self._new_generator = None
+        self._hot_swappable = False
+        self._asyncoro = AsynCoro.instance()
+        self._location = self._asyncoro._location
+        self._asyncoro._add(self)
+
+    def __get_generator__(self, target, *args, **kwargs):
+        if not inspect.isgeneratorfunction(target):
+            raise Exception('%s is not a generator!' % target.__name__)
+        if not args and kwargs:
+            args = kwargs.pop('args', ())
+            kwargs = kwargs.pop('kwargs', kwargs)
+        if kwargs.get('coro', None) is not None:
+            raise Exception('Coro function %s should not be called with ' \
+                            '"coro" parameter' % target.__name__)
+        callargs = inspect.getcallargs(target, *args, **kwargs)
+        if 'coro' not in callargs or callargs['coro'] is not None:
+            raise Exception('Coro function "%s" should have "coro" argument with ' \
+                            'default value None' % target.__name__)
+        kwargs['coro'] = self
+        return target(*args, **kwargs)
+
+    def register(self, name=None):
+        """Register this coroutine so coroutines running on a remote
+        (peer) asyncoro can locate it (with 'locate_coro') so they can
+        exchange messages, monitored etc.
+        """
+
+        if name is None:
+            name = self.name
+        return self._asyncoro._register_coro(self, name)
+
+    def __getstate__(self):
+        state = {'name':self.name, '_id':self._id, '_location':self._location}
+        return state
+    
+    def __setstate__(self, state):
+        self.name = state['name']
+        self._id = state['_id']
+        self._location = state['_location']
+        self._asyncoro = AsynCoro.instance()
+
+    def set_daemon(self):
+        """Set coroutine is daemon.
+
+        When exiting, AsynCoro scheduler waits for all non-daemon
+        coroutines to terminate.
+        """
+        if self._asyncoro and self._asyncoro.cur_coro() == self:
+            self._asyncoro._set_daemon(self)
+            return 0
+        else:
+            logger.warning('set_daemon must be called from running coro')
+            return -1
+
+    def suspend(self, timeout=None, alarm_value=None):
+        """This method should be used with 'yield'. Suspend/sleep coro
+        (until woken up, usually by AsyncNotifier in the case of
+        AsynCoroSockets).
+
+        If timeout is a (floating point) number, this coro is
+        suspended for that many seconds (or fractions of second). This
+        method should be used with 'yield' and from coro only.
+
+        If suspend times out (no other coroutine resumes it), AsynCoro
+        resumes it with the value 'alarm_value'.
+        """
+        if self._asyncoro:
+            return self._asyncoro._suspend(self, timeout, alarm_value, AsynCoro._Suspended)
+        else:
+            logger.warning('suspend: coroutine %s/%s removed?', self.name, self._id)
+            return -1
+
+    sleep = suspend
+
+    def _await_(self, timeout=None, alarm_value=None):
+        """Internal use only.
+        """
+        return self._asyncoro._suspend(self, timeout, alarm_value, AsynCoro._AwaitIO_)
+
+    def resume(self, update=None):
+        """Resume/wakeup this coro and send 'update' to it.
+
+        The resuming coro gets 'update' for the 'yield' that caused it
+        to suspend. If coro is currently not suspended/sleeping,
+        resume is ignored.
+        """
+        if self._asyncoro:
+            return self._asyncoro._resume(self, update, AsynCoro._Suspended)
+        else:
+            logger.warning('resume: coroutine %s/%s removed?', self.name, self._id)
+            return -1
+
+    wakeup = resume
+
+    def _proceed_(self, update=None):
+        """Internal use only.
+        """
+        if self._asyncoro:
+            return self._asyncoro._resume(self, update, AsynCoro._AwaitIO_)
+        else:
+            logger.warning('_proceed_: coroutine %s/%s removed?', self.name, self._id)
+            return -1
+
+    def send(self, message):
+        """Sends 'message' to coro.
+
+        If coro is currently waiting with 'receive', it is resumed
+        with 'message'. Otherwise, 'message' is queued so that next
+        receive call will return message.
+        """
+        if self._asyncoro is None:
+            logger.warning('send: coroutine %s/%s removed?', self.name, self._id)
+            return -1
+        if self._location == self._asyncoro._location:
+            return self._asyncoro._resume(self, message, AsynCoro._AwaitMsg_)
+        else:
+            auth = self._asyncoro._peers.get((self._location.addr, self._location.port), None)
+            if auth:
+                request = _NetRequest('send', kwargs={'coro_id':self._id, 'message':message},
+                                      src=self._asyncoro._location, dst=self._location,
+                                      auth=auth, timeout=1)
+                # request is queued for asynchronous processing
+                self._asyncoro._requests_queue.append(request)
+                self._asyncoro._requests_queue_not_empty.set()
+                return 0
+            else:
+                logger.warning('remote coro at %s is not valid, unsubscribing it',
+                               self._location)
+                for channel in self._asyncoro._rchannels.itervalues():
+                    channel.unsubscribe(self)
+                return -1
+
+    def deliver(self, message, timeout=None):
+        """Deliver message to coroutine to the 'real' coroutine to
+        which this instance refers to.
+        """
+        if self._asyncoro is None:
+            logger.warning('send: coroutine %s/%s removed?', self.name, self._id)
+            raise StopIteration(-1)
+        if self._location == self._asyncoro._location:
+            reply = self._asyncoro._resume(self, message, AsynCoro._AwaitMsg_)
+        else:
+            auth = self._asyncoro._peers.get((self._location.addr, self._location.port), None)
+            if auth:
+                request = _NetRequest('deliver', kwargs={'coro_id':self._id, 'message':message},
+                                      dst=self._location, auth=auth, timeout=timeout)
+                reply = yield self._asyncoro._sync_reply(request)
+            else:
+                logger.warning('remote coro at %s is not valid, unsubscribing it', self._location)
+                for channel in self._asyncoro._rchannels.itervalues():
+                    channel.unsubscribe(self)
+                reply = 0
+        raise StopIteration(reply)
+
+    def receive(self, timeout=None, alarm_value=None):
+        """Should be used with 'yield'. Gets/waits for message.
+
+        Gets earliest queued message if available (that has been sent
+        earlier with 'send'). Otherwise, suspends until 'timeout'. If
+        timeout happens, coro receives alarm_value.
+        """
+        if self._asyncoro:
+            return self._asyncoro._suspend(self, timeout, alarm_value, AsynCoro._AwaitMsg_)
+        else:
+            logger.warning('receive: coroutine %s/%s removed?', self.name, self._id)
+            return -1
+
+    def throw(self, *args):
+        """Throw exception in coroutine. This method must be called from
+        coro only.
+        """
+        if len(args) == 0:
+            logger.warning('throw: invalid argument(s)')
+            return -1
+        if len(args) == 1:
+            if isinstance(args[0], tuple) and len(args[0]) > 1:
+                args = args[0]
+            else:
+                args = (type(args[0]), args[0])
+        if self._asyncoro:
+            return self._asyncoro._throw(self, *args)
+        else:
+            logger.warning('throw: coroutine %s/%s removed?', self.name, self._id)
+            return -1
+
+    def value(self):
+        """Get last value 'yield'ed by coro.
+
+        NB: This method should _not_ be called from a coroutine! This
+        method is meant for main thread in the user program to wait for
+        (main) coroutine(s) it creates.
+
+        Once coroutine stops (finishes) executing, the last value
+        yielded by it is returned.
+        """
+        self._complete.wait()
+        return self._value
+
+    def terminate(self):
+        """Terminate coro.
+
+        If this method called by a thread (and not a coro), there is a
+        chance that coro being terminated is currently running and can
+        interfere with GenratorExit exception that will be thrown to
+        coro.
+        """
+        if self._asyncoro:
+            return self._asyncoro._terminate_coro(self)
+        else:
+            logger.warning('terminate: coroutine %s/%s removed?', self.name, self._id)
+            return -1
+
+    def hot_swappable(self, flag):
+        if self._asyncoro and self._asyncoro.cur_coro() == self:
+            if flag:
+                self._hot_swappable = True
+            else:
+                self._hot_swappable = False
+            return 0
+        else:
+            logger.warning('hot_swappable must be called from running coro')
+            return -1
+
+    def hot_swap(self, target, *args, **kwargs):
+        """Replaces coro's generator function with given target(*args, **kwargs).
+
+        The new generator starts executing from the beginning. If
+        there are any pending messages, they will not be reset, so new
+        generator can process them (or clear them with successive
+        'receive' calls with timeout=0 until it returns
+        'alarm_value').
+        """
+        try:
+            generator = self.__get_generator__(target, *args, **kwargs)
+        except:
+            logger.warning('%s is not a generator!' % target.__name__)
+            return -1
+        if self._asyncoro:
+            return self._asyncoro._swap_generator(self, generator)
+        else:
+            logger.warning('hot_swap: coroutine %s/%s removed?', self.name, self._id)
+            return -1
+
+    def monitor(self, coro):
+        """Must be called with 'yield'.
+
+        When 'coro' is finished (raises StopIteration or terminated
+        due to uncaught exception), that exception is thrown to this
+        coroutine (monitor).
+
+        Monitor can inspect the exception and restart coro if
+        necessary. 'coro' can be a remote coroutine.
+        """
+        if self._location == coro._location:
+            if self._asyncoro:
+                if coro._asyncoro:
+                    ret = self._asyncoro._monitor(self, coro)
+                    raise StopIteration(ret)
+                else:
+                    logger.warning('monitor: coroutine %s removed?', coro.name)
+                    raise StopIteration(-1)
+            else:
+                logger.warning('monitor: coroutine %s removed?', self.name)
+                raise StopIteration(-1)
+        else:
+            # remote coro
+            auth = self._asyncoro._peers.get((coro._location.addr, coro._location.port), None)
+            if auth:
+                request = _NetRequest('monitor', kwargs={'monitor':self, 'coro':coro},
+                                      dst=coro._location, auth=auth)
+                reply = yield self._asyncoro._sync_reply(request)
+            else:
+                reply = -1
+            raise StopIteration(reply)
+        
+    def restart(self, target, *args, **kwargs):
+        """If this coroutine is monitored by another coroutine, that
+        monitor can restart the coroutine with the (new) generator.
+
+        Pending messages are not reset, so new generator can process
+        them.
+        """
+        if self._generator:
+            try:
+                self._generator.close()
+            except:
+                logger.warning('closing %s raised exception: %s',
+                               self._generator.__name__, traceback.format_exc())
+        self._generator = self.__get_generator__(target, *args, **kwargs)
+        self.name = target.__name__
+        self._value = None
+        self._exceptions = []
+        self._timeout = None
+        self._daemon = False
+        self._hot_swappable = False
+        self._asyncoro = AsynCoro.instance()
+        self._asyncoro._add(self)
+
 def serialize(obj):
     return pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
 
@@ -2369,7 +2369,7 @@ class _NetRequest(object):
         self.src = src
         self.dst = dst
         self.auth = auth
-        self.id = self._id
+        self.id = id(self)
         self.event = Event()
         self.async_result = None
         self.timeout = timeout
@@ -2626,11 +2626,12 @@ class AsyncChannel(object):
                 if c['pending'] == 0:
                     event.set()
             for subscriber in subscribers:
-                if isinstance(subscriber, Coro):
-                    subscriber.send(msg)
+                if isinstance(subscriber, Coro) and self._location == subscriber._location:
+                    if subscriber.send(msg) == 0:
+                        count['reply'] += 1
                     count['pending'] -= 1
-                    count['reply'] += 1
-                elif isinstance(subscriber, AsyncChannel) or isinstance(subscriber, SyncChannel):
+                elif isinstance(subscriber, SyncChannel):
+                    assert self._location == subscriber._location
                     reply = yield subscriber.deliver(msg, timeout)
                     if reply:
                         count['reply'] += reply
@@ -2851,14 +2852,18 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 if not udp_port:
                     udp_port = 51350
                 self._udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                self._udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                if hasattr(socket, 'SO_REUSEPORT'):
+                    self._udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                else:
+                    self._udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 try:
                     self._udp_sock.bind(('', udp_port))
                 except:
                     raise Exception('could not start UDP server at port %s' % udp_port)
 
                 self._tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                self._tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                if tcp_port:
+                    self._tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 self._tcp_sock.bind((node, tcp_port))
                 self._location = Location(*self._tcp_sock.getsockname())
                 if not self._location.port:
@@ -3472,13 +3477,13 @@ class AsynCoro(object, metaclass=MetaSingleton):
             raise StopIteration
             
         if req.src == self._location:
-            r = self._requests.pop(req.id, None)
-            if r is None:
-                logger.debug('ignoring request "%s"/%s', req.request, req.id)
+            reply = req
+            req = self._requests.pop(reply.id, None)
+            if req is None:
+                logger.debug('ignoring request "%s"/%s', reply.request, reply.id)
                 raise StopIteration
-            r.kwargs = req.kwargs
-            req = r
-            del r
+            req.async_result = reply.async_result
+            del reply
 
         if req.request == 'send':
             resp = 'ACK'
@@ -3530,7 +3535,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                     else:
                         logger.warning('ignoring invalid recipient to "send"')
                 if req.src:
-                    req.kwargs['delivered'] = resp
+                    req.async_result = resp
                     req.auth = self._peers.get((req.src.addr, req.src.port), None)
                     if req.auth:
                         sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
@@ -3541,11 +3546,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 else:
                     yield conn.send_msg(serialize(resp))
             elif req.src == self._location:
-                if 'delivered' in req.kwargs:
-                    req.async_result = req.kwargs['delivered']
-                    req.event.set()
-                else:
-                    logger.warning('invalid deliver reply: %s, %s', req.request, str(req.kwargs))
+                req.event.set()
             else:
                 logger.warning('ignoring invalid "send" to %s / %s', req.dst, self._location)
         elif req.request == 'run_rci':
@@ -3566,15 +3567,14 @@ class AsynCoro(object, metaclass=MetaSingleton):
         elif req.request == 'locate_channel':
             if req.src == self._location:
                 # cache the result. TODO: prune if too many?
-                self._rchannels[req.kwargs['name']] = req.kwargs['channel']
-                req.async_result = req.kwargs['channel']
+                self._rchannels[req.kwargs['name']] = req.async_result
                 req.event.set()
             else:
                 channel = self._rchannels.get(req.kwargs['name'], None)
                 if channel is not None or req.dst == self._location:
                     # send reply
                     if req.src:
-                        req.kwargs['channel'] = channel
+                        req.async_result = channel
                         req.auth = self._peers.get((req.src.addr, req.src.port), None)
                         if req.auth:
                             sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
@@ -3586,16 +3586,13 @@ class AsynCoro(object, metaclass=MetaSingleton):
                         yield conn.send_msg(serialize(channel))
         elif req.request == 'locate_coro':
             if req.src == self._location:
-                coro = req.kwargs.get('coro', None)
-                if coro is not None:
-                    # TODO: cache for future use?
-                    req.async_result = coro
-                    req.event.set()
+                # TODO: cache for future use?
+                req.event.set()
             else:
                 coro = self._rcoros.get(req.kwargs['name'], None)
                 if coro is not None or req.dst == self._location:
                     if req.src:
-                        req.kwargs['coro'] = coro
+                        req.async_result = coro
                         req.auth = self._peers.get((req.src.addr, req.src.port), None)
                         if req.auth:
                             sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
@@ -3607,11 +3604,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
                         yield conn.send_msg(serialize(coro))
         elif req.request == 'locate_rci':
             if req.src == self._location:
-                loc = req.kwargs.get('location', None)
-                if loc is not None:
-                    # TODO: cache for future use?
-                    req.async_result = loc
-                    req.event.set()
+                # TODO: cache for future use?
+                req.event.set()
             else:
                 rci = self._rcis.get(req.kwargs['name'], None)
                 if rci is not None or req.dst == self._location:
@@ -3620,7 +3614,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                     else:
                         loc = self._location
                     if req.src:
-                        req.kwargs['location'] = loc
+                        req.async_result = loc
                         req.auth = self._peers.get((req.src.addr, req.src.port), None)
                         if req.auth:
                             sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
@@ -3722,14 +3716,11 @@ class AsynCoro(object, metaclass=MetaSingleton):
             yield conn.send_msg(serialize(reply))
         elif req.request == 'locate_peer':
             if req.src == self._location:
-                peer = req.kwargs.get('peer', None)
-                if peer is not None:
-                    req.async_result = peer
-                    req.event.set()
+                req.event.set()
             elif req.kwargs['name'] == self.name:
                 peer = self._location
                 if req.src:
-                    req.kwargs['peer'] = peer
+                    req.async_result = peer
                     req.auth = self._peers.get((req.src.addr, req.src.port), None)
                     if req.auth:
                         sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
