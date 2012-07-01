@@ -959,7 +959,6 @@ if platform.system() == 'Windows':
                 self._lock.release()
                 if timeout and timeout != _AsyncNotifier._Block:
                     timeout = int(timeout * 1000)
-
                 err, n, key, overlap = win32file.GetQueuedCompletionStatus(self.iocp, timeout)
                 while err != winerror.WAIT_TIMEOUT:
                     if overlap and overlap.object:
@@ -1753,6 +1752,10 @@ class Lock(object):
                 raise StopIteration(True)
             if timeout is not None:
                 if timeout <= 0:
+                    try:
+                        self._waitlist.remove(coro)
+                    except ValueError:
+                        pass
                     raise StopIteration(False)
                 start = _time()
             self._waitlist.append(coro)
@@ -1800,6 +1803,10 @@ class RLock(object):
             else:
                 if timeout is not None:
                     if timeout <= 0:
+                        try:
+                            self._waitlist.remove(coro)
+                        except ValueError:
+                            pass
                         raise StopIteration(False)
                     start = _time()
                 self._waitlist.append(coro)
@@ -1853,6 +1860,10 @@ class Condition(object):
             else:
                 if timeout is not None:
                     if timeout <= 0:
+                        try:
+                            self._waitlist.remove(coro)
+                        except ValueError:
+                            pass
                         raise StopIteration(False)
                     start = _time()
                 self._waitlist.append(coro)
@@ -1903,11 +1914,14 @@ class Condition(object):
         while True:
             if timeout is not None:
                 if timeout <= 0:
+                    try:
+                        self._notifylist.remove(coro)
+                    except ValueError:
+                        pass
                     raise StopIteration(False)
                 start = _time()
             self._notifylist.append(coro)
-            yield coro._await_(timeout)
-            if self._owner is None:
+            if (yield coro._await_(timeout)) is True and self._owner is None:
                 assert self._depth == 0
                 self._owner = coro
                 self._depth = depth
@@ -1946,16 +1960,21 @@ class Event(object):
     def wait(self, timeout=None):
         """Must be used with 'yield' as 'yield event.wait()' .
         """
+        if self._flag:
+            raise StopIteration(True)
         coro = self._asyncoro.cur_coro()
         while True:
-            if self._flag:
-                raise StopIteration(True)
             if timeout is not None:
                 if timeout <= 0:
+                    try:
+                        self._waitlist.remove(coro)
+                    except ValueError:
+                        pass
                     raise StopIteration(False)
                 start = _time()
             self._waitlist.append(coro)
-            yield coro._await_(timeout)
+            if (yield coro._await_(timeout)) is True:
+                raise StopIteration(True)
             if timeout is not None:
                 timeout -= (_time() - start)
 
@@ -2084,9 +2103,9 @@ class Coro(object):
             return -1
 
     def suspend(self, timeout=None, alarm_value=None):
-        """This method should be used with 'yield'. Suspend/sleep coro
-        (until woken up, usually by AsyncNotifier in the case of
-        AsynCoroSockets).
+        """Must be used with 'yield' as 'yield coro.suspend()'.
+        Suspend/sleep coro (until woken up, usually by AsyncNotifier
+        in the case of AsynCoroSockets).
 
         If timeout is a (floating point) number, this coro is
         suspended for that many seconds (or fractions of second). This
@@ -2109,7 +2128,8 @@ class Coro(object):
         return self._asyncoro._suspend(self, timeout, alarm_value, AsynCoro._AwaitIO_)
 
     def resume(self, update=None):
-        """Resume/wakeup this coro and send 'update' to it.
+        """May be used with 'yield'. Resume/wakeup this coro and send
+        'update' to it.
 
         The resuming coro gets 'update' for the 'yield' that caused it
         to suspend. If coro is currently not suspended/sleeping,
@@ -2133,7 +2153,7 @@ class Coro(object):
             return -1
 
     def send(self, message):
-        """Sends 'message' to coro.
+        """May be used with 'yield'. Sends 'message' to coro.
 
         If coro is currently waiting with 'receive', it is resumed
         with 'message'. Otherwise, 'message' is queued so that next
@@ -2164,8 +2184,11 @@ class Coro(object):
                 return -1
 
     def deliver(self, message, timeout=None, alarm_value=None):
-        """Deliver message to coroutine to the 'real' coroutine to
-        which this instance refers to.
+        """Must be used with 'yield' as 'yield coro.deliver(msg)'.
+
+        Deliver message to coroutine to the 'real' coroutine to which
+        this instance refers to and return number of coroutines that
+        received the message.
         """
         if self._asyncoro is None:
             logger.warning('send: coroutine %s/%s removed?', self.name, self._id)
@@ -2188,7 +2211,8 @@ class Coro(object):
         raise StopIteration(reply)
 
     def receive(self, timeout=None, alarm_value=None):
-        """Should be used with 'yield'. Gets/waits for message.
+        """Must be used with 'yield' as 'msg = yield coro.receive()'.
+        Gets/waits for message.
 
         Gets earliest queued message if available (that has been sent
         earlier with 'send'). Otherwise, suspends until 'timeout'. If
@@ -2279,33 +2303,33 @@ class Coro(object):
             logger.warning('hot_swap: coroutine %s/%s removed?', self.name, self._id)
             return -1
 
-    def monitor(self, coro):
-        """Must be called with 'yield'.
+    def monitor(self, observe):
+        """Must be used with 'yield' as 'yield coro.monitor(observe)',
+        where 'observe' is a coroutine which will be monitored by
+        'coro'.  When 'observe' is finished (raises StopIteration or
+        terminated due to uncaught exception), that exception is
+        thrown to 'coro' (monitor coroutine).
 
-        When 'coro' is finished (raises StopIteration or terminated
-        due to uncaught exception), that exception is thrown to this
-        coroutine (monitor).
-
-        Monitor can inspect the exception and restart coro if
-        necessary. 'coro' can be a remote coroutine.
+        Monitor can inspect the exception and restart observed
+        coroutine if necessary. 'observe' can be a remote coroutine.
         """
-        if self._location == coro._location:
+        if self._location == observe._location:
             if self._asyncoro:
-                if coro._asyncoro:
-                    ret = self._asyncoro._monitor(self, coro)
+                if observe._asyncoro:
+                    ret = self._asyncoro._monitor(self, observe)
                     raise StopIteration(ret)
                 else:
-                    logger.warning('monitor: coroutine %s removed?', coro.name)
+                    logger.warning('monitor: coroutine %s removed?', observe.name)
                     raise StopIteration(-1)
             else:
                 logger.warning('monitor: coroutine %s removed?', self.name)
                 raise StopIteration(-1)
         else:
             # remote coro
-            auth = self._asyncoro._peers.get((coro._location.addr, coro._location.port), None)
+            auth = self._asyncoro._peers.get((observe._location.addr, observe._location.port), None)
             if auth:
-                request = _NetRequest('monitor', kwargs={'monitor':self, 'coro':coro},
-                                      dst=coro._location, auth=auth)
+                request = _NetRequest('monitor', kwargs={'monitor':self, 'coro':observe},
+                                      dst=observe._location, auth=auth)
                 reply = yield self._asyncoro._sync_reply(request)
             else:
                 reply = -1
@@ -2421,7 +2445,7 @@ class AsyncChannel(object):
     AsyncChannels can be hierarchical, and subscribers can be remote!
     """
 
-    def __init__(self, name, transform=None, min_subscribers=0):
+    def __init__(self, name, transform=None):
         """'name' must be unique across all channels.
 
         'transform' is a function that can either filter or
@@ -2429,12 +2453,6 @@ class AsyncChannel(object):
         message is filtered (ignored). The function is called with
         first parameter set to channel name and second parameter set
         to the message.
-
-        'min_subscribers' is minimum number of subscribers for the
-        channel. This should be used in conjunction with 'deliver'
-        method. 'deliver' waits until at least min_subscribers
-        subscribed. Actual number of recipients can be more or less
-        than min_subscribers.
         """
 
         self.name = name
@@ -2447,10 +2465,7 @@ class AsyncChannel(object):
                 transform = None
         self._transform = transform
         self._subscribers = set()
-        self._min_subscribers = min_subscribers
         self._event = Event()
-        if not min_subscribers:
-            self._event.set()
         self._asyncoro = AsynCoro.instance()
         self._location = self._asyncoro._location
         self._asyncoro._lock.acquire()
@@ -2491,16 +2506,17 @@ class AsyncChannel(object):
         self._transform = transform
 
     def subscribe(self, subscriber, timeout=None):
-        """Subscribe to receive messages. Senders don't need to
+        """Must be used with 'yield', as, for example,
+        'yield channel.subscribe(coro)'.
+
+        Subscribe to receive messages. Senders don't need to
         subscribe. A message sent to this channel is delivered to all
         subscribers.
-
-        Must be called with 'yield'.
         """
         if self._location == self._asyncoro._location:
             self._subscribers.add(subscriber)
-            if len(self._subscribers) == self._min_subscribers:
-                self._event.set()
+            yield self._event.set()
+            self._event.clear()
             reply = 0
         else:
             # remote channel
@@ -2522,9 +2538,10 @@ class AsyncChannel(object):
         raise StopIteration(reply)
 
     def unsubscribe(self, subscriber, timeout=None):
-        """Future messages will not be delivered after unsubscribing.
+        """Must be called with 'yield' as, for example,
+        'yield channel.unsubscribe(coro)'.
 
-        Must be called with 'yield'.
+        Future messages will not be delivered after unsubscribing.
         """
         if self._location == self._asyncoro._location:
             if subscriber._location == self._location:
@@ -2545,8 +2562,6 @@ class AsyncChannel(object):
                         subscriber = s
                         break
                 self._subscribers.discard(subscriber)
-            if len(self._subscribers) < self._min_subscribers:
-                self._event.clear()
             reply = 0
         else:
             # remote channel
@@ -2560,7 +2575,7 @@ class AsyncChannel(object):
             auth = self._asyncoro._peers.get((self._location.addr, self._location.port), None)
             if auth:
                 request = _NetRequest('unsubscribe', kwargs=kwargs, src=self._asyncoro._location,
-                                      dst=self._location, auth=auth, timeout=1)
+                                      dst=self._location, auth=auth, timeout=timeout)
                 reply = yield self._asyncoro._sync_reply(request)
             else:
                 logger.warning('remote channel at %s is not valid', self._location)
@@ -2598,29 +2613,30 @@ class AsyncChannel(object):
                         yield rchannel.unsubscribe(channel)
                 Coro(_unsub, self, list(self._asyncoro._rchannels.values()))
 
-    def deliver(self, message, timeout=None, alarm_value=None):
-        """Must be used with 'yield'. Does not work with
-        hierarchical channels.
+    def deliver(self, message, n=1, timeout=None, alarm_value=None):
+        """Must be used with 'yield' as 'rcvd = yield channel.deliver(msg)'.
 
-        Blocking 'send': Wait until at least 'min_subscribers' are
+        Blocking 'send': Wait until at least 'n' subscribers are
         waiting for message. Returns number of end-point recipients
         (coroutines) the message is delivered to; i.e., in case of
-        heirarchical channels, it is sum of recipients of all the
+        heirarchical channels, it is the sum of recipients of all the
         channels.
         """
         if self._transform:
             message = self._transform(self.name, message)
             if message is None:
                 raise StopIteration(0)
+        if not isinstance(n, int) or n <= 0:
+            raise StopIteration(0)
         if self._location == self._asyncoro._location:
-            start = _time()
-            if len(self._subscribers) < self._min_subscribers:
+            while len(self._subscribers) < n:
+                start = _time()
                 if (yield self._event.wait(timeout)) is False:
                     raise StopIteration(alarm_value)
-            if timeout is not None:
-                timeout -= _time() - start
-                if timeout <= 0:
-                    raise StopIteration(alarm_value)
+                if timeout is not None:
+                    timeout -= _time() - start
+                    if timeout <= 0:
+                        raise StopIteration(alarm_value)
             msg = _ChannelMessage(self.name, message)
             # during delivery, other subscribers may join, so make copy
             subscribers = self._subscribers.copy()
@@ -2687,7 +2703,7 @@ class SyncChannel(object):
     SyncChannel can not be sent over network.
     """
 
-    def __init__(self, name, transform=None, min_receivers=0):
+    def __init__(self, name, transform=None):
         """'name' must be unique across all channels.
 
         'transform' is a function that can either filter or
@@ -2695,10 +2711,6 @@ class SyncChannel(object):
         message is filtered (ignored). The function is called with
         first parameter set to channel name and second parameter set
         to the message.
-
-        'min_receivers' is minimum number of receivers that a message
-        should be delivered to. This should be used in conjunction
-        with 'deliver' method.
         """
         self.name = name
         if transform is not None:
@@ -2710,10 +2722,7 @@ class SyncChannel(object):
                 transform = None
         self._transform = transform
         self._recipients = []
-        self._min_receivers = min_receivers
         self._event = Event()
-        if not min_receivers:
-            self._event.set()
         self._asyncoro = AsynCoro.instance()
         self._asyncoro._lock.acquire()
         self._location = self._asyncoro._location
@@ -2735,32 +2744,37 @@ class SyncChannel(object):
         for c in self._recipients:
             c._proceed_(msg)
         self._recipients = []
-        self._event.clear()
 
-    def deliver(self, message, timeout=None, alarm_value=None):
-        """Must be used with 'yield'.
+    def deliver(self, message, n=1, timeout=None, alarm_value=None):
+        """Must be used with 'yield' as 'rcvd = yield channel.deliver(msg)'.
 
-        Blocking 'send': Wait until at least 'min_receivers' are
-        waiting for message. Returns number of receipients message
-        delivered to.
+        Blocking 'send': Wait until at least 'n' receivers are waiting
+        for message. Returns number of receipients message delivered
+        to.
         """
         if self._transform is not None:
             message = self._transform(self.name, message)
             if message is None:
                 raise StopIteration(0)
-        if len(self._recipients) < self._min_receivers:
-            if not (yield self._event.wait()):
+        if not isinstance(n, int) or n <= 0:
+            raise StopIteration(0)
+        while len(self._recipients) < n:
+            start = _time()
+            if (yield self._event.wait()) is False:
                 raise StopIteration(alarm_value)
+            if timeout is not None:
+                timeout -= _time() - start
+                if timeout <= 0:
+                    raise StopIteration(alarm_value)
         msg = _ChannelMessage(self.name, message)
         for c in self._recipients:
             c._proceed_(msg)
         n = len(self._recipients)
         self._recipients = []
-        self._event.clear()
         raise StopIteration(n)
 
     def receive(self, coro, timeout=None, alarm_value=None):
-        """Must be used with 'yield'.
+        """Must be used with 'yield' as 'msg = yield channel.receive(coro)'.
 
         A message sent over the channel is sent to currently waiting
         coroutines (with 'yield coro.receive(channel)'.
@@ -3427,9 +3441,10 @@ class AsynCoro(object, metaclass=MetaSingleton):
             return -1
 
     def locate_RCI(self, name, location=None, timeout=None):
-        """Find and return location where RCI is registered.
+        """Must be used with 'yield' as
+        'loc = yield scheduler.locate_RCI("coro_name")'.
 
-        Must be used with 'yield'.
+        Find and return location where RCI is registered.
         """
         if location:
             auth = self._peers.get((location.addr, location.port), None)
@@ -3459,12 +3474,14 @@ class AsynCoro(object, metaclass=MetaSingleton):
         raise StopIteration(loc)
 
     def run_RCI(self, location, name, *args, **kwargs):
-        """Run method with 'name' at 'location' with args and
+        """Must be used with 'yeild' as
+        'rcoro = yield scheduler.run_RCI(loc, generator)', where 'loc' is
+        obtained with 'locate_RCI'.
+
+        Run method with 'name' at 'location' with args and
         kwargs. Returns (remote) Coro instance for the coro. The
         generator method with 'name' must have been registered with
         'register_RCI' at 'location'.
-
-        Must be used with 'yeild'.
         """
         if not isinstance(name, str):
             raise Exception('name must be a string')
@@ -3482,11 +3499,12 @@ class AsynCoro(object, metaclass=MetaSingleton):
             raise Exception(reply)
 
     def locate_channel(self, name, location=None, timeout=None):
-        """A coroutine running on a peer asyncoro can locate
+        """Must be used with 'yield' as
+        'loc = yield scheduler.locate_channel("channel")'.
+
+        A coroutine running on a peer asyncoro can locate
         registered channels so messages can be exhcnaged over the
         channel. Returns (remote) Channel instance.
-
-        Must be used with 'yield'.
         """
         rchannel = self._rchannels.get(name, None)
         if rchannel:
@@ -3518,11 +3536,12 @@ class AsynCoro(object, metaclass=MetaSingleton):
         raise StopIteration(rchannel)
 
     def locate_coro(self, name, location=None, timeout=None):
-        """A coroutine running on a peer asyncoro can locate
+        """Must be used with 'yield' as
+        'rcoro = yield scheduler.locate_coro("coro_name")'.
+
+        A coroutine running on a peer asyncoro can locate
         registered coroutines so they can exchange messages, monitored
         etc.
-
-        Must be used with 'yield'.
         """
         rcoro = self._rcoros.get(name, None)
         if rcoro:
@@ -3554,9 +3573,10 @@ class AsynCoro(object, metaclass=MetaSingleton):
         raise StopIteration(rcoro)
 
     def locate_peer(self, name, timeout=None):
-        """Find and return location of peer with 'name'.
+        """Must be used with 'yield' as
+        'loc = yield scheduler.locate_peer("peer")'.
 
-        Must be used with 'yield'.
+        Find and return location of peer with 'name'.
         """
         req = _NetRequest(request='locate_peer', kwargs={'name':name},
                           src=self._location, timeout=None)
@@ -3576,12 +3596,13 @@ class AsynCoro(object, metaclass=MetaSingleton):
         raise StopIteration(loc)
 
     def peer(self, node, udp_port=0):
-        """Add asyncoro running at node, udp_port as peer to
+        """Must be used with 'yield', as
+        'status = yield scheduler.peer("node1")'.
+
+        Add asyncoro running at node, udp_port as peer to
         communicate. Peers on a local network can find each other
         automatically, but if they are on different networks, 'peer'
         can be used so they find each other.
-
-        Must be used with 'yield'.
         """
         try:
             node = socket.gethostbyname(node)
@@ -4042,7 +4063,8 @@ class AsynCoroThreadPool(object):
                 self._task_queue.task_done()
 
     def async_task(self, coro, target, *args, **kwargs):
-        """Must be used with 'yield'.
+        """Must be used with 'yield', as
+        'yield pool.async_task(coro, generator)'.
 
         @coro is coroutine where this method is called. 
 
@@ -4100,7 +4122,7 @@ class AsynCoroDBCursor(object):
             self._sem.release()
 
     def execute(self, query, args=None):
-        """Must be used with 'yield'.
+        """Must be used with 'yield' as 'n = yield cursor.execute(stmt)'.
         """
         yield self._sem.acquire()
         coro = self._asyncoro.cur_coro()
@@ -4108,7 +4130,7 @@ class AsynCoroDBCursor(object):
                                      functools.partial(self._cursor.execute, query, args))
 
     def executemany(self, query, args):
-        """Must be used with 'yield'.
+        """Must be used with 'yield' as 'n = yield cursor.executemany(stmt)'.
         """
         yield self._sem.acquire()
         coro = self._asyncoro.cur_coro()
@@ -4116,7 +4138,7 @@ class AsynCoroDBCursor(object):
                                      functools.partial(self._cursor.executemany, query, args))
 
     def callproc(self, proc, args=()):
-        """Must be used with 'yield'.
+        """Must be used with 'yield' as 'yield cursor.callproc(proc)'.
         """
         yield self._sem.acquire()
         coro = self._asyncoro.cur_coro()
