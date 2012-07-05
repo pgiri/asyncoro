@@ -1753,7 +1753,7 @@ class Lock(object):
         self._owner = None
         if self._waitlist:
             wake = self._waitlist.pop(0)
-            wake._proceed_()
+            wake._proceed_(True)
 
 class RLock(object):
     """'RLock' primitive for coroutines.
@@ -1795,7 +1795,7 @@ class RLock(object):
             self._owner = None
             if self._waitlist:
                 wake = self._waitlist.pop(0)
-                wake._proceed_()
+                wake._proceed_(True)
 
 class Condition(object):
     """'Condition' primitive for coroutines.
@@ -1833,6 +1833,7 @@ class Condition(object):
         """
         coro = self._asyncoro.cur_coro()
         if self._owner != coro:
+            logger.warning('lock owner: %s / %s', self._owner, coro)
             raise RuntimeError('"%s"/%s: invalid lock release - owned by "%s"/%s' % \
                                (coro.name, coro._id, self._owner.name, self._owner._id))
         self._depth -= 1
@@ -1840,14 +1841,14 @@ class Condition(object):
             self._owner = None
             if self._waitlist:
                 wake = self._waitlist.pop(0)
-                wake._proceed_()
+                wake._proceed_(True)
 
     def notify(self, n=1):
         """May not be used with 'yield'.
         """
         while self._notifylist and n:
             wake = self._notifylist.pop(0)
-            wake._proceed_()
+            wake._proceed_(True)
             n -= 1
 
     def notify_all(self):
@@ -1867,18 +1868,16 @@ class Condition(object):
         self._depth = 0
         if self._waitlist:
             wake = self._waitlist.pop(0)
-            wake._proceed_()
+            wake._proceed_(True)
         while True:
             if timeout is not None:
                 if timeout <= 0:
-                    try:
-                        self._notifylist.remove(coro)
-                    except ValueError:
-                        pass
                     raise StopIteration
                 start = _time()
             self._notifylist.append(coro)
-            if (yield coro._await_(timeout)) is True and self._owner is None:
+            if (yield coro._await_(timeout)) is None:
+                self._notifylist.remove(coro)
+            elif self._owner is None:
                 assert self._depth == 0
                 self._owner = coro
                 self._depth = depth
@@ -1923,14 +1922,13 @@ class Event(object):
         while True:
             if timeout is not None:
                 if timeout <= 0:
-                    try:
-                        self._waitlist.remove(coro)
-                    except ValueError:
-                        pass
                     raise StopIteration(False)
                 start = _time()
             self._waitlist.append(coro)
-            if (yield coro._await_(timeout)) is True:
+            if (yield coro._await_(timeout)) is None:
+                self._waitlist.remove(coro)
+            else:
+                assert self._flag is True
                 raise StopIteration(True)
             if timeout is not None:
                 timeout -= (_time() - start)
@@ -1964,7 +1962,7 @@ class Semaphore(object):
         assert self._counter > 0
         if self._waitlist:
             wake = self._waitlist.pop(0)
-            wake._proceed_()
+            wake._proceed_(True)
 
 class HotSwapException(Exception):
     """This exception is used to indicate hot-swap request and
