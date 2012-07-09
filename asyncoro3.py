@@ -3671,7 +3671,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 yield self._requests_queue_not_empty.wait()
             net_request = self._requests_queue.popleft()
             reply = yield self._sync_reply(net_request)
-            if reply != 'ACK':
+            if reply != 0:
                 logger.warning('error sending "%s" to %s', net_request.request, net_request.dst)
 
     def _tcp_task(self, conn, addr, coro=None):
@@ -3696,34 +3696,31 @@ class AsynCoro(object, metaclass=MetaSingleton):
             del reply
 
         if req.request == 'send':
-            resp = 'ACK'
+            reply = -1
             if req.dst == self._location:
                 cid = req.kwargs.get('coro_id', None)
                 if cid is not None:
                     coro = self._coros.get(cid, None)
                     if coro is None:
                         logger.warning('ignoring message to invalid coro %s', cid)
-                        resp = 'NAK'
                     else:
-                        coro.send(req.kwargs['message'])
+                        reply = coro.send(req.kwargs['message'])
                 else:
                     name = req.kwargs.get('channel_name', None)
                     if name is not None:
                         channel = self._channels.get(name, None)
                         if channel is None:
                             logger.warning('ignoring message to channel "%s"', name)
-                            resp = 'NAK'
                         else:
                             channel.send(req.kwargs['message'])
+                            reply = 0
                     else:
                         logger.warning('ignoring invalid recipient to "send"')
-                        resp = 'NAK'
             else:
                 logger.warning('ignoring invalid "send" to %s / %s', req.dst, self._location)
-                resp = 'NAK'
-            yield conn.send_msg(serialize(resp))
+            yield conn.send_msg(serialize(reply))
         elif req.request == 'deliver':
-            resp = 0
+            reply = 0
             if req.dst == self._location:
                 cid = req.kwargs.get('coro_id', None)
                 if cid is not None:
@@ -3732,7 +3729,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                         logger.warning('ignoring message to invalid coro %s', cid)
                     else:
                         coro.send(req.kwargs['message'])
-                        resp = 1
+                        reply = 1
                 else:
                     name = req.kwargs.get('channel_name', None)
                     if name is not None:
@@ -3740,12 +3737,12 @@ class AsynCoro(object, metaclass=MetaSingleton):
                         if channel is None:
                             logger.warning('ignoring message to channel "%s"', name)
                         else:
-                            resp = yield channel.deliver(req.kwargs['message'],
-                                                         timeout=req.timeout, alarm_value=0)
+                            reply = yield channel.deliver(req.kwargs['message'],
+                                                          timeout=req.timeout, alarm_value=0)
                     else:
                         logger.warning('ignoring invalid recipient to "send"')
                 if req.src:
-                    req.async_result = resp
+                    req.async_result = reply
                     req.auth = self._peers.get((req.src.addr, req.src.port), None)
                     if req.auth:
                         sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
@@ -3754,7 +3751,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                         yield sock.send_msg(serialize(req))
                         sock.close()
                 else:
-                    yield conn.send_msg(serialize(resp))
+                    yield conn.send_msg(serialize(reply))
             elif req.src == self._location:
                 req.event.set()
             else:
@@ -3853,7 +3850,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 logger.warning('ignoring subscribe to channel "%s"', req.kwargs.get('name', None))
             yield conn.send_msg(serialize(reply))
         elif req.request == 'monitor':
-            reply = 'NAK'
+            reply = -1
             if req.dst == self._location:
                 rcoro = req.kwargs.get('coro', None)
                 monitor = req.kwargs.get('monitor', None)
@@ -3861,11 +3858,10 @@ class AsynCoro(object, metaclass=MetaSingleton):
                     coro = self._coros.get(rcoro._id, None)
                     if isinstance(coro, Coro):
                         assert monitor._location != self._location
-                        if self._monitor(monitor, coro) == 0:
-                            reply = 'ACK'
+                        reply = self._monitor(monitor, coro)
             yield conn.send_msg(serialize(reply))
         elif req.request == 'exception':
-            reply = 'NAK'
+            reply = -1
             if req.dst == self._location:
                 rcoro = req.kwargs.get('coro', None)
                 if isinstance(rcoro, Coro):
@@ -3873,8 +3869,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                     if isinstance(coro, Coro):
                         exc = req.kwargs.get('exception', None)
                         if isinstance(exc, tuple):
-                            if self._throw(coro, *exc) == 0:
-                                reply = 'ACK'
+                            reply = self._throw(coro, *exc)
             yield conn.send_msg(serialize(reply))
         elif req.request == 'ping':
             # TODO: async reply?
