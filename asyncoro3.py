@@ -1,5 +1,5 @@
-# asyncoro: Framework for asynchronous, concurrent, distributed
-# programming with coroutines.
+# asyncoro: Framework for concurrent, distributed, network programming
+# with asynchronous completions and coroutines.
 
 # Copyright (C) 2012 Giridhar Pemmasani (pgiri@yahoo.com)
 
@@ -1896,27 +1896,33 @@ class Condition(object):
         if self._owner != coro:
             raise RuntimeError('"%s"/%s: invalid lock release - owned by "%s"/%s' % \
                                (coro.name, coro._id, self._owner.name, self._owner._id))
-        self._owner = None
         depth = self._depth
         self._depth = 0
+        self._owner = None
         if self._waitlist:
             wake = self._waitlist.pop(0)
             wake._proceed_(True)
-        while True:
+        self._notifylist.append(coro)
+        start = _time()
+        if (yield coro._await_(timeout)) is None:
+            self._notifylist.remove(coro)
+            raise StopIteration(False)
+        while self._owner is not None:
+            self._waitlist.insert(0, coro)
             if timeout is not None:
+                timeout -= (_time() - start)
                 if timeout <= 0:
                     raise StopIteration(False)
                 start = _time()
-            self._notifylist.append(coro)
             if (yield coro._await_(timeout)) is None:
-                self._notifylist.remove(coro)
-            elif self._owner is None:
-                assert self._depth == 0
-                self._owner = coro
-                self._depth = depth
-                raise StopIteration(True)
-            if timeout is not None:
-                timeout -= (_time() - start)
+                self._waitlist.remove(coro)
+                raise StopIteration(False)
+
+        assert self._owner is None
+        assert self._depth == 0
+        self._owner = coro
+        self._depth = depth
+        raise StopIteration(True)
 
 class Event(object):
     """'Event' primitive for coroutines.
@@ -2158,15 +2164,15 @@ class Coro(object):
                                       src=self._asyncoro._location, dst=self._location,
                                       auth=auth, timeout=1)
                 # request is queued for asynchronous processing
-                self._asyncoro._requests_queue.append(request)
-                self._asyncoro._requests_queue_not_empty.set()
+                self._asyncoro._netreq_q.append(request)
+                self._asyncoro._netreq_q_work.set()
                 return 0
             else:
                 logger.warning('remote coro at %s is not valid, unsubscribing it',
                                self._location)
-                def _unsub(channel, rchannels, coro=None):
+                def _unsub(self, rchannels, coro=None):
                     for rchannel in rchannels:
-                        yield rchannel.unsubscribe(channel)
+                        yield rchannel.unsubscribe(self)
                 Coro(_unsub, self, list(self._asyncoro._rchannels.values()))
                 return -1
 
@@ -2190,9 +2196,9 @@ class Coro(object):
                 reply = yield self._asyncoro._sync_reply(request, alarm_value=alarm_value)
             else:
                 logger.warning('remote coro at %s is not valid, unsubscribing it', self._location)
-                def _unsub(channel, rchannels, coro=None):
+                def _unsub(self, rchannels, coro=None):
                     for rchannel in rchannels:
-                        yield rchannel.unsubscribe(channel)
+                        yield rchannel.unsubscribe(self)
                 Coro(_unsub, self, list(self._asyncoro._rchannels.values()))
                 reply = 0
         raise StopIteration(reply)
@@ -2575,7 +2581,7 @@ class AsyncChannel(object):
         if self._transform:
             message = self._transform(self.name, message)
             if message is None:
-                return
+                return 0
         if self._location == self._asyncoro._location:
             msg = _ChannelMessage(self.name, message)
             # remote subscriber may call unsubscribe during send, so make copy
@@ -2590,8 +2596,8 @@ class AsyncChannel(object):
                                       src=self._asyncoro._location, dst=self._location,
                                       auth=auth, timeout=1)
                 # request is queued for asynchronous processing
-                self._asyncoro._requests_queue.append(request)
-                self._asyncoro._requests_queue_not_empty.set()
+                self._asyncoro._netreq_q.append(request)
+                self._asyncoro._netreq_q_work.set()
             else:
                 logger.warning('remote channel at %s is not valid, unsubscribing it',
                                self._location)
@@ -2599,6 +2605,7 @@ class AsyncChannel(object):
                     for rchannel in rchannels:
                         yield rchannel.unsubscribe(channel)
                 Coro(_unsub, self, list(self._asyncoro._rchannels.values()))
+        return 0
 
     def deliver(self, message, n=1, timeout=None, alarm_value=None):
         """Must be used with 'yield' as 'rcvd = yield channel.deliver(msg)'.
@@ -2726,11 +2733,12 @@ class SyncChannel(object):
         if self._transform is not None:
             message = self._transform(self.name, message)
             if message is None:
-                return
+                return 0
         msg = _ChannelMessage(self.name, message)
         for c in self._recipients:
             c._proceed_(msg)
         self._recipients = []
+        return 0
 
     def deliver(self, message, n=1, timeout=None, alarm_value=None):
         """Must be used with 'yield' as 'rcvd = yield channel.deliver(msg)'.
@@ -2853,7 +2861,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
             self._scheduler.daemon = True
             self._scheduler.start()
             self._location = None
-            self._requests_queue = collections.deque()
+            self._netreq_q = collections.deque()
             self.name = name
             if udp_port is not None or node is not None:
                 if node:
@@ -2865,7 +2873,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 self._rchannels = {}
                 self._rcis = {}
                 self._requests = {}
-                self._requests_queue_not_empty = Event()
+                self._netreq_q_work = Event()
                 if not udp_port:
                     udp_port = 51350
                 self._udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -3309,10 +3317,10 @@ class AsynCoro(object, metaclass=MetaSingleton):
                                                                             'coro':monitor},
                                                               src=self._location, auth=auth,
                                                               dst=monitor._location, timeout=1)
-                                        self._requests_queue.append(request)
+                                        self._netreq_q.append(request)
                                         # Event.set may call _proceed_
                                         # which needs (recursive) lock
-                                        self._requests_queue_not_empty.set()
+                                        self._netreq_q_work.set()
                             else:
                                 coro._msgs = []
                         else:
@@ -3381,9 +3389,9 @@ class AsynCoro(object, metaclass=MetaSingleton):
                              len(self._coros) - self._daemons)
                 self._complete.wait()
             if self._location:
-                for x in range(len(self._requests_queue)):
+                for x in range(len(self._netreq_q)):
                     time.sleep(0.1)
-                    if not len(self._requests_queue):
+                    if not len(self._netreq_q):
                         break
                 def _terminate(self, req, coro=None):
                     sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
@@ -3405,15 +3413,16 @@ class AsynCoro(object, metaclass=MetaSingleton):
             self._notifier.terminate()
             logger.debug('AsynCoro terminated')
 
-    def join(self):
+    def join(self, show_running=False):
         """Wait for currently scheduled coroutines to finish. AsynCoro
         continues to execute, so new coroutines can be added if
         necessary.
         """
-        self._lock.acquire()
-        for coro in self._coros.values():
-            logger.debug('waiting for %s', coro.name)
-        self._lock.release()
+        if show_running:
+            self._lock.acquire()
+            for coro in self._coros.values():
+                logger.info('waiting for %s/%s', coro.name, coro._id)
+            self._lock.release()
         self._complete.wait()
 
     def register_RCI(self, method):
@@ -3666,13 +3675,14 @@ class AsynCoro(object, metaclass=MetaSingleton):
         """
         coro.set_daemon()
         while 1:
-            if not self._requests_queue:
-                self._requests_queue_not_empty.clear()
-                yield self._requests_queue_not_empty.wait()
-            net_request = self._requests_queue.popleft()
+            if not self._netreq_q:
+                self._netreq_q_work.clear()
+                yield self._netreq_q_work.wait()
+            net_request = self._netreq_q.popleft()
             reply = yield self._sync_reply(net_request)
             if reply != 0:
-                logger.warning('error sending "%s" to %s', net_request.request, net_request.dst)
+                logger.warning('sending "%s" to %s failed with %s',
+                               net_request.request, net_request.dst, reply)
 
     def _tcp_task(self, conn, addr, coro=None):
         """Internal use only.
@@ -3712,8 +3722,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                         if channel is None:
                             logger.warning('ignoring message to channel "%s"', name)
                         else:
-                            channel.send(req.kwargs['message'])
-                            reply = 0
+                            reply = channel.send(req.kwargs['message'])
                     else:
                         logger.warning('ignoring invalid recipient to "send"')
             else:
