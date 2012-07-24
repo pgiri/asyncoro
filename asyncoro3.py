@@ -1746,10 +1746,7 @@ class Lock(object):
         coro = self._asyncoro.cur_coro()
         if timeout < 0:
             timeout = None
-        while True:
-            if self._owner is None:
-                self._owner = coro
-                raise StopIteration(True)
+        while self._owner is not None:
             if timeout is not None:
                 if timeout <= 0:
                     raise StopIteration(False)
@@ -1759,6 +1756,8 @@ class Lock(object):
                 self._waitlist.remove(coro)
             if timeout is not None:
                 timeout -= (_time() - start)
+        self._owner = coro
+        raise StopIteration(True)
 
     def release(self):
         """May be used with 'yield'.
@@ -1784,29 +1783,28 @@ class RLock(object):
         """Must be used with 'yield' as 'yield rlock.acquire()'.
         """
         coro = self._asyncoro.cur_coro()
+        if self._owner == coro:
+            assert self._depth > 0
+            self._depth += 1
+            raise StopIteration(True)
         if not blocking and not (self._owner is None or self._owner == coro):
             raise StopIteration(False)
         if timeout < 0:
             timeout = None
-        while True:
-            if self._owner is None:
-                assert self._depth == 0
-                self._owner = coro
-                self._depth = 1
-                raise StopIteration(True)
-            elif self._owner == coro:
-                self._depth += 1
-                raise StopIteration(True)
-            else:
-                if timeout is not None:
-                    if timeout <= 0:
-                        raise StopIteration(False)
-                    start = _time()
-                self._waitlist.append(coro)
-                if (yield coro._await_(timeout)) is None:
-                    self._waitlist.remove(coro)
-                if timeout is not None:
-                    timeout -= (_time() - start)
+        while self._owner is not None:
+            if timeout is not None:
+                if timeout <= 0:
+                    raise StopIteration(False)
+                start = _time()
+            self._waitlist.append(coro)
+            if (yield coro._await_(timeout)) is None:
+                self._waitlist.remove(coro)
+            if timeout is not None:
+                timeout -= (_time() - start)
+        assert self._depth == 0
+        self._owner = coro
+        self._depth = 1
+        raise StopIteration(True)
 
     def release(self):
         """May be used with 'yield'.
@@ -1838,29 +1836,27 @@ class Condition(object):
         """Must be used with 'yield' as 'yield cv.acquire()'.
         """
         coro = self._asyncoro.cur_coro()
+        if self._owner == coro:
+            self._depth += 1
+            raise StopIteration(True)
         if not blocking and not (self._owner is None or self._owner == coro):
             raise StopIteration(False)
         if timeout < 0:
             timeout = None
-        while True:
-            if self._owner is None:
-                assert self._depth == 0
-                self._owner = coro
-                self._depth = 1
-                raise StopIteration(True)
-            elif self._owner == coro:
-                self._depth += 1
-                raise StopIteration(True)
-            else:
-                if timeout is not None:
-                    if timeout <= 0:
-                        raise StopIteration(False)
-                    start = _time()
-                self._waitlist.append(coro)
-                if (yield coro._await_(timeout)) is None:
-                    self._waitlist.remove(coro)
-                if timeout is not None:
-                    timeout -= (_time() - start)
+        while self._owner is not None:
+            if timeout is not None:
+                if timeout <= 0:
+                    raise StopIteration(False)
+                start = _time()
+            self._waitlist.append(coro)
+            if (yield coro._await_(timeout)) is None:
+                self._waitlist.remove(coro)
+            if timeout is not None:
+                timeout -= (_time() - start)
+        assert self._depth == 0
+        self._owner = coro
+        self._depth = 1
+        raise StopIteration(True)
 
     def release(self):
         """May be used with 'yield'.
@@ -1917,8 +1913,6 @@ class Condition(object):
             if (yield coro._await_(timeout)) is None:
                 self._waitlist.remove(coro)
                 raise StopIteration(False)
-
-        assert self._owner is None
         assert self._depth == 0
         self._owner = coro
         self._depth = depth
@@ -1958,18 +1952,15 @@ class Event(object):
         if self._flag:
             raise StopIteration(True)
         coro = self._asyncoro.cur_coro()
-        while True:
-            if timeout is not None:
-                if timeout <= 0:
-                    raise StopIteration(False)
-                start = _time()
-            self._waitlist.append(coro)
-            if (yield coro._await_(timeout)) is None:
-                self._waitlist.remove(coro)
-            else:
-                raise StopIteration(True)
-            if timeout is not None:
-                timeout -= (_time() - start)
+        if timeout is not None:
+            if timeout <= 0:
+                raise StopIteration(False)
+        self._waitlist.append(coro)
+        if (yield coro._await_(timeout)) is None:
+            self._waitlist.remove(coro)
+            raise StopIteration(False)
+        else:
+            raise StopIteration(True)
 
 class Semaphore(object):
     """'Semaphore' primitive for coroutines.
