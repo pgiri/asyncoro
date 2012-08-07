@@ -672,6 +672,13 @@ class _AsynCoroSocket(object):
             return ''
         return data
 
+    def create_connection(self, (host, port), timeout=None, source_address=None):
+        if timeout is not None:
+            self.settimeout(timeout)
+        if source_address is not None:
+            self._rsock.bind(source_address)
+        yield self.connect((host, port))
+
 if platform.system() == 'Windows':
     # use IOCP if pywin32 (http://pywin32.sf.net) is installed
     try:
@@ -1976,10 +1983,10 @@ class MonitorException(Exception):
 
 class Coro(object):
     """'Coroutine' factory to build coroutines to be scheduled with
-    AsynCoro. Automatically starts executing 'target'.  The generator
-    function definition should have 'coro' argument set to (default
-    value) None. When the function is called, that argument will be
-    this object.
+    AsynCoro. Automatically starts executing 'target' generator
+    function.  The function definition should have 'coro' keyword
+    argument set to (default value) None. When the function is called,
+    that argument will be set to Coro instance (object).
     """
 
     __slots__ = ('_generator', 'name', '_id', '_state', '_value', '_exceptions', '_callers',
