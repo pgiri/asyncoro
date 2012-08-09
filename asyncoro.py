@@ -2789,6 +2789,16 @@ class AsynCoro(object):
 
     'ext_ip_addr' is the IP address of NAT firewall/gateway if
     asyncoro is behind that firewall/gateway.
+
+    'dest_path_prefix' is path to directory (folder) where transferred
+    files are saved. If path doesn't exist, asyncoro creates
+    directory with that path. Senders may specify 'dest_path' with
+    'send_file', in which case target file will be saved under
+    dest_path_prefix + dest_path.
+
+    'max_file_size' is maximum length of file in bytes allowed for
+    transferred files. If it is 0 or None (default), there is no
+    limit.
     """
 
     __metaclass__ = MetaSingleton
@@ -3598,14 +3608,22 @@ class AsynCoro(object):
         ping_sock.close()
         raise StopIteration(0)
 
-    def xfer_file(self, location, file, dest_path=None, timeout=None):
+    def send_file(self, location, file, dest_path=None, timeout=None):
         """Must be used with 'yield' as
-        'loc = yield scheduler.xfer_file(location, "file1")'.
+        'loc = yield scheduler.send_file(location, "file1")'.
 
-        Transfer 'file' to peer at 'location'. 'dest_path' must be
-        a relative path (not absolute path).
+        Transfer 'file' to peer at 'location'. If 'dest_path' is not
+        None, it must be a relative path (not absolute path), in which
+        case, file will be saved at peer's dest_path_prefix +
+        dest_path. Returns -1 in case of error, 0 if the file is
+        transferred and 1 if the file is already at the destination
+        (so file is not transferred). If return value is 0, the sender
+        may want to delete file with 'del_file' later.
         """
-        stat_buf = os.stat(file)
+        try:
+            stat_buf = os.stat(file)
+        except:
+            raise StopIteration(-1)
         if not ((stat.S_IMODE(stat_buf.st_mode) & stat.S_IREAD) and stat.S_ISREG(stat_buf.st_mode)):
             raise StopIteration(-1)
         kwargs = {'file':os.path.basename(file), 'stat_buf':stat_buf}
@@ -3619,7 +3637,7 @@ class AsynCoro(object):
         if auth is None:
             logger.debug('%s is not a valid peer', location)
             raise StopIteration(-1)
-        req = _NetRequest(request='xfer_file', kwargs=kwargs, auth=auth, dst=location,
+        req = _NetRequest(request='send_file', kwargs=kwargs, auth=auth, dst=location,
                           timeout=timeout)
         sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                               keyfile=self._keyfile, certfile=self._certfile)
@@ -3661,7 +3679,7 @@ class AsynCoro(object):
         'loc = yield scheduler.del_file(location, "file1")'.
 
         Delete 'file' from peer at 'location'. 'dest_path' must be
-        same as that used for 'xfer_file'.
+        same as that used for 'send_file'.
         """
         kwargs = {'file':os.path.basename(file)}
         if isinstance(dest_path, str) and dest_path:
@@ -3685,7 +3703,6 @@ class AsynCoro(object):
         """Internal use only.
         """
         coro.set_daemon()
-        # TODO: broadcast our info
         while 1:
             conn, addr = yield self._tcp_sock.accept()
             Coro(self._tcp_task, conn, addr)
@@ -4003,7 +4020,7 @@ class AsynCoro(object):
                         sock.close()
                 else:
                     yield conn.send_msg(serialize(peer))
-        elif req.request == 'xfer_file':
+        elif req.request == 'send_file':
             if req.dst == self._location:
                 tgt = os.path.basename(req.kwargs['file'])
                 dest_path = req.kwargs.get('dest_path', None)
@@ -4046,7 +4063,7 @@ class AsynCoro(object):
                                 logger.warning('File "%s" is too big (%s); it is truncated', tgt, n)
                                 break
                     except:
-                        logger.warning('copying xfer_file "%s" failed', tgt)
+                        logger.warning('copying file "%s" failed', tgt)
                     fd.close()
                     if n < stat_buf.st_size:
                         os.remove(tgt)
@@ -4058,7 +4075,7 @@ class AsynCoro(object):
                         os.chmod(tgt, stat.S_IMODE(stat_buf.st_mode))
                     yield conn.send_msg(serialize(resp))
             else:
-                logger.debug('ignoring invalid xfer_file request to %s (%s)',
+                logger.debug('ignoring invalid send_file request to %s (%s)',
                              req.dst, self._location)
         elif req.request == 'del_file':
             if req.dst == self._location:
