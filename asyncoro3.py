@@ -1,22 +1,22 @@
-# asyncoro: Framework for concurrent, distributed, network programming
-# with asynchronous completions and coroutines.
+"""
+asyncoro: Framework for concurrent, distributed, network programming
+with asynchronous completions and coroutines.
+See http://asyncoro.sourceforge.net for details.
+"""
 
-# Copyright (C) 2012 Giridhar Pemmasani (pgiri@yahoo.com)
+__author__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
+__email__ = "pgiri@yahoo.com"
+__copyright__ = "Copyright 2012, Giridhar Pemmasani"
+__contributors__ = []
+__maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
+__license__ = "MIT"
+__url__ = "http://asyncoro.sourceforge.net"
+__status__ = "Production"
+__version__ = "1.2"
 
-# asyncoro is free software: you can redistribute it and/or modify
-# it under the terms of the GNU Lesser General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-
-# asyncoro is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser General Public License for more details.
-
-# You should have received a copy of the GNU Lesser General Public License
-# along with asyncoro.  If not, see <http://www.gnu.org/licenses/>.
-
-# See http://asyncoro.sourceforge.net for details.
+__all__ = ['AsynCoroSocket', 'Coro', 'AsynCoro', 'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
+           'HotSwapException', 'MonitorException', 'Location', 'AsyncChannel', 'SyncChannel',
+           'AsynCoroThreadPool', 'AsynCoroDBCursor', 'MetaSingleton']
 
 import time
 import threading
@@ -61,10 +61,6 @@ else:
     from errno import EWOULDBLOCK
     from errno import EINVAL
     from time import time as _time
-
-__all__ = ['AsynCoroSocket', 'Coro', 'AsynCoro', 'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
-           'HotSwapException', 'MonitorException', 'Location', 'AsyncChannel', 'SyncChannel',
-           'AsynCoroThreadPool', 'AsynCoroDBCursor', 'MetaSingleton']
 
 class MetaSingleton(type):
     __instance = None
@@ -3431,6 +3427,9 @@ class AsynCoro(object, metaclass=MetaSingleton):
             self._notifier.interrupt()
             self._complete.wait()
             self._notifier.terminate()
+            if hasattr(self, 'dest_path_prefix') and os.path.isdir(self.dest_path_prefix) and \
+               len(os.listdir(self.dest_path_prefix)) == 0:
+                os.rmdir(self.dest_path_prefix)
             logger.debug('AsynCoro terminated')
 
     def join(self, show_running=False):
@@ -3478,9 +3477,9 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 for (addr, port), auth in self._peers.items():
                     if req.event.is_set():
                         break
-                    dst = Location(addr, port)
+                    req.dst = Location(addr, port)
                     req.auth = auth
-                    yield self._async_reply(req, dst=dst)
+                    yield self._async_reply(req)
             else:
                 self._requests[req.id] = req
             if (yield req.event.wait(timeout)) is False:
@@ -3495,9 +3494,10 @@ class AsynCoro(object, metaclass=MetaSingleton):
         obtained with 'locate_RCI'.
 
         Run method with 'name' at 'location' with args and
-        kwargs. Returns (remote) Coro instance for the coro. The
-        generator method with 'name' must have been registered with
-        'register_RCI' at 'location'.
+        kwargs. Both args and kwargs must be serializable. Returns
+        (remote) Coro instance for the coro. The generator method with
+        'name' must have been registered with 'register_RCI' at
+        'location'.
         """
         if not isinstance(name, str):
             raise Exception('name must be a string')
@@ -3541,9 +3541,9 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 for (addr, port), auth in self._peers.items():
                     if req.event.is_set():
                         break
-                    dst = Location(addr, port)
+                    req.dst = Location(addr, port)
                     req.auth = auth
-                    yield self._async_reply(req, dst=dst)
+                    yield self._async_reply(req)
             else:
                 self._requests[req.id] = req
             if (yield req.event.wait(timeout)) is False:
@@ -3578,9 +3578,9 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 for (addr, port), auth in self._peers.items():
                     if req.event.is_set():
                         break
-                    dst = Location(addr, port)
+                    req.dst = Location(addr, port)
                     req.auth = auth
-                    yield self._async_reply(req, dst=dst)
+                    yield self._async_reply(req)
             else:
                 self._requests[req.id] = req
             if (yield req.event.wait(timeout)) is False:
@@ -3601,9 +3601,9 @@ class AsynCoro(object, metaclass=MetaSingleton):
             for (addr, port), auth in self._peers.items():
                 if req.event.is_set():
                     break
-                dst = Location(addr, port)
+                req.dst = Location(addr, port)
                 req.auth = auth
-                yield self._async_reply(req, dst=dst)
+                yield self._async_reply(req)
         else:
             self._requests[req.id] = req
         if (yield req.event.wait(timeout)) is False:
@@ -3662,7 +3662,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
             # reject absolute path for dest_path
             if os.path.join(os.sep, dest_path) == dest_path:
                 raise StopIteration(-1)
-            kwargs['dest_path'] = dest_path
+        kwargs['dest_path'] = dest_path
         auth = self._peers.get((location.addr, location.port), None)
         if auth is None:
             logger.debug('%s is not a valid peer', location)
@@ -3679,7 +3679,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
             if reply == 0:
                 fd = open(file, 'rb')
                 while True:
-                    data = fd.read(10240000)
+                    data = fd.read(1024000)
                     if not data:
                         break
                     yield sock.sendall(data)
@@ -3757,16 +3757,16 @@ class AsynCoro(object, metaclass=MetaSingleton):
             if msg.startswith(b'PING:'):
                 try:
                     info = unserialize(msg[len(b'PING:'):])
-                    if not (info['location'] == self._location):
-                        sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
-                                              keyfile=self._keyfile, certfile=self._certfile)
-                        sock.settimeout(1)
+                    if info['location'] != self._location:
                         auth_code = hashlib.sha1(bytes(info['signature'] + self._secret,
                                                        'ascii')).hexdigest()
                         peer = info['location']
                         req = _NetRequest('ping', kwargs={'peer':self._location,
                                                           'signature':self._signature},
                                           dst=peer, auth=auth_code)
+                        sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                              keyfile=self._keyfile, certfile=self._certfile)
+                        sock.settimeout(1)
                         yield sock.connect((peer.addr, peer.port))
                         yield sock.send_msg(serialize(req))
                         info = yield sock.recv_msg()
@@ -3802,7 +3802,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
             req = unserialize(msg)
             assert req.auth == self._auth_code
         except:
-            logger.warning('invalid request ignored')
+            logger.warning('invalid request %s from %s ignored', req.request, req.src)
             conn.close()
             raise StopIteration
             
@@ -3814,33 +3814,37 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 raise StopIteration
             req.async_result = reply.async_result
             del reply
+        elif req.dst != self._location:
+            logger.debug('invalid request "%s" to %s (%s)', req.request, req.dst, self._location)
+            raise StopIteration
 
         if req.request == 'send':
             reply = -1
-            if req.dst == self._location:
-                cid = req.kwargs.get('coro_id', None)
-                if cid is not None:
-                    coro = self._coros.get(cid, None)
-                    if coro is None:
-                        logger.warning('ignoring message to invalid coro %s', cid)
-                    else:
-                        reply = coro.send(req.kwargs['message'])
+            assert req.dst == self._location
+            cid = req.kwargs.get('coro_id', None)
+            if cid is not None:
+                coro = self._coros.get(cid, None)
+                if coro is None:
+                    logger.warning('ignoring message to invalid coro %s', cid)
                 else:
-                    name = req.kwargs.get('channel_name', None)
-                    if name is not None:
-                        channel = self._channels.get(name, None)
-                        if channel is None:
-                            logger.warning('ignoring message to channel "%s"', name)
-                        else:
-                            reply = channel.send(req.kwargs['message'])
-                    else:
-                        logger.warning('ignoring invalid recipient to "send"')
+                    reply = coro.send(req.kwargs['message'])
             else:
-                logger.warning('ignoring invalid "send" to %s / %s', req.dst, self._location)
+                name = req.kwargs.get('channel_name', None)
+                if name is not None:
+                    channel = self._channels.get(name, None)
+                    if channel is None:
+                        logger.warning('ignoring message to channel "%s"', name)
+                    else:
+                        reply = channel.send(req.kwargs['message'])
+                else:
+                    logger.warning('ignoring invalid recipient to "send"')
             yield conn.send_msg(serialize(reply))
         elif req.request == 'deliver':
             reply = 0
-            if req.dst == self._location:
+            if req.src == self._location:
+                req.event.set()
+            else:
+                assert req.dst == self._location
                 cid = req.kwargs.get('coro_id', None)
                 if cid is not None:
                     coro = self._coros.get(cid, None)
@@ -3871,31 +3875,28 @@ class AsynCoro(object, metaclass=MetaSingleton):
                         sock.close()
                 else:
                     yield conn.send_msg(serialize(reply))
-            elif req.src == self._location:
-                req.event.set()
-            else:
-                logger.warning('ignoring invalid "send" to %s / %s', req.dst, self._location)
         elif req.request == 'run_rci':
-            if req.dst == self._location:
-                method = self._rcis.get(req.kwargs['name'], None)
-                if method is None:
-                    reply = Exception('RCI "%s" is not registered' % req.kwargs['name'])
+            assert req.dst == self._location
+            method = self._rcis.get(req.kwargs['name'], None)
+            if method is None:
+                reply = Exception('RCI "%s" is not registered' % req.kwargs['name'])
+            else:
+                args = req.kwargs['args']
+                kwargs = req.kwargs['kwargs']
+                try:
+                    coro = Coro(method, *args, **kwargs)
+                except:
+                    reply = Exception(traceback.format_exc())
                 else:
-                    args = req.kwargs['args']
-                    kwargs = req.kwargs['kwargs']
-                    try:
-                        coro = Coro(method, *args, **kwargs)
-                    except:
-                        reply = Exception(traceback.format_exc())
-                    else:
-                        reply = coro
-                yield conn.send_msg(serialize(reply))
+                    reply = coro
+            yield conn.send_msg(serialize(reply))
         elif req.request == 'locate_channel':
             if req.src == self._location:
                 # cache the result. TODO: prune if too many?
                 self._rchannels[req.kwargs['name']] = req.async_result
                 req.event.set()
             else:
+                # assert req.dst == self._location
                 channel = self._rchannels.get(req.kwargs['name'], None)
                 if channel is not None or req.dst == self._location:
                     # send reply
@@ -3915,6 +3916,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 # TODO: cache for future use?
                 req.event.set()
             else:
+                assert req.dst == self._location
                 coro = self._rcoros.get(req.kwargs['name'], None)
                 if coro is not None or req.dst == self._location:
                     if req.src:
@@ -3933,6 +3935,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 # TODO: cache for future use?
                 req.event.set()
             else:
+                assert req.dst == self._location
                 rci = self._rcis.get(req.kwargs['name'], None)
                 if rci is not None or req.dst == self._location:
                     if rci is None:
@@ -3952,43 +3955,41 @@ class AsynCoro(object, metaclass=MetaSingleton):
                         yield conn.send_msg(serialize(loc))
         elif req.request == 'subscribe':
             reply = -1
-            if req.dst == self._location:
-                channel = self._rchannels.get(req.kwargs['name'], None)
-                if channel is not None and channel._location == self._location:
-                    subscriber = None
-                    coro = req.kwargs.get('coro', None)
-                    if coro is not None:
-                        subscriber = coro
-                    else:
-                        rchannel = req.kwargs.get('channel', None)
-                        if rchannel is not None:
-                            subscriber = rchannel
-                    if subscriber is not None:
-                        reply = yield channel.subscribe(subscriber)
-            else:
-                logger.warning('ignoring subscribe to channel "%s"', req.kwargs.get('name', None))
+            assert req.dst == self._location
+            channel = self._rchannels.get(req.kwargs['name'], None)
+            if channel is not None and channel._location == self._location:
+                subscriber = None
+                coro = req.kwargs.get('coro', None)
+                if coro is not None:
+                    subscriber = coro
+                else:
+                    rchannel = req.kwargs.get('channel', None)
+                    if rchannel is not None:
+                        subscriber = rchannel
+                if subscriber is not None:
+                    reply = yield channel.subscribe(subscriber)
             yield conn.send_msg(serialize(reply))
         elif req.request == 'monitor':
             reply = -1
-            if req.dst == self._location:
-                rcoro = req.kwargs.get('coro', None)
-                monitor = req.kwargs.get('monitor', None)
-                if isinstance(rcoro, Coro) and isinstance(monitor, Coro):
-                    coro = self._coros.get(rcoro._id, None)
-                    if isinstance(coro, Coro):
-                        assert monitor._location != self._location
-                        reply = self._monitor(monitor, coro)
+            assert req.dst == self._location
+            rcoro = req.kwargs.get('coro', None)
+            monitor = req.kwargs.get('monitor', None)
+            if isinstance(rcoro, Coro) and isinstance(monitor, Coro):
+                coro = self._coros.get(rcoro._id, None)
+                if isinstance(coro, Coro):
+                    assert monitor._location != self._location
+                    reply = self._monitor(monitor, coro)
             yield conn.send_msg(serialize(reply))
         elif req.request == 'exception':
             reply = -1
-            if req.dst == self._location:
-                rcoro = req.kwargs.get('coro', None)
-                if isinstance(rcoro, Coro):
-                    coro = self._coros.get(rcoro._id, None)
-                    if isinstance(coro, Coro):
-                        exc = req.kwargs.get('exception', None)
-                        if isinstance(exc, tuple):
-                            reply = self._throw(coro, *exc)
+            assert req.dst == self._location
+            rcoro = req.kwargs.get('coro', None)
+            if isinstance(rcoro, Coro):
+                coro = self._coros.get(rcoro._id, None)
+                if isinstance(coro, Coro):
+                    exc = req.kwargs.get('exception', None)
+                    if isinstance(exc, tuple):
+                        reply = self._throw(coro, *exc)
             yield conn.send_msg(serialize(reply))
         elif req.request == 'ping':
             # TODO: async reply?
@@ -4007,6 +4008,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 # send pending (async) requests
                 pending_reqs = self._requests.values()
                 for pending_req in pending_reqs:
+                    pending_req.dst = peer
                     pending_req.auth = auth_code
                     sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                                           keyfile=self._keyfile, certfile=self._certfile)
@@ -4021,20 +4023,18 @@ class AsynCoro(object, metaclass=MetaSingleton):
                     sock.close()
         elif req.request == 'unsubscribe':
             reply = -1
-            if req.dst == self._location:
-                channel = self._rchannels.get(req.kwargs['name'], None)
-                if channel is not None and channel._location == self._location:
-                    rcoro = req.kwargs.get('coro', None)
-                    if rcoro is not None:
-                        subscriber = rcoro
-                    else:
-                        rchannel = req.kwargs.get('channel', None)
-                        if rchannel is not None:
-                            subscriber = rchannel
-                    if subscriber is not None:
-                        reply = yield channel.unsubscribe(subscriber)
-            else:
-                logger.warning('ignoring subscribe to channel "%s"', req.kwargs.get('name', None))
+            assert req.dst == self._location
+            channel = self._rchannels.get(req.kwargs['name'], None)
+            if channel is not None and channel._location == self._location:
+                rcoro = req.kwargs.get('coro', None)
+                if rcoro is not None:
+                    subscriber = rcoro
+                else:
+                    rchannel = req.kwargs.get('channel', None)
+                    if rchannel is not None:
+                        subscriber = rchannel
+                if subscriber is not None:
+                    reply = yield channel.unsubscribe(subscriber)
             yield conn.send_msg(serialize(reply))
         elif req.request == 'locate_peer':
             if req.src == self._location:
@@ -4053,74 +4053,75 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 else:
                     yield conn.send_msg(serialize(peer))
         elif req.request == 'send_file':
-            if req.dst == self._location:
-                tgt = os.path.basename(req.kwargs['file'])
-                dest_path = req.kwargs.get('dest_path', None)
-                if isinstance(dest_path, str):
-                    tgt = os.path.join(dest_path, tgt)
-                tgt = os.path.abspath(os.path.join(self.dest_path_prefix, tgt))
-                stat_buf = req.kwargs['stat_buf']
-                resp = 0
-                if self.max_file_size and stat_buf.st_size > self.max_file_size:
-                    logger.warning('file "%s" too big (%s) - must be smaller than %s',
-                                   req.kwargs['file'], stat_buf.st_size, self.max_file_size)
-                    resp = -1
-                elif not tgt.startswith(self.dest_path_prefix):
-                    resp = -1
-                elif os.path.isfile(tgt):
-                    sbuf = os.stat(tgt)
-                    if abs(stat_buf.st_mtime - sbuf.st_mtime) <= 1 and \
-                           stat_buf.st_size == sbuf.st_size and \
-                           stat.S_IMODE(stat_buf.st_mode) == stat.S_IMODE(sbuf.st_mode):
-                        resp = 1
-                else:
-                    try:
-                        if not os.path.isdir(os.path.dirname(tgt)):
-                            os.makedirs(os.path.dirname(tgt))
-                        fd = open(tgt, 'wb')
-                    except:
-                        logger.debug('failed to create "%s" : %s', tgt, traceback.format_exc())
-                        resp = -1
-                yield conn.send_msg(serialize(resp))
-                if resp == 0:
-                    n = 0
-                    try:
-                        while n < stat_buf.st_size:
-                            data = yield conn.recvall(min(stat_buf.st_size-n, 10240000))
-                            if not data:
-                                break
-                            fd.write(data)
-                            n += len(data)
-                            if self.max_file_size and n > self.max_file_size:
-                                logger.warning('File "%s" is too big (%s); it is truncated', tgt, n)
-                                break
-                    except:
-                        logger.warning('copying file "%s" failed', tgt)
-                    fd.close()
-                    if n < stat_buf.st_size:
-                        os.remove(tgt)
-                        resp = -1
-                    else:
-                        resp = 0
-                        logger.debug('Copied file %s', tgt)
-                        os.utime(tgt, (stat_buf.st_atime, stat_buf.st_mtime))
-                        os.chmod(tgt, stat.S_IMODE(stat_buf.st_mode))
-                    yield conn.send_msg(serialize(resp))
+            assert req.dst == self._location
+            tgt = os.path.basename(req.kwargs['file'])
+            dest_path = req.kwargs['dest_path']
+            if isinstance(dest_path, str):
+                tgt = os.path.join(dest_path, tgt)
+            tgt = os.path.abspath(os.path.join(self.dest_path_prefix, tgt))
+            stat_buf = req.kwargs['stat_buf']
+            resp = 0
+            if self.max_file_size and stat_buf.st_size > self.max_file_size:
+                logger.warning('file "%s" too big (%s) - must be smaller than %s',
+                               req.kwargs['file'], stat_buf.st_size, self.max_file_size)
+                resp = -1
+            elif not tgt.startswith(self.dest_path_prefix):
+                resp = -1
+            elif os.path.isfile(tgt):
+                sbuf = os.stat(tgt)
+                if abs(stat_buf.st_mtime - sbuf.st_mtime) <= 1 and \
+                       stat_buf.st_size == sbuf.st_size and \
+                       stat.S_IMODE(stat_buf.st_mode) == stat.S_IMODE(sbuf.st_mode):
+                    resp = 1
             else:
-                logger.debug('ignoring invalid send_file request to %s (%s)',
-                             req.dst, self._location)
-        elif req.request == 'del_file':
-            if req.dst == self._location:
-                tgt = os.path.basename(req.kwargs['file'])
-                dest_path = req.kwargs.get('dest_path', None)
-                if isinstance(dest_path, str):
-                    tgt = os.path.join(dest_path, tgt)
-                tgt = os.path.join(self.dest_path_prefix, tgt)
-                if tgt.startswith(self.dest_path_prefix) and os.path.isfile(tgt):
+                try:
+                    if not os.path.isdir(os.path.dirname(tgt)):
+                        os.makedirs(os.path.dirname(tgt))
+                    fd = open(tgt, 'wb')
+                except:
+                    logger.debug('failed to create "%s" : %s', tgt, traceback.format_exc())
+                    resp = -1
+            yield conn.send_msg(serialize(resp))
+            if resp == 0:
+                n = 0
+                try:
+                    while n < stat_buf.st_size:
+                        data = yield conn.recvall(min(stat_buf.st_size-n, 10240000))
+                        if not data:
+                            break
+                        fd.write(data)
+                        n += len(data)
+                except:
+                    logger.warning('copying file "%s" failed', tgt)
+                fd.close()
+                if n < stat_buf.st_size:
                     os.remove(tgt)
-                    reply = 0
+                    resp = -1
                 else:
-                    reply = -1
+                    resp = 0
+                    logger.debug('saved file %s', tgt)
+                    os.utime(tgt, (stat_buf.st_atime, stat_buf.st_mtime))
+                    os.chmod(tgt, stat.S_IMODE(stat_buf.st_mode))
+                yield conn.send_msg(serialize(resp))
+        elif req.request == 'del_file':
+            assert req.dst == self._location
+            tgt = os.path.basename(req.kwargs['file'])
+            dest_path = req.kwargs.get('dest_path', None)
+            if isinstance(dest_path, str):
+                tgt = os.path.join(dest_path, tgt)
+            tgt = os.path.join(self.dest_path_prefix, tgt)
+            if tgt.startswith(self.dest_path_prefix) and os.path.isfile(tgt):
+                os.remove(tgt)
+                d = os.path.dirname(tgt)
+                try:
+                    while d > self.dest_path_prefix and os.path.isdir(d) and \
+                              len(os.listdir(d)) == 0:
+                        os.rmdir(d)
+                        d = os.path.dirname(d)
+                except:
+                    # logger.debug(traceback.format_exc())
+                    pass
+                reply = 0
             else:
                 reply = -1
             yield conn.send_msg(serialize(reply))
@@ -4132,7 +4133,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
             logger.warning('invalid request "%s" ignored', req.request)
         conn.close()
 
-    def _async_reply(self, req, dst=None):
+    def _async_reply(self, req):
         """Internal use only.
         """
         self._requests[req.id] = req
@@ -4140,10 +4141,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
                               keyfile=self._keyfile, certfile=self._certfile)
         if req.timeout:
             sock.settimeout(req.timeout)
-        if dst is None:
-            dst = req.dst
         try:
-            yield sock.connect((dst.addr, dst.port))
+            yield sock.connect((req.dst.addr, req.dst.port))
             yield sock.send_msg(serialize(req))
         except socket.error as exc:
             logger.debug('could not send "%s" to %s', req.request, req.dst)
