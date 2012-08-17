@@ -3638,7 +3638,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
         ping_sock.close()
         raise StopIteration(0)
 
-    def send_file(self, location, file, dest_path=None, timeout=None):
+    def send_file(self, location, file, dest_path=None, overwrite=False, timeout=None):
         """Must be used with 'yield' as
         'loc = yield scheduler.send_file(location, "file1")'.
 
@@ -3646,9 +3646,12 @@ class AsynCoro(object, metaclass=MetaSingleton):
         None, it must be a relative path (not absolute path), in which
         case, file will be saved at peer's dest_path_prefix +
         dest_path. Returns -1 in case of error, 0 if the file is
-        transferred and 1 if the file is already at the destination
-        (so file is not transferred). If return value is 0, the sender
-        may want to delete file with 'del_file' later.
+        transferred, 1 if the same file is already at the destination
+        with same size, timestamp and permissions (so file is not
+        transferred) and os.stat structure if a file with same name is
+        at the destination with different size/timestamp/permissions,
+        but 'overwrite' is False. If return value is 0, the sender may
+        want to delete file with 'del_file' later.
         """
         try:
             stat_buf = os.stat(file)
@@ -3656,17 +3659,17 @@ class AsynCoro(object, metaclass=MetaSingleton):
             raise StopIteration(-1)
         if not ((stat.S_IMODE(stat_buf.st_mode) & stat.S_IREAD) and stat.S_ISREG(stat_buf.st_mode)):
             raise StopIteration(-1)
-        kwargs = {'file':os.path.basename(file), 'stat_buf':stat_buf}
         if isinstance(dest_path, str) and dest_path:
             dest_path = dest_path.strip()
             # reject absolute path for dest_path
             if os.path.join(os.sep, dest_path) == dest_path:
                 raise StopIteration(-1)
-        kwargs['dest_path'] = dest_path
         auth = self._peers.get((location.addr, location.port), None)
         if auth is None:
             logger.debug('%s is not a valid peer', location)
             raise StopIteration(-1)
+        kwargs = {'file':os.path.basename(file), 'stat_buf':stat_buf,
+                  'overwrite':overwrite == True, 'dest_path':dest_path}
         req = _NetRequest(request='send_file', kwargs=kwargs, auth=auth, dst=location,
                           timeout=timeout)
         sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
@@ -3711,13 +3714,12 @@ class AsynCoro(object, metaclass=MetaSingleton):
         Delete 'file' from peer at 'location'. 'dest_path' must be
         same as that used for 'send_file'.
         """
-        kwargs = {'file':os.path.basename(file)}
         if isinstance(dest_path, str) and dest_path:
             dest_path = dest_path.strip()
             # reject absolute path for dest_path
             if os.path.join(os.sep, dest_path) == dest_path:
                 raise StopIteration(-1)
-            kwargs['dest_path'] = dest_path
+        kwargs = {'file':os.path.basename(file), 'dest_path':dest_path}
         auth = self._peers.get((location.addr, location.port), None)
         if auth is None:
             logger.debug('%s is not a valid peer', location)
@@ -3762,7 +3764,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
                                                        'ascii')).hexdigest()
                         peer = info['location']
                         req = _NetRequest('ping', kwargs={'peer':self._location,
-                                                          'signature':self._signature},
+                                                          'signature':self._signature,
+                                                          'version':__version__},
                                           dst=peer, auth=auth_code)
                         sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                                               keyfile=self._keyfile, certfile=self._certfile)
@@ -3997,6 +4000,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
             auth_code = hashlib.sha1(bytes(req.kwargs['signature'] + self._secret,
                                            'ascii')).hexdigest()
             try:
+                assert req.kwargs['version'] == __version__
                 yield conn.send_msg(b'ACK')
                 reply = yield conn.recv_msg()
                 assert reply == b'ACK'
@@ -4073,7 +4077,10 @@ class AsynCoro(object, metaclass=MetaSingleton):
                        stat_buf.st_size == sbuf.st_size and \
                        stat.S_IMODE(stat_buf.st_mode) == stat.S_IMODE(sbuf.st_mode):
                     resp = 1
-            else:
+                elif not req.kwargs['overwrite']:
+                    resp = sbuf
+
+            if resp == 0:
                 try:
                     if not os.path.isdir(os.path.dirname(tgt)):
                         os.makedirs(os.path.dirname(tgt))
@@ -4106,16 +4113,15 @@ class AsynCoro(object, metaclass=MetaSingleton):
         elif req.request == 'del_file':
             assert req.dst == self._location
             tgt = os.path.basename(req.kwargs['file'])
-            dest_path = req.kwargs.get('dest_path', None)
-            if isinstance(dest_path, str):
+            dest_path = req.kwargs['dest_path']
+            if isinstance(dest_path, str) and dest_path:
                 tgt = os.path.join(dest_path, tgt)
             tgt = os.path.join(self.dest_path_prefix, tgt)
             if tgt.startswith(self.dest_path_prefix) and os.path.isfile(tgt):
                 os.remove(tgt)
                 d = os.path.dirname(tgt)
                 try:
-                    while d > self.dest_path_prefix and os.path.isdir(d) and \
-                              len(os.listdir(d)) == 0:
+                    while d > self.dest_path_prefix and os.path.isdir(d):
                         os.rmdir(d)
                         d = os.path.dirname(d)
                 except:
