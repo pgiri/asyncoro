@@ -2005,7 +2005,7 @@ class Coro(object):
         self._timeout = None
         self._daemon = False
         self._complete = threading.Event()
-        self._msgs = []
+        self._msgs = collections.deque()
         self._monitor = None
         self._new_generator = None
         self._hot_swappable = False
@@ -2994,7 +2994,7 @@ class AsynCoro(object):
         if state == AsynCoro._AwaitMsg_ and coro._msgs:
             s, update = coro._msgs[0]
             if s == state:
-                del coro._msgs[0]
+                coro._msgs.popleft()
                 self._lock.release()
                 return update
         if timeout is None:
@@ -3308,7 +3308,7 @@ class AsynCoro(object):
                                         # which needs (recursive) lock
                                         self._netreq_q_work.set()
                             else:
-                                coro._msgs = []
+                                coro._msgs.clear()
                         else:
                             logger.warning('coro %s/%s already removed?', coro.name, cid)
                     self._lock.release()
