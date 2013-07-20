@@ -42,6 +42,7 @@ import queue
 import atexit
 import collections
 import pickle
+import copy
 
 logger = logging.getLogger('asyncoro')
 logger.setLevel(logging.INFO)
@@ -2081,6 +2082,16 @@ class Coro(object):
         self._location = state['_location']
         self._asyncoro = AsynCoro.instance()
 
+    def __eq__(self, other):
+        return (isinstance(other, Coro) and self._id == other._id and \
+                self._location == other._location)
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __repr__(self):
+        return '%s/%s/%s' % (self.name, self._id, self._location)
+
     def set_daemon(self):
         """Set coroutine is daemon.
 
@@ -2894,18 +2905,21 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 if not udp_port:
                     udp_port = 51350
                 self._udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                if hasattr(socket, 'SO_REUSEPORT'):
-                    self._udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-                else:
-                    self._udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 try:
-                    self._udp_sock.bind(('', udp_port))
+                    self._udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    self._udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
                 except:
-                    raise Exception('could not start UDP server at port %s' % udp_port)
+                    pass
+
+                self._udp_sock.bind(('', udp_port))
 
                 self._tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 if tcp_port:
-                    self._tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    try:
+                        self._tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                        self._tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                    except:
+                        pass
                 self._tcp_sock.bind((node, tcp_port))
                 self._location = Location(*self._tcp_sock.getsockname())
                 if not self._location.port:
@@ -3416,7 +3430,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                     yield sock.connect((req.dst.addr, req.dst.port))
                     yield sock.send_msg(serialize(req))
                     sock.close()
-                for (addr, port), auth in self._peers.items():
+                for (addr, port), auth in list(self._peers.items()):
                     req = _NetRequest('terminate', kwargs={'peer':self._location},
                                       dst=Location(addr, port), auth=auth)
                     Coro(_terminate, self, req).value()
@@ -3475,7 +3489,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                               src=self._location, timeout=None)
             req.event.clear()
             if self._peers:
-                for (addr, port), auth in self._peers.items():
+                for (addr, port), auth in list(self._peers.items()):
                     if req.event.is_set():
                         break
                     req.dst = Location(addr, port)
@@ -3539,7 +3553,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                               src=self._location, timeout=None)
             req.event.clear()
             if self._peers:
-                for (addr, port), auth in self._peers.items():
+                for (addr, port), auth in list(self._peers.items()):
                     if req.event.is_set():
                         break
                     req.dst = Location(addr, port)
@@ -3576,7 +3590,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                               src=self._location, timeout=None)
             req.event.clear()
             if self._peers:
-                for (addr, port), auth in self._peers.items():
+                for (addr, port), auth in list(self._peers.items()):
                     if req.event.is_set():
                         break
                     req.dst = Location(addr, port)
@@ -3599,7 +3613,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                           src=self._location, timeout=None)
         req.event.clear()
         if self._peers:
-            for (addr, port), auth in self._peers.items():
+            for (addr, port), auth in list(self._peers.items()):
                 if req.event.is_set():
                     break
                 req.dst = Location(addr, port)
@@ -3630,7 +3644,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
             udp_port = 51350
         ping_sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
         ping_sock.settimeout(1)
-        ping_msg = {'location':self._location, 'signature':self._signature}
+        ping_msg = {'location':self._location, 'signature':self._signature, 'version':__version__}
         ping_msg = b'PING:' + serialize(ping_msg)
         try:
             yield ping_sock.sendto(ping_msg, (node, udp_port))
@@ -3747,7 +3761,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
         ping_sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
         ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         ping_sock.settimeout(1)
-        ping_msg = {'location':self._location, 'signature':self._signature}
+        ping_msg = {'location':self._location, 'signature':self._signature, 'version':__version__}
         ping_msg = b'PING:' + serialize(ping_msg)
         try:
             yield ping_sock.sendto(ping_msg, ('<broadcast>', self._udp_sock.getsockname()[1]))
@@ -3760,24 +3774,67 @@ class AsynCoro(object, metaclass=MetaSingleton):
             if msg.startswith(b'PING:'):
                 try:
                     info = unserialize(msg[len(b'PING:'):])
-                    if info['location'] != self._location:
-                        auth_code = hashlib.sha1(bytes(info['signature'] + self._secret,
-                                                       'ascii')).hexdigest()
-                        peer = info['location']
-                        req = _NetRequest('ping', kwargs={'peer':self._location,
-                                                          'signature':self._signature,
-                                                          'version':__version__},
-                                          dst=peer, auth=auth_code)
+                    assert info['version'] == __version__
+                    peer = info['location']
+                    if info['location'] == self._location or \
+                           (peer.addr, peer.port) in self._peers:
+                        continue
+
+                    # relay ping to other asyncoro's running on same node
+                    peers = [(port, auth) for ((addr, port), auth) in self._peers.items() \
+                             if addr == self._location.addr]
+                    for port, auth in peers:
+                        req = _NetRequest('relay_ping',
+                                          kwargs={'peer':peer, 'signature':info['signature'],
+                                                  'version':info['version']},
+                                          dst=Location(self._location.addr, port),
+                                          auth=auth)
                         sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                                               keyfile=self._keyfile, certfile=self._certfile)
                         sock.settimeout(1)
-                        yield sock.connect((peer.addr, peer.port))
+                        yield sock.connect((self._location.addr, port))
                         yield sock.send_msg(serialize(req))
-                        info = yield sock.recv_msg()
-                        if info == b'ACK':
-                            self._peers[(peer.addr, peer.port)] = auth_code
-                            logger.debug('found asyncoro at %s', peer)
-                        yield sock.send_msg(b'ACK')
+                        sock.close()
+
+                    auth_code = hashlib.sha1(bytes(info['signature'] + self._secret,
+                                                   'ascii')).hexdigest()
+                    peer = info['location']
+                    req = _NetRequest('ping', kwargs={'peer':self._location,
+                                                      'signature':self._signature,
+                                                      'version':__version__},
+                                      dst=peer, auth=auth_code)
+                    sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                          keyfile=self._keyfile, certfile=self._certfile)
+                    sock.settimeout(1)
+                    yield sock.connect((peer.addr, peer.port))
+                    yield sock.send_msg(serialize(req))
+                    info = yield sock.recv_msg()
+                    found = False
+                    if info == b'ACK':
+                        self._peers[(peer.addr, peer.port)] = auth_code
+                        found = True
+                        logger.debug('found asyncoro at %s', peer)
+                    yield sock.send_msg(b'ACK')
+                    sock.close()
+                    if not found:
+                        continue
+                    # send pending (async) requests
+                    pending_reqs = copy.deepcopy(list(self._requests.items()))
+                    # self._requests = {}
+                    for rid, pending_req in pending_reqs:
+                        pending_req.dst = peer
+                        pending_req.auth = auth_code
+                        sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                              keyfile=self._keyfile, certfile=self._certfile)
+                        if pending_req.timeout:
+                            sock.settimeout(pending_req.timeout)
+                        try:
+                            yield sock.connect((peer.addr, peer.port))
+                            yield sock.send_msg(serialize(pending_req))
+                        except:
+                            # self._requests[rid] = pending_req
+                            logger.debug(traceback.format_exc())
+                            pass
                         sock.close()
                 except:
                     logger.warning(traceback.format_exc())
@@ -3806,7 +3863,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
             req = unserialize(msg)
             assert req.auth == self._auth_code
         except:
-            logger.warning('invalid request %s from %s ignored', req.request, req.src)
+            logger.warning('invalid request %s from %s ignored: %s', req.request, req.src, req.auth)
             conn.close()
             raise StopIteration
             
@@ -3924,9 +3981,9 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 coro = self._rcoros.get(req.kwargs['name'], None)
                 if coro is not None or req.dst == self._location:
                     if req.src:
-                        req.async_result = coro
                         req.auth = self._peers.get((req.src.addr, req.src.port), None)
                         if req.auth:
+                            req.async_result = coro
                             sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                                                   keyfile=self._keyfile, certfile=self._certfile)
                             yield sock.connect((req.src.addr, req.src.port))
@@ -3997,35 +4054,84 @@ class AsynCoro(object, metaclass=MetaSingleton):
             yield conn.send_msg(serialize(reply))
         elif req.request == 'ping':
             # TODO: async reply?
-            peer = req.kwargs['peer']
-            auth_code = hashlib.sha1(bytes(req.kwargs['signature'] + self._secret,
-                                           'ascii')).hexdigest()
             try:
+                peer = req.kwargs['peer']
+                auth_code = hashlib.sha1(bytes(req.kwargs['signature'] + self._secret,
+                                               'ascii')).hexdigest()
                 assert req.kwargs['version'] == __version__
                 yield conn.send_msg(b'ACK')
                 reply = yield conn.recv_msg()
                 assert reply == b'ACK'
             except:
                 logger.debug('ignoring peer %s', peer)
+                logger.debug(traceback.format_exc())
             else:
-                self._peers[(peer.addr, peer.port)] = auth_code
-                logger.debug('found asyncoro at %s', peer)
-                # send pending (async) requests
-                pending_reqs = self._requests.values()
-                for pending_req in pending_reqs:
-                    pending_req.dst = peer
-                    pending_req.auth = auth_code
-                    sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
-                                          keyfile=self._keyfile, certfile=self._certfile)
-                    if pending_req.timeout:
-                        sock.settimeout(pending_req.timeout)
-                    try:
-                        yield sock.connect((peer.addr, peer.port))
-                        yield sock.send_msg(serialize(pending_req))
-                    except:
-                        logger.debug(traceback.format_exc())
-                        pass
-                    sock.close()
+                if (peer.addr, peer.port) not in self._peers:
+                    self._peers[(peer.addr, peer.port)] = auth_code
+                    logger.debug('found asyncoro at %s', peer)
+                    # send pending (async) requests
+                    pending_reqs = copy.deepcopy(list(self._requests.items()))
+                    # self._requests = {}
+                    for rid, pending_req in pending_reqs:
+                        pending_req.dst = peer
+                        pending_req.auth = auth_code
+                        sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                              keyfile=self._keyfile, certfile=self._certfile)
+                        if pending_req.timeout:
+                            sock.settimeout(pending_req.timeout)
+                        try:
+                            yield sock.connect((peer.addr, peer.port))
+                            yield sock.send_msg(serialize(pending_req))
+                        except:
+                            # self._requests[rid] = pending_req
+                            logger.debug(traceback.format_exc())
+                            pass
+                        sock.close()
+        elif req.request == 'relay_ping':
+            try:
+                peer = req.kwargs['peer']
+                auth_code = hashlib.sha1(bytes(req.kwargs['signature'] + self._secret,
+                                               'ascii')).hexdigest()
+                assert req.kwargs['version'] == __version__
+            except:
+                logger.debug('ignoring peer %s', peer)
+                # logger.debug(traceback.format_exc())
+            else:
+                req = _NetRequest('ping', kwargs={'peer':self._location, 'signature':self._signature,
+                                                  'version':__version__},
+                                  dst=peer, auth=auth_code)
+                sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                      keyfile=self._keyfile, certfile=self._certfile)
+                sock.settimeout(1)
+                yield sock.connect((peer.addr, peer.port))
+                yield sock.send_msg(serialize(req))
+                info = yield sock.recv_msg()
+                found = False
+                if info == b'ACK' and (peer.addr, peer.port) not in self._peers:
+                    self._peers[(peer.addr, peer.port)] = auth_code
+                    found = True
+                    logger.debug('found asyncoro at %s', peer)
+                yield sock.send_msg(b'ACK')
+                sock.close()
+                if found:
+                    # send pending (async) requests
+                    pending_reqs = copy.deepcopy(list(self._requests.items()))
+                    # self._requests = {}
+                    for rid, pending_req in pending_reqs:
+                        pending_req.dst = peer
+                        pending_req.auth = auth_code
+                        sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                              keyfile=self._keyfile, certfile=self._certfile)
+                        if pending_req.timeout:
+                            sock.settimeout(pending_req.timeout)
+                        try:
+                            yield sock.connect((peer.addr, peer.port))
+                            yield sock.send_msg(serialize(pending_req))
+                        except:
+                            # self._requests[rid] = pending_req
+                            logger.debug(traceback.format_exc())
+                            pass
+                        sock.close()
         elif req.request == 'unsubscribe':
             reply = -1
             assert req.dst == self._location
