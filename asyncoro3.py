@@ -3756,8 +3756,10 @@ class AsynCoro(object, metaclass=MetaSingleton):
                     info = unserialize(msg[len(b'PING:'):])
                     assert info['version'] == __version__
                     peer = info['location']
+                    auth_code = hashlib.sha1(bytes(info['signature'] + self._secret,
+                                                   'ascii')).hexdigest()
                     if info['location'] == self._location or \
-                           (peer.addr, peer.port) in self._peers:
+                           self._peers.get((peer.addr, peer.port), None) == auth_code:
                         continue
 
                     # relay ping to other asyncoro's running on same node
@@ -3776,8 +3778,6 @@ class AsynCoro(object, metaclass=MetaSingleton):
                         yield sock.send_msg(serialize(req))
                         sock.close()
 
-                    auth_code = hashlib.sha1(bytes(info['signature'] + self._secret,
-                                                   'ascii')).hexdigest()
                     req = _NetRequest('ping', kwargs={'peer':self._location,
                                                       'signature':self._signature,
                                                       'version':__version__},
@@ -4035,7 +4035,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
             except:
                 logger.debug('ignoring peer %s', peer)
             else:
-                if (peer.addr, peer.port) not in self._peers:
+                if self._peers.get((peer.addr, peer.port), None) != auth_code:
                     logger.debug('found asyncoro at %s', peer)
                     self._peers[(peer.addr, peer.port)] = auth_code
                     # send pending (async) requests
@@ -4060,7 +4060,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 auth_code = hashlib.sha1(bytes(req.kwargs['signature'] + self._secret,
                                                'ascii')).hexdigest()
                 assert req.kwargs['version'] == __version__
-                assert (peer.addr, peer.port) not in self._peers
+                assert self._peers.get((peer.addr, peer.port), None) != auth_code
             except:
                 logger.debug('ignoring peer %s', peer)
                 # logger.debug(traceback.format_exc())
@@ -4075,7 +4075,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 yield sock.send_msg(serialize(req))
                 info = yield sock.recv_msg()
                 found = False
-                if info == b'ACK' and (peer.addr, peer.port) not in self._peers:
+                if info == b'ACK' and self._peers.get((peer.addr, peer.port), None) != auth_code:
                     self._peers[(peer.addr, peer.port)] = auth_code
                     found = True
                     logger.debug('found asyncoro at %s', peer)
@@ -4215,6 +4215,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
             peer = req.kwargs.get('peer', None)
             if peer:
                 self._peers.pop((peer.addr, peer.port), None)
+                logger.debug('peer %s:%s terminated' % (peer.addr, peer.port))
         else:
             logger.warning('invalid request "%s" ignored', req.request)
         conn.close()
