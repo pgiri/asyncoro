@@ -61,4 +61,4 @@ License
 asyncoro is distriubuted under the MIT license.
 
 
-.. _Home: http://asyncoro.sourceforge.net for more details.
+.. _Home: http://asyncoro.sourceforge.net
