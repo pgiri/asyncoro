@@ -14,7 +14,7 @@ __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
 __version__ = "1.4"
 
-__all__ = ['AsynCoroSocket', 'Coro', 'AsynCoro',
+__all__ = ['AsynCoroSocket', 'AsyncSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
            'HotSwapException', 'MonitorException', 'Location', 'Channel',
            'AsynCoroThreadPool', 'AsynCoroDBCursor', 'MetaSingleton']
@@ -462,6 +462,8 @@ class _AsynCoroSocket(object):
         def _sendall(self):
             try:
                 sent = self._rsock.send(self._write_result)
+                if sent < 0:
+                    raise socket.error('hangup')
             except:
                 self._notifier.clear(self, _AsyncPoller._Write)
                 self._write_task = self._write_result = None
@@ -474,7 +476,7 @@ class _AsynCoroSocket(object):
                         self._notifier.clear(self, _AsyncPoller._Write)
                         self._write_task = self._write_result = None
                         coro, self._write_coro = self._write_coro, None
-                        coro._proceed_(0)
+                        coro._proceed_(None)
 
         self._write_result = memoryview(data)
         self._write_task = functools.partial(_sendall, self)
@@ -491,9 +493,10 @@ class _AsynCoroSocket(object):
         buf = memoryview(data)
         while len(buf) > 0:
             sent = self._rsock.send(buf)
-            if sent > 0:
-                buf = buf[sent:]
-        return 0
+            if sent < 0:
+                raise socket.error('hangup')
+            buf = buf[sent:]
+        return None
 
     def _async_accept(self):
         """Internal use only; use 'accept' with 'yield' instead.
@@ -645,7 +648,7 @@ class _AsynCoroSocket(object):
                 raise
         if len(data) != n:
             raise StopIteration('')
-        yield data
+        raise StopIteration(data)
 
     def _sync_recv_msg(self):
         """Internal use only; use 'recv_msg' instead.
@@ -1000,7 +1003,7 @@ if platform.system() == 'Windows':
                     i = bisect_left(self._timeouts, fd._timeout_id)
                     # in case of identical timeouts (unlikely?), search for
                     # correct index where fd is
-                    for i in xrange(i, len(self._timeouts)):
+                    while i < len(self._timeouts):
                         if self._timeout_fds[i] == fd:
                             # assert fd._timeout_id == self._timeouts[i]
                             del self._timeouts[i]
@@ -1011,6 +1014,7 @@ if platform.system() == 'Windows':
                             logger.warning('fd %s with %s is not found',
                                            fd._fileno, fd._timeout_id)
                             break
+                        i += 1
                     self._lock.release()
 
             def terminate(self):
@@ -1582,7 +1586,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                 i = bisect_left(self._timeouts, fd._timeout_id)
                 # in case of identical timeouts (unlikely?), search for
                 # correct index where fd is
-                for i in xrange(i, len(self._timeouts)):
+                while i < len(self._timeouts):
                     if self._timeout_fds[i] == fd:
                         # assert fd._timeout_id == self._timeouts[i]
                         del self._timeouts[i]
@@ -1592,6 +1596,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                     if fd._timeout_id != self._timeouts[i]:
                         logger.warning('fd %s with %s is not found', fd._fileno, fd._timeout_id)
                         break
+                    i += 1
 
         def unregister(self, fd):
             if self._fds.pop(fd._fileno, None) is None:
@@ -1733,6 +1738,8 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
     AsynCoroSocket = _AsynCoroSocket
     _AsyncNotifier = _AsyncPoller
 
+AsyncSocket = AsynCoroSocket
+
 class Lock(object):
     """'Lock' primitive for coroutines.
     """
@@ -1825,7 +1832,7 @@ class Condition(object):
             assert self._depth > 0
             self._depth += 1
             raise StopIteration(True)
-        if not blocking and not (self._owner is None or self._owner == coro):
+        if not blocking and self._owner is not None:
             raise StopIteration(False)
         while self._owner is not None:
             self._waitlist.append(coro)
