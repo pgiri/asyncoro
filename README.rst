@@ -12,16 +12,15 @@ easy. Using it looks like:
 
 .. code-block:: python
 
-    import asyncoro, resource
-    def coro_proc(coro=None):
-        yield coro.suspend()
+    import asyncoro, random, time
+    def coro_proc(n, coro=None):
+        s = random.uniform(0.5, 3)
+        print('%f: coroutine %d sleeping for %f seconds' % (time.time(), n, s))
+        yield coro.sleep(s)
+        print('%f: coroutine %d terminating' % (time.time(), n))
 
-    coros = [asyncoro.Coro(coro_proc) for i in xrange(100000)]
-    time.sleep(5)
-    ru = resource.getrusage(resource.RUSAGE_SELF)
-    print('Max RSS: %.1f MB' % (ru.ru_maxrss / 1024.0))
-    for coro in coros:
-        coro.resume()
+    for i in range(10):
+        asyncoro.Coro(coro_proc, i)
 
 Read below for more details, or go `Home`_ for even more details.
 
