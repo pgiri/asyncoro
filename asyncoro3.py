@@ -14,8 +14,9 @@ __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
 __version__ = "1.4"
 
-__all__ = ['AsynCoroSocket', 'Coro', 'AsynCoro', 'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
-           'HotSwapException', 'MonitorException', 'Location', 'Channel', 'UnbufferedChannel',
+__all__ = ['AsynCoroSocket', 'Coro', 'AsynCoro',
+           'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
+           'HotSwapException', 'MonitorException', 'Location', 'Channel',
            'AsynCoroThreadPool', 'AsynCoroDBCursor', 'MetaSingleton']
 
 import time
@@ -2663,12 +2664,6 @@ class Channel(object):
                     if subscriber.send(msg) == 0:
                         count['reply'] += 1
                     count['pending'] -= 1
-                elif isinstance(subscriber, UnbufferedChannel):
-                    assert self._location == subscriber._location
-                    reply = yield subscriber.deliver(msg, timeout)
-                    if reply:
-                        count['reply'] += reply
-                    count['pending'] -= 1
                 else:
                     # remote channel/coro
                     Coro(_deliver, subscriber, count, done, timeout)
@@ -2691,97 +2686,6 @@ class Channel(object):
                         yield rchannel.unsubscribe(channel)
                 Coro(_unsub, self, list(self._asyncoro._rchannels.values()))
                 raise StopIteration(0)
-
-class UnbufferedChannel(object):
-    """Unbuffered channel. Broadcasts a message to currently waiting
-    coros. To receive a message, a coro should use
-    'yield channel.receive(coro)', with timeout and alarm_value, if
-    necessary.
-
-    UnbufferedChannel can not be sent over network (for now).
-    """
-
-    def __init__(self, name, transform=None):
-        """'name' must be unique across all channels.
-
-        'transform' is a function that can either filter or
-        transform a message. If the function returns 'None', the
-        message is filtered (ignored). The function is called with
-        first parameter set to channel name and second parameter set
-        to the message.
-        """
-        self.name = name
-        if transform is not None:
-            try:
-                argspec = inspect.getargspec(transform)
-                assert len(argspec.args) == 2
-            except:
-                logger.warning('invalid "transform" function ignored')
-                transform = None
-        self._transform = transform
-        self._recipients = []
-        self._event = Event()
-        self._asyncoro = AsynCoro.instance()
-        self._asyncoro._lock.acquire()
-        self._location = self._asyncoro._location
-        if name in self._asyncoro._channels:
-            self._asyncoro._lock.release()
-            raise Exception('duplicate channel name "%s"' % name)
-        else:
-            self._asyncoro._channels[name] = self
-        self._asyncoro._lock.release()
-        
-    def send(self, message):
-        """Send message to currently waiting recipients (coroutines).
-        """
-        if self._transform is not None:
-            message = self._transform(self.name, message)
-            if message is None:
-                return 0
-        msg = ChannelMessage(self.name, message)
-        for c in self._recipients:
-            c._proceed_(msg)
-        self._recipients = []
-        return 0
-
-    def deliver(self, message, n=1, timeout=None, alarm_value=None):
-        """Must be used with 'yield' as 'rcvd = yield channel.deliver(msg)'.
-
-        Blocking 'send': Wait until at least 'n' receivers are waiting
-        for message. Returns number of receipients message delivered
-        to.
-        """
-        if self._transform is not None:
-            message = self._transform(self.name, message)
-            if message is None:
-                raise StopIteration(0)
-        if not isinstance(n, int) or n <= 0:
-            raise StopIteration(0)
-        while len(self._recipients) < n:
-            start = _time()
-            if (yield self._event.wait()) is False:
-                raise StopIteration(alarm_value)
-            if timeout is not None:
-                timeout -= _time() - start
-                if timeout <= 0:
-                    raise StopIteration(alarm_value)
-        msg = ChannelMessage(self.name, message)
-        for c in self._recipients:
-            c._proceed_(msg)
-        n = len(self._recipients)
-        self._recipients = []
-        raise StopIteration(n)
-
-    def receive(self, coro, timeout=None, alarm_value=None):
-        """Must be used with 'yield' as 'msg = yield channel.receive(coro)'.
-
-        A message sent over the channel is sent to currently waiting
-        coroutines (with 'yield coro.receive(channel)'.
-        """
-        self._recipients.append(coro)
-        yield self._event.set()
-        self._event.clear()
-        coro._await_(timeout, alarm_value)
 
 class AsynCoro(object, metaclass=MetaSingleton):
     """Coroutine scheduler. Methods starting with '_' are for internal
