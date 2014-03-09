@@ -2092,13 +2092,6 @@ class Coro(object):
         self._location = state['_location']
         self._asyncoro = AsynCoro.instance()
 
-    def __eq__(self, other):
-        return (isinstance(other, Coro) and self._id == other._id and \
-                self._location == other._location)
-
-    def __ne__(self, other):
-        return not self.__eq__(other)
-
     def __repr__(self):
         return '%s/%s@%s' % (self.name, self._id, self._location)
 
