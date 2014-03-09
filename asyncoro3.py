@@ -2604,9 +2604,12 @@ class Channel(object):
         """Message is sent to currently registered subscribers.
         """
         if self._transform:
-            message = self._transform(self.name, message)
+            try:
+                message = self._transform(self.name, message)
+            except:
+                message = None
             if message is None:
-                return 0
+                return -1
         if self._location == self._asyncoro._location:
             msg = ChannelMessage(self.name, message)
             # remote subscriber may call unsubscribe during send, so make copy
@@ -2617,7 +2620,7 @@ class Channel(object):
             # remote channel
             auth = self._asyncoro._peers.get((self._location.addr, self._location.port), None)
             if auth:
-                request = _NetRequest('send', kwargs={'channel_name':self.name, 'message':message},
+                request = _NetRequest('send', kwargs={'name':self.name, 'message':message},
                                       dst=self._location, auth=auth, timeout=1)
                 # request is queued for asynchronous processing
                 self._asyncoro._netreq_q.append(request)
@@ -2641,11 +2644,14 @@ class Channel(object):
         channels.
         """
         if self._transform:
-            message = self._transform(self.name, message)
+            try:
+                message = self._transform(self.name, message)
+            except:
+                message = None
             if message is None:
-                raise StopIteration(0)
+                raise StopIteration(-1)
         if not isinstance(n, int) or n <= 0:
-            raise StopIteration(0)
+            raise StopIteration(-1)
         if self._location == self._asyncoro._location:
             while len(self._subscribers) < n:
                 start = _time()
@@ -2687,7 +2693,7 @@ class Channel(object):
             # remote channel
             auth = self._asyncoro._peers.get((self._location.addr, self._location.port), None)
             if auth:
-                request = _NetRequest('deliver', kwargs={'channel_name':self.name, 'message':message},
+                request = _NetRequest('deliver', kwargs={'name':self.name, 'message':message, 'n':n},
                                       dst=self._location, auth=auth, timeout=timeout)
                 reply = yield self._asyncoro._sync_reply(request)
                 raise StopIteration(reply)
@@ -3766,6 +3772,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
             
         if req.dst is not None and req.dst != self._location:
             logger.debug('invalid request "%s" to %s (%s)', req.request, req.dst, self._location)
+            conn.close()
             raise StopIteration
 
         if req.src == self._location:
@@ -3773,6 +3780,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
             req = self._requests.pop(reply.id, None)
             if req is None:
                 logger.debug('ignoring request "%s"/%s', reply.request, reply.id)
+                conn.close()
                 raise StopIteration
             req.async_result = reply.async_result
             del reply
@@ -3780,6 +3788,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
             #     # cache the result. TODO: prune if too many?
             #     self._rchannels[req.kwargs['name']] = req.async_result
             req.event.set()
+            conn.close()
             raise StopIteration
 
         if req.request == 'send':
@@ -3797,7 +3806,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                     else:
                         logger.warning('ignoring message to invalid coro %s', cid)
                 else:
-                    name = req.kwargs.get('channel_name', None)
+                    name = req.kwargs.get('name', None)
                     if name is not None:
                         channel = self._channels.get(name, None)
                         if channel is not None:
@@ -3823,11 +3832,11 @@ class AsynCoro(object, metaclass=MetaSingleton):
                     else:
                         logger.warning('ignoring message to invalid coro %s', cid)
                 else:
-                    name = req.kwargs.get('channel_name', None)
+                    name = req.kwargs.get('name', None)
                     if name is not None:
                         channel = self._channels.get(name, None)
                         if channel is not None:
-                            reply = yield channel.deliver(req.kwargs['message'],
+                            reply = yield channel.deliver(req.kwargs['message'], n=req.kwargs['n'],
                                                           timeout=req.timeout, alarm_value=0)
                         else:
                             logger.warning('ignoring message to channel "%s"', name)
