@@ -1788,7 +1788,7 @@ class RLock(object):
             assert self._depth > 0
             self._depth += 1
             raise StopIteration(True)
-        if not blocking and not (self._owner is None or self._owner == coro):
+        if not blocking and self._owner is not None:
             raise StopIteration(False)
         while self._owner is not None:
             self._waitlist.append(coro)

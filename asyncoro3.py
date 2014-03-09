@@ -1857,7 +1857,7 @@ class Condition(object):
         if self._owner == coro:
             self._depth += 1
             raise StopIteration(True)
-        if not blocking and not (self._owner is None or self._owner == coro):
+        if not blocking and self._owner is not None:
             raise StopIteration(False)
         if timeout < 0:
             timeout = None
