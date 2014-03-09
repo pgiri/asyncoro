@@ -2066,14 +2066,14 @@ class Coro(object):
         """
         return copy.copy(self._location)
 
-    def set_daemon(self):
+    def set_daemon(self, flag=True):
         """Set coroutine is daemon.
 
         When exiting, AsynCoro scheduler waits for all non-daemon
         coroutines to terminate.
         """
         if self._asyncoro and self._asyncoro.cur_coro() == self:
-            self._asyncoro._set_daemon(self)
+            self._asyncoro._set_daemon(self, bool(flag))
             return 0
         else:
             logger.warning('set_daemon must be called from running coro')
@@ -2845,7 +2845,7 @@ class AsynCoro(object):
     def location(self):
         """Get Location instance where this asyncoro is running.
         """
-        return self._location
+        return copy.copy(self._location)
 
     def _add(self, coro):
         """Internal use only. See Coro class.
@@ -2859,15 +2859,21 @@ class AsynCoro(object):
             self._notifier.interrupt()
         self._lock.release()
 
-    def _set_daemon(self, coro):
+    def _set_daemon(self, coro, flag):
         """Internal use only. See set_daemon in Coro.
         """
         self._lock.acquire()
         cid = coro._id
         coro = self._coros.get(cid, None)
-        if coro is not None and hasattr(coro, '_daemon'):
-            coro._daemon = True
-            self._daemons += 1
+        if coro is not None and hasattr(coro, '_daemon') and coro._daemon != flag:
+            coro._daemon = flag
+            if flag:
+                self._daemons += 1
+                if len(self._coros) == self._daemons:
+                    self._complete.set()
+            else:
+                self._daemons -= 1
+                self._complete.clear()
         self._lock.release()
 
     def _monitor(self, monitor, coro):
@@ -3077,7 +3083,7 @@ class AsynCoro(object):
                     self._scheduled.add(cid)
                     coro._state = AsynCoro._Scheduled
                     coro._value = alarm_value
-            scheduled = self._scheduled.copy()
+            scheduled = list(self._scheduled)
             # random.shuffle(scheduled)
             self._lock.release()
 
@@ -3259,13 +3265,10 @@ class AsynCoro(object):
                     self._lock.release()
 
         self._lock.acquire()
-        for cid in self._scheduled.union(self._suspended):
-            coro = self._coros.get(cid, None)
-            if coro is None:
-                continue
+        for cid, coro in self._coros.iteritems():
             logger.debug('terminating Coro %s/%s', coro.name, coro._id)
             self._cur_coro = coro
-            coro._state = AsynCoro._Scheduled
+            coro._state = AsynCoro._Running
             while coro._generator:
                 try:
                     coro._generator.close()
