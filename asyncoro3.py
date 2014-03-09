@@ -2100,7 +2100,12 @@ class Coro(object):
         return not self.__eq__(other)
 
     def __repr__(self):
-        return '%s/%s/%s' % (self.name, self._id, self._location)
+        return '%s/%s@%s' % (self.name, self._id, self._location)
+
+    def location(self):
+        """Get Location instance where this coro is running.
+        """
+        return copy.copy(self._location)
 
     def set_daemon(self):
         """Set coroutine is daemon.
@@ -2392,10 +2397,12 @@ class Location(object):
         self.port = tcp_port
 
     def __eq__(self, other):
-        return other and self.addr == other.addr and self.port == other.port
+        return isinstance(other, type(self)) and \
+               self.addr == other.addr and self.port == other.port
 
     def __ne__(self, other):
-        return not other or self.addr != other.addr or self.port != other.port
+        return (not isinstance(other, type(self))) or \
+               self.addr != other.addr or self.port != other.port
 
     def __repr__(self):
         return '%s:%s' % (self.addr, self.port)
@@ -2508,6 +2515,11 @@ class Channel(object):
         self._location = state['_location']
         self._asyncoro = AsynCoro.instance()
         self._transform = None
+
+    def location(self):
+        """Get Location instance where this channel is located.
+        """
+        return copy.copy(self._location)
 
     def set_transform(self, transform):
         try:
