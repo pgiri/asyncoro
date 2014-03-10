@@ -2478,7 +2478,7 @@ class Channel(object):
                 transform = None
         self._transform = transform
         self._subscribers = set()
-        self._event = Event()
+        self._subscribe_event = Event()
         self._asyncoro = AsynCoro.instance()
         self._location = self._asyncoro._location
         self._asyncoro._lock.acquire()
@@ -2533,8 +2533,7 @@ class Channel(object):
         """
         if self._location == self._asyncoro._location:
             self._subscribers.add(subscriber)
-            yield self._event.set()
-            self._event.clear()
+            yield self._subscribe_event.set()
             reply = 0
         else:
             # remote channel
@@ -2655,7 +2654,8 @@ class Channel(object):
         if self._location == self._asyncoro._location:
             while len(self._subscribers) < n:
                 start = _time()
-                if (yield self._event.wait(timeout)) is False:
+                self._subscribe_event.clear()
+                if (yield self._subscribe_event.wait(timeout)) is False:
                     raise StopIteration(alarm_value)
                 if timeout is not None:
                     timeout -= _time() - start
