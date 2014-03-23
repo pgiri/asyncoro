@@ -2030,10 +2030,10 @@ class Coro(object):
         if kwargs.get('coro', None) is not None:
             raise Exception('Coro function %s should not be called with ' \
                             '"coro" parameter' % target.__name__)
-        callargs = inspect.getcallargs(target, *args, **kwargs)
-        if 'coro' not in callargs or callargs['coro'] is not None:
-            raise Exception('Coro function "%s" should have "coro" argument with ' \
-                            'default value None' % target.__name__)
+        # callargs = inspect.getcallargs(target, *args, **kwargs)
+        # if 'coro' not in callargs or callargs['coro'] is not None:
+        #     raise Exception('Coro function "%s" should have "coro" argument with ' \
+        #                     'default value None' % target.__name__)
         kwargs['coro'] = self
         return target(*args, **kwargs)
 
@@ -2145,7 +2145,7 @@ class Coro(object):
             auth = self._asyncoro._peers.get((self._location.addr, self._location.port), None)
             if auth:
                 request = _NetRequest('send', kwargs={'coro_id':self._id, 'message':message},
-                                      dst=self._location, auth=auth, timeout=1)
+                                      dst=self._location, auth=auth, timeout=2)
                 # request is queued for asynchronous processing
                 self._asyncoro._netreq_q.append(request)
                 self._asyncoro._netreq_q_work.set()
@@ -2565,7 +2565,7 @@ class Channel(object):
             auth = self._asyncoro._peers.get((self._location.addr, self._location.port), None)
             if auth:
                 request = _NetRequest('send', kwargs={'name':self.name, 'message':message},
-                                      dst=self._location, auth=auth, timeout=1)
+                                      dst=self._location, auth=auth, timeout=2)
                 # request is queued for asynchronous processing
                 self._asyncoro._netreq_q.append(request)
                 self._asyncoro._netreq_q_work.set()
@@ -3215,7 +3215,7 @@ class AsynCoro(object):
                                         request = _NetRequest('exception', {'exception':exc,
                                                                             'coro':monitor},
                                                               dst=monitor._location,
-                                                              auth=auth, timeout=1)
+                                                              auth=auth, timeout=2)
                                         self._netreq_q.append(request)
                                         # Event.set may call _proceed_
                                         # which needs (recursive) lock
@@ -3495,7 +3495,7 @@ class AsynCoro(object):
         if not udp_port:
             udp_port = 51350
         ping_sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
-        ping_sock.settimeout(1)
+        ping_sock.settimeout(2)
         ping_msg = {'location':self._location, 'signature':self._signature, 'version':__version__}
         ping_msg = 'PING:' + serialize(ping_msg)
         try:
@@ -3612,7 +3612,7 @@ class AsynCoro(object):
         coro.set_daemon()
         ping_sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
         ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        ping_sock.settimeout(1)
+        ping_sock.settimeout(2)
         ping_msg = {'location':self._location, 'signature':self._signature, 'version':__version__}
         ping_msg = 'PING:' + serialize(ping_msg)
         try:
@@ -3646,7 +3646,7 @@ class AsynCoro(object):
                                       auth=auth)
                     sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                                           keyfile=self._keyfile, certfile=self._certfile)
-                    sock.settimeout(1)
+                    sock.settimeout(2)
                     yield sock.connect((self._location.addr, port))
                     yield sock.send_msg(serialize(req))
                     sock.close()
@@ -3658,7 +3658,7 @@ class AsynCoro(object):
                                               'version':__version__}, dst=peer, auth=auth_code)
             sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                                   keyfile=self._keyfile, certfile=self._certfile)
-            sock.settimeout(1)
+            sock.settimeout(2)
             try:
                 yield sock.connect((peer.addr, peer.port))
                 yield sock.send_msg(serialize(req))
@@ -3943,7 +3943,7 @@ class AsynCoro(object):
                                   dst=peer, auth=auth_code)
                 sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                                       keyfile=self._keyfile, certfile=self._certfile)
-                sock.settimeout(1)
+                sock.settimeout(2)
                 found = False
                 try:
                     yield sock.connect((peer.addr, peer.port))
