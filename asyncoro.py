@@ -271,10 +271,8 @@ class _AsynCoroSocket(object):
             self._write_coro.throw(socket.timeout('timed out'))
 
     def _eof(self):
-        # TODO: finish pending read/write?
-        if self._read_coro:
-            self._read_coro._proceed_('')
-            self._read_coro = None
+        if self._read_task:
+            self._read_task()
 
     def _async_recv(self, bufsize, *args):
         """Internal use only; use 'recv' with 'yield' instead.
@@ -1542,7 +1540,6 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                         else:
                             fd._write_task()
                     elif event & _AsyncPoller._Hangup:
-                        self.unregister(fd)
                         fd._eof()
             except:
                 logger.debug(traceback.format_exc())
@@ -3100,6 +3097,7 @@ class AsynCoro(object):
                 if self._udp_sock:
                     self._udp_sock = AsynCoroSocket(self._udp_sock)
                     self._udp_coro = Coro(self._udp_proc)
+            self._atexit = []
             atexit.register(self.terminate, True)
 
     @classmethod
@@ -3474,13 +3472,7 @@ class AsynCoro(object):
                                                                       StopIteration(coro._value)))
                                     monitor = self._coros.get(monitor._id, None)
                                     if monitor:
-                                        monitor._timeout = None
-                                        monitor._exceptions.append((MonitorException, exc))
-                                        if monitor._state in (AsynCoro._AwaitIO_, AsynCoro._Suspended,
-                                                              AsynCoro._AwaitMsg_):
-                                            self._suspended.discard(monitor)
-                                            self._scheduled.add(monitor)
-                                            monitor._state = AsynCoro._Scheduled
+                                        monitor.send(exc)
                                     else:
                                         logger.warning('monitor for %s/%s has gone away!',
                                                        coro.name, coro._id)
@@ -3504,11 +3496,7 @@ class AsynCoro(object):
                                             exc = type(exc)
                                         exc = MonitorException(coro, (StopIteration,
                                                                       StopIteration(exc)))
-                                    exc = (MonitorException, exc)
-                                    request = _NetRequest('exception', {'exception':exc,
-                                                                        'coro':monitor},
-                                                          dst=monitor._location, timeout=2)
-                                    _Peer.send_req(request)
+                                    monitor.send(exc)
                             if not coro._monitors or not coro._exceptions:
                                 coro._msgs.clear()
                             coro._monitors.clear()
@@ -3598,6 +3586,8 @@ class AsynCoro(object):
                len(os.listdir(self.dest_path_prefix)) == 0:
                 os.rmdir(self.dest_path_prefix)
             logger.debug('AsynCoro terminated')
+            for func in reversed(self._atexit):
+                func()
 
     def join(self, show_running=False):
         """Wait for currently scheduled coroutines to finish. AsynCoro
@@ -3611,6 +3601,12 @@ class AsynCoro(object):
                             ' (daemon)' if coro._daemon else '')
             self._lock.release()
         self._complete.wait()
+
+    def atexit(self, func):
+        """Function 'func' will be called after the scheduler has
+        terminated.
+        """
+        self._atexit.append(func)
 
     def locate(self, name, timeout=None):
         """Must be used with 'yield' as
