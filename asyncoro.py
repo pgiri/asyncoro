@@ -2359,10 +2359,10 @@ class Coro(object):
             self._complete.wait()
         return self._value
 
-    def wait(self):
+    def finish(self):
         """Get last value 'yield'ed / value of StopIteration of
         coro. Must be used in a coroutine with 'yield' as
-        'value = yield ocoro.wait()'
+        'value = yield other_coro.finish()'
 
         Once coroutine stops (finishes) executing, the last value is
         returned.
