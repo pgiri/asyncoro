@@ -2,16 +2,6 @@
 for details.
 """
 
-__author__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
-__email__ = "pgiri@yahoo.com"
-__copyright__ = "Copyright 2014, Giridhar Pemmasani"
-__contributors__ = []
-__maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
-__license__ = "MIT"
-__url__ = "http://asyncoro.sourceforge.net"
-__status__ = "Development"
-__version__ = "0.1"
-
 __all__ = ['AsyncFile', 'AsyncPipe']
 
 import subprocess
@@ -22,7 +12,7 @@ import errno
 from functools import partial as partial_func
 
 import asyncoro3 as asyncoro
-from asyncoro3 import _AsyncPoller, logger
+from asyncoro3 import _AsyncPoller
 
 class AsyncFile(object):
     """Asynchronous interface for file-like objects in Linux and other
@@ -30,7 +20,8 @@ class AsyncFile(object):
     non-blocking and can't be used for polling to signal read/write
     events.
 
-    Tested with AsyncPipe and sockets under Linux and OS X.
+    Tested with AsyncPipe and sockets under Linux and OS X; it should
+    work on other Unix variants, but not Windows.
     """
 
     _asyncoro = None
@@ -60,16 +51,17 @@ class AsyncFile(object):
         flags = fcntl.fcntl(self._fileno, fcntl.F_GETFL)
         fcntl.fcntl(self._fileno, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
-    def read(self, size=0, timeout=None):
+    def read(self, size=0, full=False, timeout=None):
         """Read at most 'size' bytes from file; if 'size' <= 0, all
-        data up to EOF is read and returned. If 'timeout' is given,
-        Exception('timedout') will be thrown in coroutine if read is
-        not complete before timeout.
+        data up to EOF is read and returned. If 'full' is True,
+        exactly 'size' bytes are returned (unless EOF or timeout occur
+        before). If 'timeout' is given, Exception('timedout') will be
+        thrown in coroutine if read is not complete before timeout.
 
         Must be used in a coroutine with 'yield' as
         'data = yield fd.read(1024)'
         """
-        def _read(self, count):
+        def _read(self, count, full):
             try:
                 if count > 0:
                     buf = os.read(self._fileno, count)
@@ -85,64 +77,62 @@ class AsyncFile(object):
                 self._read_task = None
                 coro, self._read_coro = self._read_coro, None
                 coro.throw(*sys.exc_info())
-            else:
-                if buf:
-                    self._buflist.append(buf)
-            if count > 0:
-                if self._buflist:
-                    buf = b''.join(self._buflist)
-                    if len(buf) > count:
-                        self._buflist = [buf[count:]]
-                        buf = buf[:count]
-                    else:
-                        self._buflist = []
-                AsyncFile._notifier.clear(self, _AsyncPoller._Read)
-                self._read_coro._proceed_(buf)
-                self._read_coro = None
-            else:
-                if not buf:
-                    buf = b''.join(self._buflist)
-                    self._buflist = []
-                    AsyncFile._notifier.clear(self, _AsyncPoller._Read)
-                    self._read_coro._proceed_(buf)
-                    self._read_coro = None
+                return
+
+            if buf:
+                if full and count > 0:
+                    count -= len(buf)
+                    # assert count >= 0
+                    if count == 0:
+                        full = False
+                self._buflist.append(buf)
+                if full:
+                    self._read_task = partial_func(_read, self, count, full)
+                    return
+            if self._buflist:
+                buf = b''.join(self._buflist)
+                self._buflist = []
+            AsyncFile._notifier.clear(self, _AsyncPoller._Read)
+            self._read_coro._proceed_(buf)
+            self._read_coro = None
 
         if not size or size < 0:
             size = 0
+            full = True
         elif self._buflist:
             buf = b''.join(self._buflist)
             self._buflist = []
             if len(buf) > size:
                 self._buflist = [buf[size:]]
                 buf = buf[:size]
-            if buf:
+            if buf and ((not full) or (len(buf) == size)):
                 return buf
         self._timeout = timeout
-        self._read_task = partial_func(_read, self, size)
+        self._read_task = partial_func(_read, self, size, full)
         self._read_coro = AsyncFile._asyncoro.cur_coro()
         self._read_coro._await_()
         AsyncFile._notifier.add(self, _AsyncPoller._Read)
 
-    def readline(self, size=0, timeout=None):
+    def readline(self, size=0, sizehint=100, timeout=None):
         """Read a line up to 'size' and return. 'size' and 'timeout'
-        are as per 'read' method above.
+        are as per 'read' method above. 'sizehint' indicates
+        approximate number of bytes expected in a line. Too big/small
+        value affects performance, otherwise has no effect.
 
         Must be used with 'yield' as 'line = yield fd.readline()'
         """
         if not size or size < 0:
             size = 0
-            count = 100
-        else:
-            count = size
         if self._buflist:
             buf = b''.join(self._buflist)
             self._buflist = []
             if not buf:
-                buf = yield self.read(size=count, timeout=timeout)
+                buf = yield self.read(size=sizehint, timeout=timeout)
         else:
-            buf = yield self.read(size=count, timeout=timeout)
+            buf = yield self.read(size=sizehint, timeout=timeout)
         if not buf:
             raise StopIteration(buf)
+
         buflist = []
         while True:
             if size > 0:
@@ -161,52 +151,48 @@ class AsyncFile(object):
                     buf = buf[:pos+1]
                 raise StopIteration(buf)
             buflist.append(buf)
-            buf = yield self.read(size=count, timeout=timeout)
+            buf = yield self.read(size=sizehint, timeout=timeout)
             if not buf:
                 buf = b''.join(buflist)
                 raise StopIteration(buf)
 
-    def write(self, buf, all=False, timeout=None):
-        """Write data in 'buf' to fd. If 'all' is True, the function
-        waits till all data in buf is written and returns 0;
-        otherwise, it waits until one write completes and returns
-        length of data pending (i.e., not written).
+    def write(self, buf, full=False, timeout=None):
+        """Write data in 'buf' to fd. If 'full' is True, the function
+        waits till all data in buf is written; otherwise, it waits
+        until one write completes. It returns length of data written.
 
         Must be used with 'yield' as
-        'pending = yield fd.write(buf)' to write (some) data in buf.
+        'n = yield fd.write(buf)' to write (some) data in buf.
         """
-        def _write(self, view, size):
+        def _write(self, view, written, full):
             try:
                 n = os.write(self._fileno, view)
             except (OSError, IOError) as exc:
                 if exc.errno in (errno.EAGAIN, errno.EINTR):
-                    pass
+                    n = 0
                 else:
                     AsyncFile._notifier.clear(self, _AsyncPoller._Write)
                     self._write_task = None
                     coro, self._write_coro = self._write_coro, None
                     coro.throw(*sys.exc_info())
                     return
-            if n == len(view) or size:
-                AsyncFile._notifier.clear(self, _AsyncPoller._Write)
-                if size == 0:
+            written += n
+            if n == len(view) or not full:
+                if full:
                     view.release()
-                    self._write_coro._proceed_(0)
-                else:
-                    self._write_coro._proceed_(size - n)
+                AsyncFile._notifier.clear(self, _AsyncPoller._Write)
+                self._write_coro._proceed_(written)
                 self._write_coro = None
             else:
                 view = view[n:]
-                self._write_task = partial_func(_write, self, view, size)
+                self._write_task = partial_func(_write, self, view, written, full)
 
-        if all:
+        if full:
             view = memoryview(buf)
-            size = 0
         else:
-            size = len(buf)
             view = buf
         self._timeout = timeout
-        self._write_task = partial_func(_write, self, view, size)
+        self._write_task = partial_func(_write, self, view, 0, full)
         self._write_coro = AsyncFile._asyncoro.cur_coro()
         self._write_coro._await_()
         AsyncFile._notifier.add(self, _AsyncPoller._Write)
@@ -258,20 +244,20 @@ class AsyncPipe(object):
         else:
             self.stderr = None
 
-    def write(self, buf, all=False, timeout=None):
-        yield self.stdin.write(buf, all=all, timeout=timeout)
+    def write(self, buf, full=False, timeout=None):
+        yield self.stdin.write(buf, full=full, timeout=timeout)
 
     def read(self, size=0, timeout=None):
         yield self.stdout.read(size=size, timeout=timeout)
 
-    def readline(self, size=0, timeout=None):
-        yield self.stdout.readline(size=size, timeout=timeout)
+    def readline(self, size=0, sizehint=100, timeout=None):
+        yield self.stdout.readline(size=size, sizehint=sizehint, timeout=timeout)
 
     def read_stderr(self, size=0, timeout=None):
         yield self.stderr.read(size=size, timeout=timeout)
 
-    def readline_stderr(self, size=0, timeout=None):
-        yield self.stderr.readline(size=size, timeout=timeout)
+    def readline_stderr(self, size=0, sizehint=100, timeout=None):
+        yield self.stderr.readline(size=size, sizehint=sizehint, timeout=timeout)
 
     def communicate(self, input=None):
         """Similar to Popen's communicate. Must be used with 'yield' as
@@ -282,9 +268,9 @@ class AsyncPipe(object):
         """
         def write_proc(fd, input, coro=None):
             size = 16*1024
-            if isinstance(input, str):
-                n = yield fd.write(input, all=True)
-                if n != 0:
+            if isinstance(input, str) or isinstance(input, bytes):
+                n = yield fd.write(input, full=True)
+                if n != len(input):
                     raise Exception('write failed')
             else:
                 # TODO: how to know if 'input' is file object for
@@ -299,8 +285,8 @@ class AsyncPipe(object):
                         break
                     if isinstance(data, str):
                         data = data.encode()
-                    n = yield fd.write(data, all=True)
-                    if n != 0:
+                    n = yield fd.write(data, full=True)
+                    if n != len(data):
                         raise Exception('write failed')
                 input.close()
             fd.close()
