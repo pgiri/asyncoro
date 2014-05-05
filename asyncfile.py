@@ -265,7 +265,7 @@ class AsyncPipe(object):
         (i.e., regular file object or AsyncFile object).
         """
         def write_proc(fd, input, coro=None):
-            size = 16*1024
+            size = 16384
             if isinstance(input, str):
                 n = yield fd.write(input, full=True)
                 if n != len(input):
@@ -288,7 +288,7 @@ class AsyncPipe(object):
             fd.close()
 
         def read_proc(fd, coro=None):
-            size = 4*1024
+            size = 16384
             buflist = []
             while True:
                 buf = yield fd.read(size)

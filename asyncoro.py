@@ -1531,12 +1531,16 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                         continue
                     if event & _AsyncPoller._Read:
                         if fd._read_task is None:
-                            logger.debug('fd %s is not registered for read!', fd._fileno)
+                            logger.debug('fd %s is not registered for read; unregistering it',
+                                         fd._fileno)
+                            self.unregister(fd)
                         else:
                             fd._read_task()
                     elif event & _AsyncPoller._Write:
                         if fd._write_task is None:
-                            logger.debug('fd %s is not registered for write!', fd._fileno)
+                            logger.debug('fd %s is not registered for write; unregistering it',
+                                         fd._fileno)
+                            self.unregister(fd)
                         else:
                             fd._write_task()
                     elif event & _AsyncPoller._Hangup:
