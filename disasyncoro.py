@@ -1,5 +1,7 @@
 """This file is part of asyncoro; see http://asyncoro.sourceforge.net
 for details.
+
+This module adds API for distributed programming to AsynCoro.
 """
 
 import time

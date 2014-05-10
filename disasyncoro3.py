@@ -1,5 +1,7 @@
 """This file is part of asyncoro; see http://asyncoro.sourceforge.net
 for details.
+
+This module adds API for distributed programming to AsynCoro.
 """
 
 import time
@@ -14,7 +16,7 @@ import random
 import collections
 import copy
 
-import asyncoro
+import asyncoro3 as asyncoro
 from asyncoro3 import *
 
 __version__ = asyncoro.__version__
