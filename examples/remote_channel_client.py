@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 # example where client and server communicate through a channel.
-# use with its server
+# use with its server 'remote_channel_server.py'
 
 import sys, logging
 if sys.version_info.major >= 3:

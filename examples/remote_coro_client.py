@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 # client sends messages to a remote coroutine
-# use with its server
+# use with its server 'remote_coro_server.py'
 
 import sys, logging
 if sys.version_info.major >= 3:

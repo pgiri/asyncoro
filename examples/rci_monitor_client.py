@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+# to be used with 'rci_monitor_server.py'
 # client requests execution of coroutines on (remote) server.
 
 import sys, logging, random

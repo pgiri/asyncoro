@@ -1,5 +1,7 @@
 import sys, time
 
+# program to test performance of creating many coroutines
+# and message passing in local coroutines.
 if sys.version_info.major > 2:
     import asyncoro3 as asyncoro
 else:
@@ -22,7 +24,6 @@ def server_proc(n, coro=None):
             k += 1
             if k == n:
                 break
-        # print(str(msg))
 
 if __name__ == '__main__':
     if len(sys.argv) > 1:
@@ -32,6 +33,7 @@ if __name__ == '__main__':
 
     start = time.time()
     server = asyncoro.Coro(server_proc, n)
+    # create given number of client coroutines
     for i in range(n):
         asyncoro.Coro(client_proc, i, server)
     print('creation took %.3f sec' % (time.time() - start))
