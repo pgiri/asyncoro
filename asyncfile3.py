@@ -35,6 +35,8 @@ class AsyncFile(object):
             AsyncFile._asyncoro = asyncoro.AsynCoro.instance()
             AsyncFile._notifier = asyncoro._AsyncNotifier.instance()
         if hasattr(fd, 'fileno'):
+            if hasattr(fd, '_fileno'):
+                AsyncFile._notifier.unregister(fd)
             self._fd = fd
             self._fileno = fd.fileno()
         elif isinstance(fd, int):

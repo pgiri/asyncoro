@@ -12,12 +12,13 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "2.1"
+__version__ = "2.2"
 
-__all__ = ['AsynCoroSocket', 'AsyncSocket', 'Coro', 'AsynCoro',
+__all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
-           'HotSwapException', 'MonitorException', 'Location', 'Channel',
-           'AsynCoroThreadPool', 'AsynCoroDBCursor', 'MetaSingleton']
+           'HotSwapException', 'MonitorException', 'Location', 'Channel', 'RCI',
+           'AsyncThreadPool', 'AsyncDBCursor', 'MetaSingleton',
+           'logger', 'serialize', 'unserialize']
 
 import time
 import threading
@@ -77,10 +78,10 @@ class MetaSingleton(type):
             cls.__instance = super(MetaSingleton, cls).__call__(*args, **kwargs)
         return cls.__instance
 
-class _AsynCoroSocket(object):
+class _AsyncSocket(object):
     """Base class for use with AsynCoro, for asynchronous I/O
     completion and coroutines. This class is for internal use
-    only. Use AsynCoroSocket, defined below, instead.
+    only. Use AsyncSocket, defined below, instead.
     """
 
     __slots__ = ('_rsock', '_keyfile', '_certfile', '_ssl_version', '_fileno', '_timeout',
@@ -103,12 +104,12 @@ class _AsynCoroSocket(object):
 
         Only methods without leading underscore should be used; other
         attributes are for internal use only. In addition to usual
-        socket I/O methods, AsynCoroSocket implemnents 'recvall',
+        socket I/O methods, AsyncSocket implemnents 'recvall',
         'send_msg', 'recv_msg' and 'unwrap' methods.
         """
 
-        if isinstance(sock, AsynCoroSocket):
-            logger.warning('Socket %s is already AsynCoroSocket', sock._fileno)
+        if isinstance(sock, AsyncSocket):
+            logger.warning('Socket %s is already AsyncSocket', sock._fileno)
             for k in sock.__slots__:
                 setattr(self, k, getattr(sock, k))
         else:
@@ -125,7 +126,6 @@ class _AsynCoroSocket(object):
             self._write_coro = None
             self._write_task = None
             self._write_result = None
-            self._asyncoro = None
             self._notifier = None
 
             self.recvall = None
@@ -137,8 +137,8 @@ class _AsynCoroSocket(object):
             self.setblocking(blocking)
             # technically, we should set socket to blocking if
             # _default_timeout is None, but ignore this case
-            if _AsynCoroSocket._default_timeout:
-                self.settimeout(_AsynCoroSocket._default_timeout)
+            if _AsyncSocket._default_timeout:
+                self.settimeout(_AsyncSocket._default_timeout)
 
     def __getattr__(self, name):
         return getattr(self._rsock, name)
@@ -165,7 +165,6 @@ class _AsynCoroSocket(object):
                 self.sendall = self._sync_sendall
                 self.recv_msg = self._sync_recv_msg
                 self.send_msg = self._sync_send_msg
-            self._asyncoro = None
             self._notifier = None
         else:
             self._rsock.setblocking(0)
@@ -180,7 +179,6 @@ class _AsynCoroSocket(object):
                 self.sendall = self._async_sendall
                 self.recv_msg = self._async_recv_msg
                 self.send_msg = self._async_send_msg
-            self._asyncoro = AsynCoro.instance()
             self._notifier = _AsyncNotifier.instance()
             self._register()
 
@@ -203,15 +201,13 @@ class _AsynCoroSocket(object):
         if self._rsock:
             self._rsock.close()
             self._rsock = None
-        self._asyncoro = None
         self._read_coro = self._write_coro = None
 
     def unwrap(self):
-        """Get rid of AsynCoroSocket setup and return underlying socket
+        """Get rid of AsyncSocket setup and return underlying socket
         object.
         """
         self._unregister()
-        self._asyncoro = None
         self._notifier = None
         self._read_coro = self._write_coro = None
         sock, self._rsock = self._rsock, None
@@ -234,7 +230,7 @@ class _AsynCoroSocket(object):
         if self._blocking:
             return self._rsock.getdefalttimeout()
         else:
-            return _AsynCoroSocket._default_timeout
+            return _AsyncSocket._default_timeout
 
     def settimeout(self, timeout):
         if self._blocking:
@@ -297,7 +293,7 @@ class _AsynCoroSocket(object):
                 coro._proceed_(buf)
 
         self._read_task = functools.partial(_recv, self, bufsize, *args)
-        self._read_coro = self._asyncoro.cur_coro()
+        self._read_coro = AsynCoro.cur_coro()
         self._read_coro._await_()
         self._notifier.add(self, _AsyncPoller._Read)
         if self._certfile and self._rsock.pending():
@@ -352,7 +348,7 @@ class _AsynCoroSocket(object):
         self._read_result = bytearray(bufsize)
         view = memoryview(self._read_result)
         self._read_task = functools.partial(_recvall, self, view, *args)
-        self._read_coro = self._asyncoro.cur_coro()
+        self._read_coro = AsynCoro.cur_coro()
         self._read_coro._await_()
         self._notifier.add(self, _AsyncPoller._Read)
         if self._certfile and self._rsock.pending():
@@ -411,7 +407,7 @@ class _AsynCoroSocket(object):
                 coro._proceed_(res)
 
         self._read_task = functools.partial(_recvfrom, self, *args)
-        self._read_coro = self._asyncoro.cur_coro()
+        self._read_coro = AsynCoro.cur_coro()
         self._read_coro._await_()
         self._notifier.add(self, _AsyncPoller._Read)
 
@@ -435,7 +431,7 @@ class _AsynCoroSocket(object):
                 coro._proceed_(sent)
 
         self._write_task = functools.partial(_send, self, *args)
-        self._write_coro = self._asyncoro.cur_coro()
+        self._write_coro = AsynCoro.cur_coro()
         self._write_coro._await_()
         self._notifier.add(self, _AsyncPoller._Write)
 
@@ -459,7 +455,7 @@ class _AsynCoroSocket(object):
                 coro._proceed_(sent)
 
         self._write_task = functools.partial(_sendto, self, *args)
-        self._write_coro = self._asyncoro.cur_coro()
+        self._write_coro = AsynCoro.cur_coro()
         self._write_coro._await_()
         self._notifier.add(self, _AsyncPoller._Write)
 
@@ -489,7 +485,7 @@ class _AsynCoroSocket(object):
 
         self._write_result = memoryview(data)
         self._write_task = functools.partial(_sendall, self)
-        self._write_coro = self._asyncoro.cur_coro()
+        self._write_coro = AsynCoro.cur_coro()
         self._write_coro._await_()
         self._notifier.add(self, _AsyncPoller._Write)
 
@@ -512,7 +508,7 @@ class _AsynCoroSocket(object):
 
         Asynchronous version of socket accept method. Socket in
         returned pair is asynchronous socket (instance of
-        AsynCoroSocket with blocking=False).
+        AsyncSocket with blocking=False).
         """
         def _accept(self):
             conn, addr = self._rsock.accept()
@@ -537,8 +533,8 @@ class _AsynCoroSocket(object):
                         coro, conn._read_coro = conn._read_coro, None
                         conn._notifier.clear(conn)
                         coro._proceed_((conn, addr))
-                conn = AsynCoroSocket(conn, blocking=False, keyfile=self._keyfile,
-                                      certfile=self._certfile, ssl_version=self._ssl_version)
+                conn = AsyncSocket(conn, blocking=False, keyfile=self._keyfile,
+                                   certfile=self._certfile, ssl_version=self._ssl_version)
                 conn._rsock = ssl.wrap_socket(conn._rsock, keyfile=self._keyfile,
                                               certfile=self._certfile, server_side=True,
                                               do_handshake_on_connect=False,
@@ -550,11 +546,11 @@ class _AsynCoroSocket(object):
                 conn._read_task()
             else:
                 coro, self._read_coro = self._read_coro, None
-                conn = AsynCoroSocket(conn, blocking=False)
+                conn = AsyncSocket(conn, blocking=False)
                 coro._proceed_((conn, addr))
 
         self._read_task = functools.partial(_accept, self)
-        self._read_coro = self._asyncoro.cur_coro()
+        self._read_coro = AsynCoro.cur_coro()
         self._read_coro._await_()
         self._notifier.add(self, _AsyncPoller._Read)
 
@@ -605,7 +601,7 @@ class _AsynCoroSocket(object):
                 coro._proceed_(0)
 
         self._write_task = functools.partial(_connect, self, *args)
-        self._write_coro = self._asyncoro.cur_coro()
+        self._write_coro = AsynCoro.cur_coro()
         self._write_coro._await_()
         self._notifier.add(self, _AsyncPoller._Write)
         try:
@@ -823,7 +819,7 @@ if platform.system() == 'Windows':
                         self.cmd_wsock.send('m')
 
             def poll(self):
-                self.cmd_rsock = AsynCoroSocket(self.cmd_rsock)
+                self.cmd_rsock = AsyncSocket(self.cmd_rsock)
                 setattr(self.cmd_rsock, '_read_task', lambda : self.cmd_rsock._rsock.recv(128))
                 self.add(self.cmd_rsock, _AsyncPoller._Read)
                 while True:
@@ -923,7 +919,7 @@ if platform.system() == 'Windows':
                     self.async_poller = _AsyncPoller(self)
                     self.cmd_rsock, self.cmd_wsock = _AsyncPoller._socketpair()
                     self.cmd_wsock.setblocking(0)
-                    self.cmd_rsock = AsynCoroSocket(self.cmd_rsock)
+                    self.cmd_rsock = AsyncSocket(self.cmd_rsock)
                     self.cmd_rsock_buf = win32file.AllocateReadBuffer(128)
                     self.cmd_rsock._read_overlap.object = self.cmd_rsock_recv
                     err, n = win32file.WSARecv(self.cmd_rsock._fileno, self.cmd_rsock_buf,
@@ -1034,18 +1030,18 @@ if platform.system() == 'Windows':
                 self.iocp = None
                 self.cmd_rsock_buf = None
 
-        class AsynCoroSocket(_AsynCoroSocket):
-            """AsynCoroSocket with I/O Completion Ports (under
-            Windows). See _AsynCoroSocket above for more details.  UDP
+        class AsyncSocket(_AsyncSocket):
+            """AsyncSocket with I/O Completion Ports (under
+            Windows). See _AsyncSocket above for more details.  UDP
             traffic is handled by _AsyncPoller.
             """
 
-            __slots__ = _AsynCoroSocket.__slots__ + ('_read_overlap', '_write_overlap')
+            __slots__ = _AsyncSocket.__slots__ + ('_read_overlap', '_write_overlap')
 
             def __init__(self, *args, **kwargs):
                 self._read_overlap = None
                 self._write_overlap = None
-                _AsynCoroSocket.__init__(self, *args, **kwargs)
+                _AsyncSocket.__init__(self, *args, **kwargs)
 
             def _register(self):
                 if not self._blocking:
@@ -1056,7 +1052,7 @@ if platform.system() == 'Windows':
                     else:
                         self._notifier = _AsyncPoller.instance()
                 else:
-                    _AsynCoroSocket._register(self)
+                    _AsyncSocket._register(self)
 
             def _unregister(self):
                 if self._notifier:
@@ -1070,7 +1066,7 @@ if platform.system() == 'Windows':
                     self._notifier = None
 
             def setblocking(self, blocking):
-                _AsynCoroSocket.setblocking(self, blocking)
+                _AsyncSocket.setblocking(self, blocking)
                 if not self._blocking and self._rsock.type & socket.SOCK_STREAM:
                     self.recv = self._iocp_recv
                     self.send = self._iocp_send
@@ -1107,7 +1103,7 @@ if platform.system() == 'Windows':
 
                 self._read_result = win32file.AllocateReadBuffer(bufsize)
                 self._read_overlap.object = functools.partial(_recv, self)
-                self._read_coro = self._asyncoro.cur_coro()
+                self._read_coro = AsynCoro.cur_coro()
                 self._read_coro._await_()
                 if self._timeout:
                     self._notifier._add_timeout(self)
@@ -1139,7 +1135,7 @@ if platform.system() == 'Windows':
                             coro._proceed_(n)
 
                 self._write_overlap.object = functools.partial(_send, self)
-                self._write_coro = self._asyncoro.cur_coro()
+                self._write_coro = AsynCoro.cur_coro()
                 self._write_coro._await_()
                 if self._timeout:
                     self._notifier._add_timeout(self)
@@ -1194,7 +1190,7 @@ if platform.system() == 'Windows':
                 self._read_result = []
                 buf = win32file.AllocateReadBuffer(min(bufsize, 1048576))
                 self._read_overlap.object = functools.partial(_recvall, self, bufsize, buf)
-                self._read_coro = self._asyncoro.cur_coro()
+                self._read_coro = AsynCoro.cur_coro()
                 self._read_coro._await_()
                 if self._timeout:
                     self._notifier._add_timeout(self)
@@ -1241,7 +1237,7 @@ if platform.system() == 'Windows':
 
                 self._write_result = buffer(data, 0)
                 self._write_overlap.object = functools.partial(_sendall, self)
-                self._write_coro = self._asyncoro.cur_coro()
+                self._write_coro = AsynCoro.cur_coro()
                 self._write_coro._await_()
                 if self._timeout:
                     self._notifier._add_timeout(self)
@@ -1318,7 +1314,7 @@ if platform.system() == 'Windows':
                     if exc[0] != EINVAL:
                         raise
                 self._read_overlap.object = functools.partial(_connect, self)
-                self._read_coro = self._asyncoro.cur_coro()
+                self._read_coro = AsynCoro.cur_coro()
                 self._read_coro._await_()
                 if self._timeout:
                     self._notifier._add_timeout(self)
@@ -1330,7 +1326,7 @@ if platform.system() == 'Windows':
             def _iocp_accept(self):
                 """Internal use only; use 'accept' with 'yield'
                 instead. Socket in returned pair is asynchronous
-                socket (instance of AsynCoroSocket with blocking=False).
+                socket (instance of AsyncSocket with blocking=False).
                 """
                 def _accept(self, conn, err, n):
                     def _ssl_handshake(self, conn, addr, err, n):
@@ -1396,11 +1392,11 @@ if platform.system() == 'Windows':
                                 coro._proceed_((conn, raddr))
 
                 sock = socket.socket(self._rsock.family, self._rsock.type, self._rsock.proto)
-                conn = AsynCoroSocket(sock, keyfile=self._keyfile, certfile=self._certfile,
-                                      ssl_version=self._ssl_version)
+                conn = AsyncSocket(sock, keyfile=self._keyfile, certfile=self._certfile,
+                                   ssl_version=self._ssl_version)
                 self._read_result = win32file.AllocateReadBuffer(win32file.CalculateSocketEndPointSize(sock))
                 self._read_overlap.object = functools.partial(_accept, self, conn)
-                self._read_coro = self._asyncoro.cur_coro()
+                self._read_coro = AsynCoro.cur_coro()
                 self._read_coro._await_()
                 if self._timeout:
                     self._notifier._add_timeout(self)
@@ -1487,7 +1483,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                 self._timeout_fds = []
                 self.cmd_rsock, self.cmd_wsock = _AsyncPoller._socketpair()
                 self.cmd_wsock.setblocking(0)
-                self.cmd_rsock = AsynCoroSocket(self.cmd_rsock)
+                self.cmd_rsock = AsyncSocket(self.cmd_rsock)
                 setattr(self.cmd_rsock, '_read_task', lambda : self.cmd_rsock._rsock.recv(128))
                 self.add(self.cmd_rsock, _AsyncPoller._Read)
 
@@ -1739,10 +1735,10 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
             self.wset = set()
             self.xset = set()
 
-    AsynCoroSocket = _AsynCoroSocket
+    AsyncSocket = _AsyncSocket
     _AsyncNotifier = _AsyncPoller
 
-AsyncSocket = AsynCoroSocket
+AsynCoroSocket = AsyncSocket
 
 class Lock(object):
     """'Lock' primitive for coroutines.
@@ -1750,14 +1746,13 @@ class Lock(object):
     def __init__(self):
         self._owner = None
         self._waitlist = []
-        self._asyncoro = AsynCoro.instance()
 
     def acquire(self, blocking=True):
         """Must be used with 'yield' as 'yield lock.acquire()'.
         """
         if not blocking and self._owner is not None:
             raise StopIteration(False)
-        coro = self._asyncoro.cur_coro()
+        coro = AsynCoro.cur_coro()
         while self._owner is not None:
             self._waitlist.append(coro)
             yield coro._await_()
@@ -1767,7 +1762,7 @@ class Lock(object):
     def release(self):
         """May be used with 'yield'.
         """
-        coro = self._asyncoro.cur_coro()
+        coro = AsynCoro.cur_coro()
         if self._owner != coro:
             raise RuntimeError('"%s"/%s: invalid lock release - not locked' % (coro.name, coro._id))
         self._owner = None
@@ -1782,12 +1777,11 @@ class RLock(object):
         self._owner = None
         self._depth = 0
         self._waitlist = []
-        self._asyncoro = AsynCoro.instance()
 
     def acquire(self, blocking=True):
         """Must be used with 'yield' as 'yield rlock.acquire()'.
         """
-        coro = self._asyncoro.cur_coro()
+        coro = AsynCoro.cur_coro()
         if self._owner == coro:
             assert self._depth > 0
             self._depth += 1
@@ -1805,7 +1799,7 @@ class RLock(object):
     def release(self):
         """May be used with 'yield'.
         """
-        coro = self._asyncoro.cur_coro()
+        coro = AsynCoro.cur_coro()
         if self._owner != coro:
             raise RuntimeError('"%s"/%s: invalid lock release - owned by "%s"/%s' % \
                                (coro.name, coro._id, self._owner.name, self._owner._id))
@@ -1826,12 +1820,11 @@ class Condition(object):
         self._depth = 0
         self._waitlist = []
         self._notifylist = []
-        self._asyncoro = AsynCoro.instance()
 
     def acquire(self, blocking=True):
         """Must be used with 'yield' as 'yield cv.acquire()'.
         """
-        coro = self._asyncoro.cur_coro()
+        coro = AsynCoro.cur_coro()
         if self._owner == coro:
             assert self._depth > 0
             self._depth += 1
@@ -1849,7 +1842,7 @@ class Condition(object):
     def release(self):
         """May be used with 'yield'.
         """
-        coro = self._asyncoro.cur_coro()
+        coro = AsynCoro.cur_coro()
         if self._owner != coro:
             raise RuntimeError('"%s"/%s: invalid lock release - owned by "%s"/%s' % \
                                (coro.name, coro._id, self._owner.name, self._owner._id))
@@ -1876,7 +1869,7 @@ class Condition(object):
     def wait(self, timeout=None):
         """Must be used with 'yield' as 'yield cv.wait()'.
         """
-        coro = self._asyncoro.cur_coro()
+        coro = AsynCoro.cur_coro()
         if self._owner != coro:
             raise RuntimeError('"%s"/%s: invalid lock release - owned by "%s"/%s' % \
                                (coro.name, coro._id, self._owner.name, self._owner._id))
@@ -1913,7 +1906,6 @@ class Event(object):
     def __init__(self):
         self._flag = False
         self._waitlist = []
-        self._asyncoro = AsynCoro.instance()
 
     def set(self):
         """May be used with 'yield'.
@@ -1940,7 +1932,7 @@ class Event(object):
         """
         if self._flag:
             raise StopIteration(True)
-        coro = self._asyncoro.cur_coro()
+        coro = AsynCoro.cur_coro()
         if timeout is not None:
             if timeout <= 0:
                 raise StopIteration(False)
@@ -1958,13 +1950,12 @@ class Semaphore(object):
         assert value >= 1
         self._waitlist = []
         self._counter = value
-        self._asyncoro = AsynCoro.instance()
 
     def acquire(self, blocking=True):
         """Must be used with 'yield' as 'yield sem.acquire()'.
         """
         if blocking:
-            coro = self._asyncoro.cur_coro()
+            coro = AsynCoro.cur_coro()
             while self._counter == 0:
                 self._waitlist.append(coro)
                 yield coro._await_()
@@ -2242,7 +2233,7 @@ class Coro(object):
     def suspend(self, timeout=None, alarm_value=None):
         """Must be used with 'yield' as 'yield coro.suspend()'.
         Suspend/sleep coro (until woken up, usually by AsyncNotifier
-        in the case of AsynCoroSockets).
+        in the case of AsyncSockets).
 
         If timeout is a (floating point) number, this coro is
         suspended for that many seconds (or fractions of second). This
@@ -2283,12 +2274,11 @@ class Coro(object):
                                   dst=self._location, timeout=2)
             # request is queued for asynchronous processing
             if _Peer.send_req(request):
-                logger.warning('remote coro at %s is not valid, unsubscribing it',
-                               self._location)
-                def _unsub(self, rchannels, coro=None):
-                    for rchannel in rchannels:
-                        yield rchannel.unsubscribe(self)
-                Coro(_unsub, self, Coro._asyncoro._rchannels.values())
+                logger.warning('remote coro at %s may not be valid', self._location)
+                # def _unsub(self, rchannels, coro=None):
+                #     for rchannel in rchannels:
+                #         yield rchannel.unsubscribe(self)
+                # Coro(_unsub, self, Coro._asyncoro._rchannels.values())
                 return -1
             else:
                 return 0
@@ -2309,11 +2299,11 @@ class Coro(object):
                                   dst=self._location, timeout=timeout)
             reply = yield Coro._asyncoro._sync_reply(request, alarm_value=0)
             if reply < 0:
-                logger.warning('remote coro at %s is not valid, unsubscribing it', self._location)
-                def _unsub(self, rchannels, coro=None):
-                    for rchannel in rchannels:
-                        yield rchannel.unsubscribe(self)
-                Coro(_unsub, self, Coro._asyncoro._rchannels.values())
+                logger.warning('remote coro at %s may not be valid', self._location)
+                # def _unsub(self, rchannels, coro=None):
+                #     for rchannel in rchannels:
+                #         yield rchannel.unsubscribe(self)
+                # Coro(_unsub, self, Coro._asyncoro._rchannels.values())
                 reply = 0
         raise StopIteration(reply)
 
@@ -2480,14 +2470,19 @@ class Coro(object):
         if not args and kwargs:
             args = kwargs.pop('args', ())
             kwargs = kwargs.pop('kwargs', kwargs)
-        if kwargs.get('coro', None) is not None:
-            raise Exception('Coro function %s should not be called with ' \
-                            '"coro" parameter' % target.__name__)
+        # if kwargs.get('coro', None) is not None:
+        #     raise Exception('Coro function %s should not be called with ' \
+        #                     '"coro" parameter' % target.__name__)
         # callargs = inspect.getcallargs(target, *args, **kwargs)
         # if 'coro' not in callargs or callargs['coro'] is not None:
         #     raise Exception('Coro function "%s" should have "coro" argument with ' \
         #                     'default value None' % target.__name__)
-        kwargs['coro'] = self
+        if target.func_defaults and \
+           'coro' in target.func_code.co_varnames[:target.func_code.co_argcount][-len(target.func_defaults):]:
+            kwargs['coro'] = self
+        # argspec = inspect.getargspec(target)
+        # if argspec.defaults and 'coro' in argspec.args[-len(argspec.defaults):]:
+        #     kwargs['coro'] = self
         return target(*args, **kwargs)
 
     def __getstate__(self):
@@ -2732,12 +2727,11 @@ class Channel(object):
                                   dst=self._location, timeout=2)
             # request is queued for asynchronous processing
             if _Peer.send_req(request):
-                logger.warning('remote channel at %s is not valid, unsubscribing it',
-                               self._location)
-                def _unsub(channel, rchannels, coro=None):
-                    for rchannel in rchannels:
-                        yield rchannel.unsubscribe(channel)
-                Coro(_unsub, self, Channel._asyncoro._rchannels.values())
+                logger.warning('remote channel at %s may not be valid', self._location)
+                # def _unsub(channel, rchannels, coro=None):
+                #     for rchannel in rchannels:
+                #         yield rchannel.unsubscribe(channel)
+                # Coro(_unsub, self, Channel._asyncoro._rchannels.values())
                 return -1
         return 0
 
@@ -2920,7 +2914,7 @@ class RCI(object):
             return 0
 
     def __call__(self, *args, **kwargs):
-        """Must be used with 'yeild' as 'val = yield rci(*args, **kwargs)'.
+        """Must be used with 'yeild' as 'rcoro = yield rci(*args, **kwargs)'.
 
         Run RCI (method at remote location) with args and kwargs. Both
         args and kwargs must be serializable. Returns (remote) Coro
@@ -3009,7 +3003,7 @@ class AsynCoro(object):
     _AwaitMsg_ = 5
 
     def __init__(self, node=None, udp_port=None, tcp_port=0, ext_ip_addr=None,
-                 name=None, secret='', certfile=None, keyfile=None, notifier=None,
+                 name=None, secret=None, certfile=None, keyfile=None, notifier=None,
                  dest_path_prefix=None, max_file_size=None):
         if self.__class__.__instance is None:
             self.__class__.__instance = self
@@ -3087,19 +3081,23 @@ class AsynCoro(object):
                     self.name = str(self._location)
 
                 self._secret = secret
-                self._signature = os.urandom(20).encode('hex')
-                self._auth_code = hashlib.sha1(self._signature + secret).hexdigest()
+                if secret is None:
+                    self._signature = None
+                    self._auth_code = None
+                else:
+                    self._signature = os.urandom(20).encode('hex')
+                    self._auth_code = hashlib.sha1(self._signature + secret).hexdigest()
                 self._certfile = certfile
                 self._keyfile = keyfile
                 self._tcp_sock.listen(32)
                 logger.info('network server "%s" at %s, udp_port=%s, tcp_port=%s',
                             self.name, self._location.addr, self._udp_sock.getsockname()[1],
                             self._location.port)
-                self._tcp_sock = AsynCoroSocket(self._tcp_sock, keyfile=self._keyfile,
-                                                certfile=self._certfile)
+                self._tcp_sock = AsyncSocket(self._tcp_sock, keyfile=self._keyfile,
+                                             certfile=self._certfile)
                 self._tcp_coro = Coro(self._tcp_proc)
                 if self._udp_sock:
-                    self._udp_sock = AsynCoroSocket(self._udp_sock)
+                    self._udp_sock = AsyncSocket(self._udp_sock)
                     self._udp_coro = Coro(self._udp_proc)
             self._atexit = []
             atexit.register(self.terminate, True)
@@ -3112,10 +3110,11 @@ class AsynCoro(object):
             cls.__instance = cls(*args, **kwargs)
         return cls.__instance
 
-    def cur_coro(self):
+    @staticmethod
+    def cur_coro():
         """Must be called from a coro only.
         """
-        return self._cur_coro
+        return AsynCoro.__instance._cur_coro
 
     def location(self):
         """Get Location instance where this asyncoro is running.
@@ -3673,7 +3672,7 @@ class AsynCoro(object):
                 peer.stream = False
                 self._stream_peers.pop((addr, port), None)
             self._stream_peers.pop((node, tcp_port), None)
-        sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+        sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
         sock.settimeout(2)
         try:
             yield sock.sendto(ping_msg, (node, udp_port))
@@ -3684,7 +3683,7 @@ class AsynCoro(object):
         if tcp_port:
             req = _NetRequest('ping', kwargs={'peer':self._location, 'signature':self._signature,
                                               'version':__version__}, dst=Location(node, tcp_port))
-            sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
+            sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
             sock.settimeout(2)
             try:
                 yield sock.connect((node, tcp_port))
@@ -3728,8 +3727,8 @@ class AsynCoro(object):
         kwargs = {'file':os.path.basename(file), 'stat_buf':stat_buf,
                   'overwrite':overwrite == True, 'dest_path':dest_path}
         req = _NetRequest('send_file', kwargs=kwargs, dst=location, timeout=timeout)
-        sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
-                              keyfile=self._keyfile, certfile=self._certfile)
+        sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                           keyfile=self._keyfile, certfile=self._certfile)
         try:
             yield sock.connect((location.addr, location.port))
             req.auth = peer.auth
@@ -3795,7 +3794,7 @@ class AsynCoro(object):
         """Internal use only.
         """
         coro.set_daemon()
-        ping_sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+        ping_sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
         ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         ping_sock.settimeout(2)
         ping_msg = {'location':self._location, 'signature':self._signature, 'version':__version__}
@@ -3815,7 +3814,10 @@ class AsynCoro(object):
                 info = unserialize(msg[len('ping:'):])
                 assert info['version'] == __version__
                 req_peer = info['location']
-                auth_code = hashlib.sha1(info['signature'] + self._secret).hexdigest()
+                if self._secret is None:
+                    auth_code = None
+                else:
+                    auth_code = hashlib.sha1(info['signature'] + self._secret).hexdigest()
                 if info['location'] == self._location:
                     continue
                 peer = _Peer.peers.get((req_peer.addr, req_peer.port), None)
@@ -3826,8 +3828,8 @@ class AsynCoro(object):
 
             req = _NetRequest('ping', kwargs={'peer':self._location, 'signature':self._signature,
                                               'version':__version__}, dst=req_peer, auth=auth_code)
-            sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
-                                  keyfile=self._keyfile, certfile=self._certfile)
+            sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                               keyfile=self._keyfile, certfile=self._certfile)
             sock.settimeout(2)
             try:
                 yield sock.connect((req_peer.addr, req_peer.port))
@@ -3947,8 +3949,8 @@ class AsynCoro(object):
                     if req.src:
                         peer = _Peer.peers.get((req.src.addr, req.src.port), None)
                         if peer:
-                            sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
-                                                  keyfile=self._keyfile, certfile=self._certfile)
+                            sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                               keyfile=self._keyfile, certfile=self._certfile)
                             try:
                                 yield sock.connect((req.src.addr, req.src.port))
                                 req.auth = peer.auth
@@ -3965,8 +3967,8 @@ class AsynCoro(object):
                     if req.src:
                         peer = _Peer.peers.get((req.src.addr, req.src.port), None)
                         if peer:
-                            sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
-                                                  keyfile=self._keyfile, certfile=self._certfile)
+                            sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                               keyfile=self._keyfile, certfile=self._certfile)
                             try:
                                 yield sock.connect((req.src.addr, req.src.port))
                                 req.auth = peer.auth
@@ -3983,8 +3985,8 @@ class AsynCoro(object):
                     if req.src:
                         peer = _Peer.peers.get((req.src.addr, req.src.port), None)
                         if peer:
-                            sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
-                                                  keyfile=self._keyfile, certfile=self._certfile)
+                            sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                               keyfile=self._keyfile, certfile=self._certfile)
                             try:
                                 yield sock.connect((req.src.addr, req.src.port))
                                 req.auth = peer.auth
@@ -4042,7 +4044,10 @@ class AsynCoro(object):
             elif req.name == 'ping':
                 try:
                     req_peer = req.kwargs['peer']
-                    auth_code = hashlib.sha1(req.kwargs['signature'] + self._secret).hexdigest()
+                    if self._secret is None:
+                        auth_code = None
+                    else:
+                        auth_code = hashlib.sha1(req.kwargs['signature'] + self._secret).hexdigest()
                     assert req.kwargs['version'] == __version__
                 except:
                     # logger.debug(traceback.format_exc())
@@ -4056,8 +4061,8 @@ class AsynCoro(object):
                 pong = _NetRequest('pong',
                                    kwargs={'peer':self._location, 'signature':self._signature,
                                            'version':__version__}, dst=req_peer, auth=auth_code)
-                sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
-                                      keyfile=self._keyfile, certfile=self._certfile)
+                sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                   keyfile=self._keyfile, certfile=self._certfile)
                 sock.settimeout(2)
                 try:
                     yield sock.connect((req_peer.addr, req_peer.port))
@@ -4092,8 +4097,8 @@ class AsynCoro(object):
                 pending_reqs = [(i, req) for i, req in self._requests.iteritems() \
                                 if req.dst is None or req.dst == req_peer]
                 for rid, pending_req in pending_reqs:
-                    sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
-                                          keyfile=self._keyfile, certfile=self._certfile)
+                    sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                       keyfile=self._keyfile, certfile=self._certfile)
                     if pending_req.timeout:
                         sock.settimeout(pending_req.timeout)
                     try:
@@ -4108,7 +4113,10 @@ class AsynCoro(object):
                 try:
                     req_peer = req.kwargs['peer']
                     assert req.kwargs['version'] == __version__
-                    auth_code = hashlib.sha1(req.kwargs['signature'] + self._secret).hexdigest()
+                    if self._secret is None:
+                        auth_code = None
+                    else:
+                        auth_code = hashlib.sha1(req.kwargs['signature'] + self._secret).hexdigest()
                     # assert req_peer == req.src
                     peer = _Peer.peers.get((req_peer.addr, req_peer.port), None)
                     if peer and peer.auth == auth_code:
@@ -4143,8 +4151,8 @@ class AsynCoro(object):
                 pending_reqs = [(i, req) for i, req in self._requests.iteritems() \
                                 if req.dst is None or req.dst == req_peer]
                 for rid, pending_req in pending_reqs:
-                    sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
-                                          keyfile=self._keyfile, certfile=self._certfile)
+                    sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                       keyfile=self._keyfile, certfile=self._certfile)
                     if pending_req.timeout:
                         sock.settimeout(pending_req.timeout)
                     try:
@@ -4181,8 +4189,8 @@ class AsynCoro(object):
                     if req.src:
                         peer = _Peer.peers.get((req.src.addr, req.src.port), None)
                         if peer:
-                            sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
-                                                  keyfile=self._keyfile, certfile=self._certfile)
+                            sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                               keyfile=self._keyfile, certfile=self._certfile)
                             try:
                                 yield sock.connect((req.src.addr, req.src.port))
                                 req.auth = peer.auth
@@ -4293,8 +4301,8 @@ class AsynCoro(object):
         """
         if dst is None:
             dst = req.dst
-        sock = AsynCoroSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
-                              keyfile=self._keyfile, certfile=self._certfile)
+        sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                           keyfile=self._keyfile, certfile=self._certfile)
         if req.timeout:
             sock.settimeout(req.timeout)
         try:
@@ -4360,7 +4368,7 @@ class AsynCoro(object):
             logger.warning('unregister of "%s" is invalid', name)
             return -1
 
-class AsynCoroThreadPool(object):
+class AsyncThreadPool(object):
     """Schedule synchronous tasks with threads to be executed
     asynchronously.
 
@@ -4368,6 +4376,7 @@ class AsynCoroThreadPool(object):
     between coroutines and tasks scheduled with thread pool must be
     protected by thread locking (not coroutine locking).
     """
+
     def __init__(self, num_threads):
         self._num_threads = num_threads
         self._task_queue = Queue.Queue()
@@ -4382,31 +4391,35 @@ class AsynCoroThreadPool(object):
             if item is None:
                 self._task_queue.task_done()
                 break
-            coro, func, args, kwargs = item
+            coro, target, args, kwargs = item
             try:
-                coro._proceed_(func(*args, **kwargs))
+                val = target(*args, **kwargs)
+                coro._proceed_(val)
             except:
                 coro.throw(*sys.exc_info())
             finally:
                 self._task_queue.task_done()
 
-    def async_task(self, coro, target, *args, **kwargs):
+    def async_task(self, target, *args, **kwargs):
         """Must be used with 'yield', as
-        'yield pool.async_task(coro, generator)'.
+        'val = yield pool.async_task(target, args, kwargs)'.
 
-        @coro is coroutine where this method is called. 
+        @coro is coroutine where this method is called.
 
-        @target is function/method that will be executed
-          asynchronously in a thread.
+        @target is function/method that will be executed asynchronously
+        in a thread.
 
         @args and @kwargs are arguments and keyword arguments passed
-          to @target.
+        to @target.
 
-        This call effectively returns whatever target(*args, **kwargs) returns.
+        This call effectively returns result of executing
+        'target(*args, **kwargs)'.
         """
 
         if not inspect.isroutine(target):
-            raise RuntimeError('invalid usage: "target" must be function or method')
+            raise ValueError('invalid usage: "target" must be function or method')
+        coro = AsynCoro.cur_coro()
+        # assert isinstance(coro, Coro)
         # if arguments are passed as per Thread call, get args and kwargs
         if not args and kwargs:
             args = kwargs.pop('args', ())
@@ -4427,7 +4440,7 @@ class AsynCoroThreadPool(object):
             self._task_queue.put(None)
         self._task_queue.join()
 
-class AsynCoroDBCursor(object):
+class AsyncDBCursor(object):
     """Database cursor proxy for asynchronous processing of executions.
 
     Since connections (and cursors) can't be shared in threads,
@@ -4438,7 +4451,6 @@ class AsynCoroDBCursor(object):
         self._thread_pool = thread_pool
         self._cursor = cursor
         self._sem = Semaphore()
-        self._asyncoro = AsynCoro.instance()
 
     def __getattr__(self, name):
         return getattr(self._cursor, name)
@@ -4453,22 +4465,19 @@ class AsynCoroDBCursor(object):
         """Must be used with 'yield' as 'n = yield cursor.execute(stmt)'.
         """
         yield self._sem.acquire()
-        coro = self._asyncoro.cur_coro()
-        self._thread_pool.async_task(coro, self._exec_task,
+        self._thread_pool.async_task(self._exec_task,
                                      functools.partial(self._cursor.execute, query, args))
 
     def executemany(self, query, args):
         """Must be used with 'yield' as 'n = yield cursor.executemany(stmt)'.
         """
         yield self._sem.acquire()
-        coro = self._asyncoro.cur_coro()
-        self._thread_pool.async_task(coro, self._exec_task,
+        self._thread_pool.async_task(self._exec_task,
                                      functools.partial(self._cursor.executemany, query, args))
 
     def callproc(self, proc, args=()):
         """Must be used with 'yield' as 'yield cursor.callproc(proc)'.
         """
         yield self._sem.acquire()
-        coro = self._asyncoro.cur_coro()
-        self._thread_pool.async_task(coro, self._exec_task,
+        self._thread_pool.async_task(self._exec_task,
                                      functools.partial(self._cursor.callproc, proc, args))
