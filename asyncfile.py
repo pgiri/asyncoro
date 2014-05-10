@@ -24,15 +24,13 @@ class AsyncFile(object):
     work on other Unix variants, but not Windows.
     """
 
-    _asyncoro = None
     _notifier = None
 
     def __init__(self, fd):
         """'fd' is either a file object (e.g., obtained with 'open')
         or a file number (e.g., obtained with socket's fileno()).
         """
-        if AsyncFile._asyncoro is None:
-            AsyncFile._asyncoro = asyncoro.AsynCoro.instance()
+        if AsyncFile._notifier is None:
             AsyncFile._notifier = asyncoro._AsyncNotifier.instance()
         if hasattr(fd, 'fileno'):
             if hasattr(fd, '_fileno'):
@@ -63,12 +61,13 @@ class AsyncFile(object):
         Must be used in a coroutine with 'yield' as
         'data = yield fd.read(1024)'
         """
-        def _read(self, count, full):
+        def _read(self, size, full):
+            if size > 0:
+                count = size
+            else:
+                count = 4*1024
             try:
-                if count > 0:
-                    buf = os.read(self._fileno, count)
-                else:
-                    buf = os.read(self._fileno, 4*1024)
+                buf = os.read(self._fileno, count)
             except (OSError, IOError) as exc:
                 if exc.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
                     return
@@ -82,18 +81,17 @@ class AsyncFile(object):
                 return
 
             if buf:
-                if full and count > 0:
-                    count -= len(buf)
-                    # assert count >= 0
-                    if count == 0:
+                if full and size > 0:
+                    size -= len(buf)
+                    # assert size >= 0
+                    if size == 0:
                         full = False
                 self._buflist.append(buf)
                 if full:
-                    self._read_task = partial_func(_read, self, count, full)
+                    self._read_task = partial_func(_read, self, size, full)
                     return
             if self._buflist:
-                buf = ''.join(self._buflist)
-                self._buflist = []
+                buf, self._buflist = ''.join(self._buflist), []
             AsyncFile._notifier.clear(self, _AsyncPoller._Read)
             self._read_coro._proceed_(buf)
             self._read_coro = None
@@ -102,16 +100,14 @@ class AsyncFile(object):
             size = 0
             full = True
         elif self._buflist:
-            buf = ''.join(self._buflist)
-            self._buflist = []
+            buf, self._buflist = ''.join(self._buflist), []
             if len(buf) > size:
-                self._buflist = [buf[size:]]
-                buf = buf[:size]
-            if buf and ((not full) or (len(buf) == size)):
+                buf, self._buflist = buf[:size], [buf[size:]]
+            if (not full) or (len(buf) == size):
                 return buf
         self._timeout = timeout
         self._read_task = partial_func(_read, self, size, full)
-        self._read_coro = AsyncFile._asyncoro.cur_coro()
+        self._read_coro = asyncoro.AsynCoro.cur_coro()
         self._read_coro._await_()
         AsyncFile._notifier.add(self, _AsyncPoller._Read)
 
@@ -126,14 +122,11 @@ class AsyncFile(object):
         if not size or size < 0:
             size = 0
         if self._buflist:
-            buf = ''.join(self._buflist)
-            self._buflist = []
-            if not buf:
-                buf = yield self.read(size=sizehint, timeout=timeout)
+            buf, self._buflist = ''.join(self._buflist), []
         else:
             buf = yield self.read(size=sizehint, timeout=timeout)
-        if not buf:
-            raise StopIteration(buf)
+            if not buf:
+                raise StopIteration(buf)
 
         buflist = []
         while True:
@@ -149,8 +142,7 @@ class AsyncFile(object):
                     buf = ''.join(buflist) + buf
                     pos += sum(len(b) for b in buflist)
                 if len(buf) > pos:
-                    self._buflist.insert(0, buf[pos+1:])
-                    buf = buf[:pos+1]
+                    buf, self._buflist = buf[:pos+1], [buf[pos+1:]]
                 raise StopIteration(buf)
             buflist.append(buf)
             buf = yield self.read(size=sizehint, timeout=timeout)
@@ -193,7 +185,7 @@ class AsyncFile(object):
             view = buf
         self._timeout = timeout
         self._write_task = partial_func(_write, self, view, 0, full)
-        self._write_coro = AsyncFile._asyncoro.cur_coro()
+        self._write_coro = asyncoro.AsynCoro.cur_coro()
         self._write_coro._await_()
         AsyncFile._notifier.add(self, _AsyncPoller._Write)
 
