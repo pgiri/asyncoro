@@ -966,7 +966,7 @@ if platform.system() == 'Windows':
                     self.poll_timeout = 0
                 elif self._timeouts:
                     self.poll_timeout = self._timeouts[0] - _time()
-                    if self.poll_timeout < 0.001:
+                    if self.poll_timeout < 0.0001:
                         self.poll_timeout = 0
                     elif timeout is not None:
                         self.poll_timeout = min(timeout, self.poll_timeout)
@@ -1511,7 +1511,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                 poll_timeout = timeout
             elif self._timeouts:
                 poll_timeout = self._timeouts[0] - _time()
-                if poll_timeout < 0.001:
+                if poll_timeout < 0.0001:
                     poll_timeout = 0
                 elif timeout is not None:
                     poll_timeout = min(timeout, poll_timeout)
@@ -2755,19 +2755,12 @@ class Channel(object):
         self._transform = None
 
 class AsynCoro(object, metaclass=MetaSingleton):
-    """Coroutine scheduler. Methods starting with '_' are for internal
-    use only.
+    """Coroutine scheduler.
 
-    AsynCoro can be initialized with an event notifier that provides
-    'poll' and 'interrupt' methods. AsynCoro calls 'poll' method to
-    deliver events to coroutines (typically, processing I/O events and
-    calling 'resume' methods), and 'interrupt' method to cause current
-    (blocking) 'poll' method to terminate so control is returned to
-    AsynCoro. 'poll' method is called with timeout argument. If
-    timeout is 0, 'poll' should deliver events without blocking, if
-    timeout is None, 'poll' may block (i.e., can wait indefinitely for
-    events to occur) and if timeout is a number, 'poll' should wait at
-    most that many seconds before returning (control to AsynCoro).
+    The scheduler is created and started automatically (when a
+    coroutine is created, for example), so there is no reason to
+    create it explicitly. To use distributed programming, AsynCoro in
+    disasyncoro module should be used.
     """
 
     __instance = None
@@ -2803,8 +2796,6 @@ class AsynCoro(object, metaclass=MetaSingleton):
             else:
                 self._notifier = notifier
             self._polling = False
-            self._tcp_sock = None
-            self._udp_sock = None
             self._channels = {}
             self._scheduler = threading.Thread(target=self._schedule)
             self._scheduler.daemon = True
@@ -3040,7 +3031,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                     now = _time()
                     timeout = self._timeouts[0][0]
                     timeout -= now
-                    if timeout < 0.001:
+                    if timeout < 0.0001:
                         timeout = 0
                 else:
                     timeout = None
@@ -3052,7 +3043,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
             if self._timeouts:
                 # wake up timed suspends; pollers may timeout slightly
                 # earlier, so give a bit of slack
-                now = _time() + 0.001
+                now = _time() + 0.0001
                 while self._timeouts and self._timeouts[0][0] <= now:
                     timeout, cid, alarm_value = heappop(self._timeouts)
                     assert timeout <= now
@@ -3069,21 +3060,14 @@ class AsynCoro(object, metaclass=MetaSingleton):
                     self._scheduled.add(cid)
                     coro._state = AsynCoro._Scheduled
                     coro._value = alarm_value
-            scheduled = list(self._scheduled)
+            # scheduled = list(self._scheduled)
+            scheduled = [self._coros.get(cid, None) for cid in self._scheduled]
             # random.shuffle(scheduled)
             self._lock.release()
 
-            for cid in scheduled:
-                self._lock.acquire()
-                coro = self._coros.get(cid, None)
-                if coro is None or coro._state != AsynCoro._Scheduled:
-                    self._lock.release()
-                    if coro is not None:
-                        logger.warning('ignoring %s/%s with state %s', coro._name, cid, coro._state)
-                    continue
+            for coro in scheduled:
                 coro._state = AsynCoro._Running
                 self._cur_coro = coro
-                self._lock.release()
 
                 try:
                     if coro._exceptions:
@@ -3115,7 +3099,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                                 coro._generator.close()
                             except:
                                 logger.warning('closing %s/%s raised exception: %s',
-                                               coro._name, cid, traceback.format_exc())
+                                               coro._name, coro._id, traceback.format_exc())
                             coro._generator = v[0]
                             coro._name = coro._generator.__name__
                             coro._exceptions = []
@@ -3125,7 +3109,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                             coro._state = AsynCoro._Scheduled
                         else:
                             logger.warning('invalid HotSwapException from %s/%s ignored',
-                                           coro._name, cid)
+                                           coro._name, coro._id)
                         self._lock.release()
                         continue
                     else:
@@ -3156,10 +3140,10 @@ class AsynCoro(object, metaclass=MetaSingleton):
                                 logger.warning('closing %s raised exception: %s',
                                                coro._name, traceback.format_exc())
                         # delete this coro
-                        if self._coros.pop(cid, None) == coro:
+                        if self._coros.pop(coro._id, None) == coro:
                             if coro._state not in (AsynCoro._Scheduled, AsynCoro._Running):
                                 logger.warning('coro "%s" is in state: %s' % (coro._name, coro._state))
-                            self._scheduled.discard(cid)
+                            self._scheduled.discard(coro._id)
                             if coro._complete:
                                 coro._complete.set()
                             else:
@@ -3210,7 +3194,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                                 coro._msgs.clear()
                             coro._monitors.clear()
                         else:
-                            logger.warning('coro %s/%s already removed?', coro._name, cid)
+                            logger.warning('coro %s/%s already removed?', coro._name, coro._id)
                     self._lock.release()
                 else:
                     self._lock.acquire()
@@ -3235,6 +3219,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                         coro._generator = retval
                         coro._value = None
                     self._lock.release()
+            self._cur_coro = None
 
         self._lock.acquire()
         for cid, coro in self._coros.items():
@@ -3284,10 +3269,6 @@ class AsynCoro(object, metaclass=MetaSingleton):
                     Coro(_terminate, self, peer, Location(addr, port))
                 self._complete.wait()
             self._terminate = True
-            if self._tcp_sock:
-                self._tcp_sock.close()
-            if self._udp_sock:
-                self._udp_sock.close()
             self._notifier.interrupt()
             self._complete.wait()
             self._notifier.terminate()

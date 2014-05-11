@@ -264,8 +264,8 @@ class RCI(object):
         self._location = state['_location']
 
 class AsynCoro(asyncoro.AsynCoro):
-    """Coroutine scheduler. Methods starting with '_' are for internal
-    use only.
+    """Coroutine scheduler. This adds network services to
+    asyncoro.AsynCoro so it can communicate with peers.
 
     If either 'node' or 'udp_port' is not None, asyncoro runs network
     services so distributed coroutines can exhcnage messages. If
@@ -284,6 +284,13 @@ class AsynCoro(asyncoro.AsynCoro):
     'ext_ip_addr' is the IP address of NAT firewall/gateway if
     asyncoro is behind that firewall/gateway.
 
+    'secret' is string that is used to hash which is used for
+    authentication, so only peers that have same secret can
+    communicate.
+
+    'certfile' and 'keyfile' are path names for files containing SSL
+    certificates; see Python 'ssl' module.
+
     'dest_path_prefix' is path to directory (folder) where transferred
     files are saved. If path doesn't exist, asyncoro creates
     directory with that path. Senders may specify 'dest_path' with
@@ -298,8 +305,8 @@ class AsynCoro(asyncoro.AsynCoro):
     __metaclass__ = MetaSingleton
     __instance = None
 
-    def __init__(self, udp_port=None, tcp_port=0, node=None, ext_ip_addr=None,
-                 name=None, secret=None, certfile=None, keyfile=None, notifier=None,
+    def __init__(self, udp_port=0, tcp_port=0, node=None, ext_ip_addr=None,
+                 name=None, secret='', certfile=None, keyfile=None, notifier=None,
                  dest_path_prefix=None, max_file_size=None):
         if self.__class__.__instance is None:
             super(AsynCoro, self).__init__(notifier=notifier)
@@ -373,6 +380,27 @@ class AsynCoro(asyncoro.AsynCoro):
         """Get name of AsynCoro.
         """
         return self._name
+
+    def terminate(self, await_non_daemons=True):
+        """Terminate (singleton) instance of AsynCoro. This 'kills'
+        all running coroutines.
+
+        Should be called from main program (or a thread, but _not_
+        from coroutines).
+        """
+        if self._tcp_coro:
+            self._tcp_coro.terminate()
+            self._tcp_coro = None
+        if self._tcp_sock:
+            self._tcp_sock.close()
+            self._tcp_sock = None
+        if self._udp_coro:
+            self._udp_coro.terminate()
+            self._udp_coro = None
+        if self._udp_sock:
+            self._udp_sock.close()
+            self._udp_sock = None
+        super(AsynCoro, self).terminate(await_non_daemons)
 
     def locate(self, name, timeout=None):
         """Must be used with 'yield' as
@@ -459,7 +487,7 @@ class AsynCoro(asyncoro.AsynCoro):
 
     def send_file(self, location, file, dest_path=None, overwrite=False, timeout=None):
         """Must be used with 'yield' as
-        'loc = yield scheduler.send_file(location, "file1")'.
+        'val = yield scheduler.send_file(location, "file1")'.
 
         Transfer 'file' to peer at 'location'. If 'dest_path' is not
         None, it must be a relative path (not absolute path), in which
@@ -545,14 +573,6 @@ class AsynCoro(asyncoro.AsynCoro):
             reply = -1
         raise StopIteration(reply)
 
-    def _tcp_proc(self, coro=None):
-        """Internal use only.
-        """
-        coro.set_daemon()
-        while True:
-            conn, addr = yield self._tcp_sock.accept()
-            Coro(self._tcp_task, conn, addr)
-
     def _udp_proc(self, coro=None):
         """Internal use only.
         """
@@ -600,6 +620,14 @@ class AsynCoro(asyncoro.AsynCoro):
             except:
                 pass
             sock.close()
+
+    def _tcp_proc(self, coro=None):
+        """Internal use only.
+        """
+        coro.set_daemon()
+        while True:
+            conn, addr = yield self._tcp_sock.accept()
+            Coro(self._tcp_task, conn, addr)
 
     def _tcp_task(self, conn, addr, coro=None):
         """Internal use only.
