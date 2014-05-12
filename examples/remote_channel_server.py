@@ -9,6 +9,7 @@
 # appropriately.
 
 import sys, logging
+# import disasyncoro to use distributed version of AsynCoro
 if sys.version_info.major >= 3:
     import disasyncoro3 as asyncoro
 else:
@@ -26,7 +27,7 @@ def receiver_proc(coro=None):
                   (msg['msg'], msg['sender'].name, msg['sender'].location))
 
 asyncoro.logger.setLevel(logging.DEBUG)
-scheduler = asyncoro.AsynCoro(udp_port=0)
+# scheduler = asyncoro.AsynCoro()
 channel = asyncoro.Channel('2clients')
 # register channel so client can get a reference to it
 channel.register()

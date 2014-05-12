@@ -4,6 +4,7 @@
 # client requests execution of coroutines on (remote) server.
 
 import sys, logging, random
+# import disasyncoro to use distributed version of AsynCoro
 if sys.version_info.major >= 3:
     import disasyncoro3 as asyncoro
 else:
@@ -54,5 +55,5 @@ def rci_test(coro=None):
         yield coro.sleep(random.uniform(0, 1))
 
 asyncoro.logger.setLevel(logging.DEBUG)
-scheduler = asyncoro.AsynCoro(udp_port=0, name='client', secret='test')
+scheduler = asyncoro.AsynCoro(name='client', secret='test')
 asyncoro.Coro(rci_test)

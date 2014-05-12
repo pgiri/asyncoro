@@ -36,8 +36,8 @@ if __name__ == '__main__':
     # create given number of client coroutines
     for i in range(n):
         asyncoro.Coro(client_proc, i, server)
-    print('creation took %.3f sec' % (time.time() - start))
+    print('creating %d coroutines took %.3f sec' % (n, time.time() - start))
     proc_start = time.time()
     # wait for server to finish
     server.value()
-    print('processing took %.3f sec' % (time.time() - proc_start))
+    print('messaging took %.3f sec' % (time.time() - proc_start))

@@ -4,7 +4,6 @@ for details.
 This module adds API for distributed programming to AsynCoro.
 """
 
-import time
 import socket
 import inspect
 import traceback
@@ -328,7 +327,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             self.max_file_size = max_file_size
             if not udp_port:
                 udp_port = 51350
-            self._udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self._udp_sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
             if hasattr(socket, 'SO_REUSEADDR'):
                 self._udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             if hasattr(socket, 'SO_REUSEPORT'):
@@ -370,9 +369,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             self._tcp_sock = AsyncSocket(self._tcp_sock, keyfile=self._keyfile,
                                          certfile=self._certfile)
             self._tcp_coro = Coro(self._tcp_proc)
-            if self._udp_sock:
-                self._udp_sock = AsyncSocket(self._udp_sock)
-                self._udp_coro = Coro(self._udp_proc)
+            self._udp_coro = Coro(self._udp_proc)
 
     @property
     def name(self):
@@ -387,19 +384,20 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
         Should be called from main program (or a thread, but _not_
         from coroutines).
         """
-        if self._tcp_coro:
-            self._tcp_coro.terminate()
-            self._tcp_coro = None
+        super(AsynCoro, self).terminate(await_non_daemons)
         if self._tcp_sock:
             self._tcp_sock.close()
             self._tcp_sock = None
-        if self._udp_coro:
-            self._udp_coro.terminate()
-            self._udp_coro = None
+            self._tcp_coro = None
         if self._udp_sock:
             self._udp_sock.close()
             self._udp_sock = None
-        super(AsynCoro, self).terminate(await_non_daemons)
+            self._udp_coro = None
+        self._stream_peers = {}
+        self._rcoros = {}
+        self._rchannels = {}
+        self._rcis = {}
+        self._requests = {}
 
     def locate(self, name, timeout=None):
         """Must be used with 'yield' as

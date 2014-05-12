@@ -9,6 +9,7 @@
 # appropriately.
 
 import sys, logging
+# import disasyncoro to use distributed version of AsynCoro
 if sys.version_info.major >= 3:
     import disasyncoro3 as asyncoro
 else:
@@ -23,7 +24,7 @@ def receiver(coro=None):
 
 asyncoro.logger.setLevel(logging.DEBUG)
 # call with 'udp_port=0' to start network services
-scheduler = asyncoro.AsynCoro(udp_port=0, secret='key')
+# scheduler = asyncoro.AsynCoro(secret='key')
 
 asyncoro.Coro(receiver)
 while True:

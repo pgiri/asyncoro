@@ -4,6 +4,7 @@
 # use with its server 'remote_coro_server.py'
 
 import sys, logging
+# import disasyncoro to use distributed version of AsynCoro
 if sys.version_info.major >= 3:
     import disasyncoro3 as asyncoro
 else:
@@ -18,6 +19,5 @@ def sender(coro=None):
         rcoro.send('message %s' % x)
 
 asyncoro.logger.setLevel(logging.DEBUG)
-# call with 'udp_port=0' to start network services
-scheduler = asyncoro.AsynCoro(udp_port=0, secret='key')
+# scheduler = asyncoro.AsynCoro(secret='key')
 asyncoro.Coro(sender)

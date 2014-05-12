@@ -8,6 +8,7 @@
 # appropriately.
 
 import sys, logging
+# import disasyncoro to use distributed version of AsynCoro
 if sys.version_info.major >= 3:
     import disasyncoro3 as asyncoro
 else:
@@ -27,9 +28,8 @@ def rci_1(a, b=1, coro=None):
         raise Exception('invalid invocation: %s' % b)
 
 asyncoro.logger.setLevel(logging.DEBUG)
-# start asyncoro with udp_port=0 to start network services;
 # 'secret' is set so only peers that use same secret can communicate
-scheduler = asyncoro.AsynCoro(udp_port=0, name='server', secret='test')
+scheduler = asyncoro.AsynCoro(name='server', secret='test')
 # register rci_1 so remote clients can request execution
 rci1 = asyncoro.RCI(rci_1)
 rci1.register()

@@ -876,6 +876,7 @@ if platform.system() == 'Windows':
                 self._terminate = True
                 self.cmd_wsock.send('x')
                 self.poll_thread.join()
+                self.__class__.__instance = None
 
             @staticmethod
             def _socketpair():
@@ -1029,6 +1030,7 @@ if platform.system() == 'Windows':
                 win32file.CloseHandle(self.iocp)
                 self.iocp = None
                 self.cmd_rsock_buf = None
+                self.__class__.__instance = None
 
         class AsyncSocket(_AsyncSocket):
             """AsyncSocket with I/O Completion Ports (under
@@ -1570,6 +1572,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
             self._timeouts = []
             self._timeout_fds = []
             self._fds = {}
+            self.__class__.__instance = None
 
         def _add_timeout(self, fd):
             if fd._timeout:
@@ -2763,11 +2766,11 @@ class AsynCoro(object):
                 self._notifier = notifier
             self._polling = False
             self._channels = {}
+            self._atexit = []
             self._scheduler = threading.Thread(target=self._schedule)
             self._scheduler.daemon = True
             self._scheduler.start()
             self._location = None
-            self._atexit = []
             atexit.register(self.terminate, True)
 
     @classmethod
@@ -3041,6 +3044,7 @@ class AsynCoro(object):
                         if exc[0] == GeneratorExit:
                             # assert str(exc[1]) == 'close'
                             coro._generator.close()
+                            retval = coro._value
                         else:
                             retval = coro._generator.throw(*exc)
                     else:
@@ -3244,6 +3248,9 @@ class AsynCoro(object):
             logger.debug('AsynCoro terminated')
             for func in reversed(self._atexit):
                 func()
+            self._channels = {}
+            self._atexit = []
+            self.__class__.__instance = None
 
     def join(self, show_running=False):
         """Wait for currently scheduled coroutines to finish. AsynCoro

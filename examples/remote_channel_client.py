@@ -4,6 +4,7 @@
 # use with its server 'remote_channel_server.py'
 
 import sys, logging
+# import disasyncoro to use distributed version of AsynCoro
 if sys.version_info.major >= 3:
     import disasyncoro3 as asyncoro
 else:
@@ -38,6 +39,5 @@ def receiver_proc2(coro=None):
     yield rchannel.unsubscribe(coro)
 
 asyncoro.logger.setLevel(logging.DEBUG)
-# call with 'udp_port=0' to start network services
-scheduler = asyncoro.AsynCoro(udp_port=0)
+# scheduler = asyncoro.AsynCoro()
 asyncoro.Coro(receiver_proc2)
