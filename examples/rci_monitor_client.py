@@ -35,13 +35,15 @@ def rci_test(coro=None):
     # so add it explicitly
     # yield scheduler.peer('192.168.21.5')
 
-    # find where 'rci_1' is registered; alternately, location can be
-    # explicitly created with asyncoro.Location or obtained with
-    # 'locate' of asyncoro etc.
+    # find where 'rci_1' is registered (with given name in any
+    # known peer)
+    rci1 = yield asyncoro.RCI.locate('rci_1')
+    print('RCI is at %s' % rci1.location)
+    # alternately, location can be explicitly created with
+    # asyncoro.Location or obtained with 'locate' of asyncoro etc.
     loc = yield scheduler.locate('server')
-    asyncoro.logger.debug('server at %s' % loc)
     rci1 = yield asyncoro.RCI.locate('rci_1', loc)
-    # print('location: %s' % (yield rci1.locate(loc)))
+    print('RCI is at %s' % rci1.location)
 
     n = 5
     monitor = asyncoro.Coro(monitor_proc, n)

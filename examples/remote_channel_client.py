@@ -27,6 +27,7 @@ def receiver_proc2(coro=None):
     rchannel = yield asyncoro.Channel.locate('2clients')
     # this coro subscribes to the channel, so gets messages to server
     # channel
+    print('server is at %s' % rchannel.location)
     if (yield rchannel.subscribe(coro)) != 0:
         raise Exception('subscription failed')
     asyncoro.Coro(sender_proc, rchannel)

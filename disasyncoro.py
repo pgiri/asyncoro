@@ -166,6 +166,12 @@ class RCI(object):
         self._location = RCI._asyncoro._location
 
     @property
+    def location(self):
+        """Get Location instance where this RCI is running.
+        """
+        return copy.copy(self._location)
+
+    @property
     def name(self):
         """Get name of RCI.
         """
@@ -371,12 +377,6 @@ class AsynCoro(asyncoro.AsynCoro):
                                          certfile=self._certfile)
             self._tcp_coro = Coro(self._tcp_proc)
             self._udp_coro = Coro(self._udp_proc)
-
-    @property
-    def name(self):
-        """Get name of AsynCoro.
-        """
-        return self._name
 
     def terminate(self, await_non_daemons=True):
         """Terminate (singleton) instance of AsynCoro. This 'kills'

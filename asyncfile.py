@@ -69,7 +69,7 @@ class AsyncFile(object):
             if size > 0:
                 count = size
             else:
-                count = 4*1024
+                count = 4096
             try:
                 buf = os.read(self._fileno, count)
             except (OSError, IOError) as exc:

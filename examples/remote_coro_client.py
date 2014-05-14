@@ -15,6 +15,7 @@ def sender(coro=None):
     # True for streaming messages to it
     # yield scheduler.peer('remote.peer.ip', stream_send=True)
     rcoro = yield asyncoro.Coro.locate('server_coro')
+    print('server is at %s' % rcoro.location)
     for x in range(10):
         rcoro.send('message %s' % x)
 
