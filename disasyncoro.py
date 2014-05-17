@@ -154,13 +154,13 @@ class RCI(object):
         coroutines. If 'name' is not given, method's function name is
         used for registering.
         """
+        if not inspect.isgeneratorfunction(method):
+            raise RuntimeError('method must be generator function')
         self._method = method
         if name:
             self._name = name
-        elif inspect.isgeneratorfunction(method):
-            self._name = method.__name__
         else:
-            self._name = None
+            self._name = method.__name__
         if RCI._asyncoro is None:
             RCI._asyncoro = AsynCoro.instance()
         self._location = RCI._asyncoro._location
@@ -210,7 +210,7 @@ class RCI(object):
             rci = yield RCI._asyncoro._sync_reply(req)
         raise StopIteration(rci)
 
-    def register(self, name=None):
+    def register(self):
         """RCI must be registered so it can be located.
         """
         if self._location != RCI._asyncoro._location:
@@ -218,12 +218,8 @@ class RCI(object):
         if not inspect.isgeneratorfunction(self._method):
             return -1
         RCI._asyncoro._lock.acquire()
-        if not name:
-            name = self._name
-        else:
-            self._name = name
-        if RCI._asyncoro._rcis.get(name, None) is None:
-            RCI._asyncoro._rcis[name] = self
+        if RCI._asyncoro._rcis.get(self._name, None) is None:
+            RCI._asyncoro._rcis[self._name] = self
             RCI._asyncoro._lock.release()
             return 0
         else:
@@ -678,7 +674,7 @@ class AsynCoro(asyncoro.AsynCoro):
                         else:
                             logger.warning('ignoring message to invalid coro %s', cid)
                     else:
-                        name = req.kwargs.get('name', None)
+                        name = req.kwargs.get('channel', None)
                         if name is not None:
                             channel = self._channels.get(name, None)
                             if channel is not None:
@@ -704,7 +700,7 @@ class AsynCoro(asyncoro.AsynCoro):
                         else:
                             logger.warning('ignoring message to invalid coro %s', cid)
                     else:
-                        name = req.kwargs.get('name', None)
+                        name = req.kwargs.get('channel', None)
                         if name is not None:
                             channel = self._channels.get(name, None)
                             if channel is not None:
@@ -1120,7 +1116,8 @@ class AsynCoro(asyncoro.AsynCoro):
     def _register_channel(self, channel, name):
         """Internal use only.
         """
-        if self._rchannels.get(name, None) is None:
+        cur = self._rchannels.get(name, None)
+        if cur is None or self._channels.get(cur.name, None) is None:
             self._rchannels[name] = channel
             return 0
         else:
@@ -1130,17 +1127,17 @@ class AsynCoro(asyncoro.AsynCoro):
     def _unregister_channel(self, channel, name):
         """Internal use only.
         """
-        if self._rchannels.get(name, None) is channel:
-            self._rchannels.pop(name)
+        if self._rchannels.pop(name, None) is channel:
             return 0
         else:
-            logger.warning('unregister of "%s" is invalid', name)
+            # logger.warning('channel "%s" is not registered', name)
             return -1
 
     def _register_coro(self, coro, name):
         """Internal use only.
         """
-        if self._rcoros.get(name, None) is None:
+        cur = self._rcoros.get(name, None)
+        if cur is None or self._coros.get(cur._id, None) is None:
             self._rcoros[name] = coro
             return 0
         else:
@@ -1150,11 +1147,10 @@ class AsynCoro(asyncoro.AsynCoro):
     def _unregister_coro(self, coro, name):
         """Internal use only.
         """
-        if self._rcoros.get(name, None) is coro:
-            self._rcoros.pop(name)
+        if self._rcoros.pop(name, None) is coro:
             return 0
         else:
-            logger.warning('unregister of "%s" is invalid', name)
+            # logger.warning('coro "%s" is not registered', name)
             return -1
 
 asyncoro._NetRequest = _NetRequest

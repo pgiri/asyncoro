@@ -2493,24 +2493,20 @@ class Channel(object):
             rchannel = yield Channel._asyncoro._sync_reply(req)
         raise StopIteration(rchannel)
 
-    def register(self, name=None):
+    def register(self):
         """A registered channel can be located (with 'locate') by a
         coroutine on a remote asyncoro.
         """
         if self._location != Channel._asyncoro._location:
             return -1
-        if not name:
-            name = self._name
-        return Channel._asyncoro._register_channel(self, name)
+        return Channel._asyncoro._register_channel(self, self._name)
 
-    def unregister(self, name=None):
+    def unregister(self):
         """Unregister channel (see 'register' above).
         """
         if self._location != Channel._asyncoro._location:
             return -1
-        if not name:
-            name = self._name
-        return Channel._asyncoro._unregister_channel(self, name)
+        return Channel._asyncoro._unregister_channel(self, self._name)
 
     def set_transform(self, transform):
         if self._location != Channel._asyncoro._location:
@@ -2609,7 +2605,7 @@ class Channel(object):
                 subscriber.send(message)
         else:
             # remote channel
-            request = _NetRequest('send', kwargs={'name':self._name, 'message':message},
+            request = _NetRequest('send', kwargs={'channel':self._name, 'message':message},
                                   dst=self._location, timeout=2)
             # request is queued for asynchronous processing
             if _Peer.send_req(request):
@@ -2684,7 +2680,7 @@ class Channel(object):
             raise StopIteration(count['reply'])
         else:
             # remote channel
-            request = _NetRequest('deliver', kwargs={'name':self._name, 'message':message, 'n':n},
+            request = _NetRequest('deliver', kwargs={'channel':self._name, 'message':message, 'n':n},
                                   dst=self._location, timeout=timeout)
             reply = yield Channel._asyncoro._sync_reply(request, alarm_value=0)
             if reply < 0:
@@ -2696,6 +2692,14 @@ class Channel(object):
                 # Coro(_unsub, self, Channel._asyncoro._rchannels.values())
                 reply = 0
             raise StopIteration(reply)
+
+    def close(self):
+        if self._location == Channel._asyncoro._location:
+            self.unregister()
+            self._subscribers = set()
+            Channel._asyncoro._lock.acquire()
+            Channel._asyncoro._channels.pop(self._name, None)
+            Channel._asyncoro._lock.release()
 
     def __getstate__(self):
         state = {'_name':self._name, '_location':self._location}
