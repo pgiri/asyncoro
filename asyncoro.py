@@ -2328,28 +2328,6 @@ class Coro(object):
             reply = yield Coro._asyncoro._sync_reply(request)
         raise StopIteration(reply)
         
-    def restart(self, target, *args, **kwargs):
-        """If this coroutine is monitored by another coroutine, that
-        monitor can restart the coroutine with the (new) generator.
-
-        Pending messages are not reset, so new generator can process
-        them.
-        """
-        if self._generator:
-            try:
-                self._generator.close()
-            except:
-                logger.warning('closing %s raised exception: %s',
-                               self._generator.__name__, traceback.format_exc())
-        self._generator = self.__get_generator(target, *args, **kwargs)
-        self._name = target.__name__
-        self._value = None
-        self._exceptions = []
-        self._timeout = None
-        self._daemon = False
-        self._hot_swappable = False
-        Coro._asyncoro._add(self)
-
     def _await_(self, timeout=None, alarm_value=None):
         """Internal use only.
         """
@@ -2977,9 +2955,10 @@ class AsynCoro(object):
         if coro._callers or not coro._hot_swappable:
             logger.debug('postponing hot swapping of %s', str(coro))
             self._lock.release()
-            return 1
+            return 0
         else:
             coro._timeout = None
+            # TODO: check that another HotSwapException is not pending?
             coro._exceptions.append((HotSwapException, HotSwapException(coro._new_generator)))
             coro._new_generator = None
             # assert coro._state != AsynCoro._AwaitIO_
@@ -3075,7 +3054,7 @@ class AsynCoro(object):
                                 logger.warning('closing %s/%s raised exception: %s',
                                                coro._name, coro._id, traceback.format_exc())
                             coro._generator = v[0]
-                            coro._name = coro._generator.__name__
+                            # coro._name = coro._generator.__name__
                             coro._exceptions = []
                             coro._value = None
                             # coro._msgs is not reset, so new
