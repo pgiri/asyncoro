@@ -627,7 +627,10 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
         """Internal use only.
         """
         while True:
-            msg = yield conn.recv_msg()
+            try:
+                msg = yield conn.recv_msg()
+            except:
+                break
             if not msg:
                 break
             req = None
@@ -782,24 +785,6 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                             sock.close()
                     else:
                         yield conn.send_msg(serialize(rci))
-            elif req.name == 'subscribe':
-                # synchronous message
-                assert req.src is None
-                assert req.dst == self._location
-                reply = -1
-                channel = self._rchannels.get(req.kwargs['name'], None)
-                if channel is not None and channel._location == self._location:
-                    subscriber = None
-                    coro = req.kwargs.get('coro', None)
-                    if coro is not None:
-                        subscriber = coro
-                    else:
-                        rchannel = req.kwargs.get('channel', None)
-                        if rchannel is not None:
-                            subscriber = rchannel
-                    if subscriber is not None:
-                        reply = yield channel.subscribe(subscriber)
-                yield conn.send_msg(serialize(reply))
             elif req.name == 'monitor':
                 # synchronous message
                 assert req.src is None
@@ -950,22 +935,49 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                         # logger.debug(traceback.format_exc())
                         pass
                     sock.close()
+            elif req.name == 'subscribe':
+                # synchronous message
+                assert req.src is None
+                assert req.dst == self._location
+                reply = -1
+                name = req.kwargs.get('channel', None)
+                if name:
+                    channel = self._channels.get(name, None)
+                    if channel is not None and channel._location == self._location:
+                        subscriber = req.kwargs.get('subscriber', None)
+                        if subscriber is not None:
+                            if isinstance(subscriber, Coro):
+                                if subscriber._location == self._location:
+                                    subscriber = self._coros.get(int(subscriber._id), None)
+                                else:
+                                    subscriber._id = int(subscriber._id)
+                                reply = yield channel.subscribe(subscriber)
+                            elif isinstance(subsriber, Channel):
+                                if subscriber._location == self._location:
+                                    subscriber = self._channels.get(subscriber._name, None)
+                                reply = yield channel.subscribe(subscriber)
+                yield conn.send_msg(serialize(reply))
             elif req.name == 'unsubscribe':
                 # synchronous message
                 assert req.src is None
                 assert req.dst == self._location
                 reply = -1
-                channel = self._rchannels.get(req.kwargs['name'], None)
-                if channel is not None and channel._location == self._location:
-                    rcoro = req.kwargs.get('coro', None)
-                    if rcoro is not None:
-                        subscriber = rcoro
-                    else:
-                        rchannel = req.kwargs.get('channel', None)
-                        if rchannel is not None:
-                            subscriber = rchannel
-                    if subscriber is not None:
-                        reply = yield channel.unsubscribe(subscriber)
+                name = req.kwargs.get('channel', None)
+                if name:
+                    channel = self._channels.get(name, None)
+                    if channel is not None and channel._location == self._location:
+                        subscriber = req.kwargs.get('subscriber', None)
+                        if subscriber is not None:
+                            if isinstance(subscriber, Coro):
+                                if subscriber._location == self._location:
+                                    subscriber = self._coros.get(int(subscriber._id), None)
+                                else:
+                                    subscriber._id = int(subscriber._id)
+                                reply = yield channel.unsubscribe(subscriber)
+                            elif isinstance(subsriber, Channel):
+                                if subscriber._location == self._location:
+                                    subscriber = self._channels.get(subscriber._name, None)
+                                reply = yield channel.unsubscribe(subscriber)
                 yield conn.send_msg(serialize(reply))
             elif req.name == 'locate_peer':
                 if req.kwargs['name'] == self._name or req.dst == self._location:

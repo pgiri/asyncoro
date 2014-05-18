@@ -12,7 +12,7 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "2.3"
+__version__ = "2.4"
 
 __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
@@ -2442,7 +2442,7 @@ class Channel(object):
         Channel._asyncoro._lock.acquire()
         if name in Channel._asyncoro._channels:
             Channel._asyncoro._lock.release()
-            raise Exception('duplicate channel name "%s"' % name)
+            logger.warning('duplicate channel "%s"!' % name)
         else:
             Channel._asyncoro._channels[name] = self
             Channel._asyncoro._lock.release()
@@ -2530,19 +2530,32 @@ class Channel(object):
 
         Can also be used on remote channels.
         """
+        if not isinstance(subscriber, Coro) and not isinstance(subscriber, Channel):
+            logger.warning('invalid subscriber ignored')
+            raise StopIteration(-1)
         if self._location == Channel._asyncoro._location:
+            if subscriber._location != self._location:
+                if isinstance(subscriber, Coro):
+                    # remote coro
+                    for s in self._subscribers:
+                        if isinstance(s, Coro) and \
+                               s._id == subscriber._id and s._location == subscriber._location:
+                            subscriber = s
+                            break
+                elif isinstance(subscriber, Channel):
+                    # remote channel
+                    for s in self._subscribers:
+                        if isinstance(s, Channel) and \
+                               s._name == subscriber._name and s._location == subscriber._location:
+                            subscriber = s
+                            break
             self._subscribers.add(subscriber)
             yield self._subscribe_event.set()
             reply = 0
         else:
             # remote channel
-            kwargs = {'name':self._name}
-            if isinstance(subscriber, Coro):
-                kwargs['coro'] = subscriber
-            elif isinstance(subscriber, Channel):
-                kwargs['channel'] = subscriber
-            else:
-                raise Exception('invalid subscribe request')
+            kwargs = {'channel':self._name}
+            kwargs['subscriber'] = subscriber
             request = _NetRequest('subscribe', kwargs=kwargs, dst=self._location, timeout=timeout)
             reply = yield Channel._asyncoro._sync_reply(request)
         raise StopIteration(reply)
@@ -2555,35 +2568,35 @@ class Channel(object):
 
         Can also be used on remote channels.
         """
+        if not isinstance(subscriber, Coro) and not isinstance(subscriber, Channel):
+            logger.warning('invalid subscriber ignored')
+            raise StopIteration(-1)
         if self._location == Channel._asyncoro._location:
-            if subscriber._location == self._location:
-                self._subscribers.discard(subscriber)
-            elif isinstance(subscriber, Coro):
-                # remote coro
-                for s in self._subscribers:
-                    if isinstance(s, Coro) and \
-                           s._id == subscriber._id and s._location == subscriber._location:
-                        subscriber = s
-                        break
-                self._subscribers.discard(subscriber)
-            elif isinstance(subscriber, Channel):
-                # remote channel
-                for s in self._subscribers:
-                    if isinstance(s, Channel) and \
-                           s._name == subscriber._name and s._location == subscriber._location:
-                        subscriber = s
-                        break
-                self._subscribers.discard(subscriber)
-            reply = 0
+            if subscriber._location != self._location:
+                if isinstance(subscriber, Coro):
+                    # remote coro
+                    for s in self._subscribers:
+                        if isinstance(s, Coro) and \
+                               s._id == subscriber._id and s._location == subscriber._location:
+                            subscriber = s
+                            break
+                elif isinstance(subscriber, Channel):
+                    # remote channel
+                    for s in self._subscribers:
+                        if isinstance(s, Channel) and \
+                               s._name == subscriber._name and s._location == subscriber._location:
+                            subscriber = s
+                            break
+            try:
+                self._subscribers.remove(subscriber)
+            except KeyError:
+                reply = -1
+            else:
+                reply = 0
         else:
             # remote channel
-            kwargs = {'name':self._name}
-            if isinstance(subscriber, Coro):
-                kwargs['coro'] = subscriber
-            elif isinstance(subscriber, Channel):
-                kwargs['channel'] = subscriber
-            else:
-                raise Exception('invalid unsubscribe request')
+            kwargs = {'channel':self._name}
+            kwargs['subscriber'] = subscriber
             request = _NetRequest('unsubscribe', kwargs=kwargs, dst=self._location, timeout=timeout)
             reply = yield Channel._asyncoro._sync_reply(request)
         raise StopIteration(reply)
@@ -2675,6 +2688,8 @@ class Channel(object):
                 else:
                     # channel/remote coro
                     Coro(_deliver, subscriber, count, n, done, timeout)
+            if count['pending'] == 0:
+                done.set()
             if n == 0 or count['success'] < n:
                 yield done.wait(timeout)
             raise StopIteration(count['reply'])
@@ -2709,6 +2724,12 @@ class Channel(object):
         self._name = state['_name']
         self._location = state['_location']
         self._transform = None
+
+    def __repr__(self):
+        s = '%s' % (self._name)
+        if self._location:
+            s = '%s@%s' % (s, self._location)
+        return s
 
 class AsynCoro(object):
     """Coroutine scheduler.
