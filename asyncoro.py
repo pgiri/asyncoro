@@ -2537,6 +2537,7 @@ class Channel(object):
             if subscriber._location != self._location:
                 if isinstance(subscriber, Coro):
                     # remote coro
+                    subscriber._id = int(subscriber._id)
                     for s in self._subscribers:
                         if isinstance(s, Coro) and \
                                s._id == subscriber._id and s._location == subscriber._location:
@@ -2575,6 +2576,7 @@ class Channel(object):
             if subscriber._location != self._location:
                 if isinstance(subscriber, Coro):
                     # remote coro
+                    subscriber._id = int(subscriber._id)
                     for s in self._subscribers:
                         if isinstance(s, Coro) and \
                                s._id == subscriber._id and s._location == subscriber._location:
@@ -2613,7 +2615,7 @@ class Channel(object):
                 except:
                     message = None
                 if message is None:
-                    return -1
+                    return 0
             for subscriber in self._subscribers:
                 subscriber.send(message)
         else:
@@ -2650,7 +2652,7 @@ class Channel(object):
                 except:
                     message = None
                 if message is None:
-                    raise StopIteration(-1)
+                    raise StopIteration(0)
             if n:
                 while len(self._subscribers) < n:
                     start = _time()
@@ -2757,6 +2759,10 @@ class AsynCoro(object):
     def __init__(self, notifier=None):
         if self.__class__.__instance is None:
             self.__class__.__instance = self
+            if notifier is None:
+                self._notifier = _AsyncNotifier()
+            else:
+                self._notifier = notifier
             self._location = None
             self._name = None
             self._coros = {}
@@ -2771,10 +2777,6 @@ class AsynCoro(object):
             self._terminate = False
             self._complete = threading.Event()
             self._daemons = 0
-            if notifier is None:
-                self._notifier = _AsyncNotifier()
-            else:
-                self._notifier = notifier
             self._polling = False
             self._channels = {}
             self._atexit = []
@@ -3037,8 +3039,7 @@ class AsynCoro(object):
                     self._scheduled.add(cid)
                     coro._state = AsynCoro._Scheduled
                     coro._value = alarm_value
-            # scheduled = list(self._scheduled)
-            scheduled = [self._coros.get(cid, None) for cid in self._scheduled]
+            scheduled = [self._coros[cid] for cid in self._scheduled]
             # random.shuffle(scheduled)
             self._lock.release()
 
@@ -3153,8 +3154,7 @@ class AsynCoro(object):
                                         logger.warning('monitor for %s/%s has gone away!',
                                                        coro._name, coro._id)
                                 else:
-                                    # remote monitor
-                                    # prepare serializable data to be sent over net
+                                    # remote monitor; prepare serializable data
                                     if coro._exceptions:
                                         exc = coro._exceptions[0][:2]
                                         try:
@@ -3196,10 +3196,9 @@ class AsynCoro(object):
                         coro._generator = retval
                         coro._value = None
                     self._lock.release()
-            self._cur_coro = None
 
         self._lock.acquire()
-        for cid, coro in self._coros.iteritems():
+        for coro in self._coros.itervalues():
             logger.debug('terminating Coro %s/%s%s', coro._name, coro._id,
                          ' (daemon)' if coro._daemon else '')
             self._cur_coro = coro
@@ -3222,8 +3221,15 @@ class AsynCoro(object):
         self._suspended = set()
         self._timeouts = []
         self._coros = {}
+        self._channels = {}
+        self.__class__.__instance = None
         self._lock.release()
+        self._notifier.terminate()
+        for func in reversed(self._atexit):
+            func()
+        self._atexit = []
         self._complete.set()
+        logger.debug('AsynCoro terminated')
 
     def terminate(self, await_non_daemons=False):
         """Terminate (singleton) instance of AsynCoro. This 'kills'
@@ -3238,26 +3244,16 @@ class AsynCoro(object):
                              len(self._coros) - self._daemons)
                 self._complete.wait()
             if self._location:
-                def _terminate(self, peer, location, coro=None):
+                def _terminate(self, peer, coro=None):
                     req = _NetRequest('terminate', kwargs={'peer':self._location},
-                                      dst=location, timeout=2)
+                                      dst=peer.location, timeout=2)
                     yield self._sync_reply(req)
-                for (addr, port), peer in _Peer.peers.items():
-                    Coro(_terminate, self, peer, Location(addr, port))
+                for peer in _Peer.peers.values():
+                    Coro(_terminate, self, peer)
                 self._complete.wait()
             self._terminate = True
             self._notifier.interrupt()
             self._complete.wait()
-            self._notifier.terminate()
-            if hasattr(self, 'dest_path_prefix') and os.path.isdir(self.dest_path_prefix) and \
-               len(os.listdir(self.dest_path_prefix)) == 0:
-                os.rmdir(self.dest_path_prefix)
-            logger.debug('AsynCoro terminated')
-            for func in reversed(self._atexit):
-                func()
-            self._channels = {}
-            self._atexit = []
-            self.__class__.__instance = None
 
     def join(self, show_running=False):
         """Wait for currently scheduled coroutines to finish. AsynCoro
@@ -3277,6 +3273,9 @@ class AsynCoro(object):
         terminated.
         """
         self._atexit.append(func)
+
+    def __repr__(self):
+        return None
 
 class AsyncThreadPool(object):
     """Schedule synchronous tasks with threads to be executed

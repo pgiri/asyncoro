@@ -264,23 +264,26 @@ class RCI(object):
         self._name = state['_name']
         self._location = state['_location']
 
+    def __repr__(self):
+        s = '%s' % (self._name)
+        if self._location:
+            s = '%s@%s' % (s, self._location)
+        return s
+
 class AsynCoro(asyncoro.AsynCoro):
-    """Coroutine scheduler. This adds network services to
-    asyncoro.AsynCoro so it can communicate with peers.
+    """This adds network services to asyncoro.AsynCoro so it can
+    communicate with peers.
 
-    If either 'node' or 'udp_port' is not None, asyncoro runs network
-    services so distributed coroutines can exhcnage messages. If
-    'node' is not None, it must be either hostname or IP address where
-    asyncoro runs network services. If 'udp_port' is not None, it is
-    port number where asyncoro runs network services. If 'udp_port' is
-    0, the default port number 51350 is used. If multiple instances of
-    asyncoro are to be running on same host, they all can be started
-    with the same 'udp_port', so that asyncoro instances automatically
-    find each other.
+    If 'node' is not None, it must be either hostname or IP address
+    where asyncoro runs network services. If 'udp_port' is not None,
+    it is port number where asyncoro runs network services. If
+    'udp_port' is 0, the default port number 51350 is used. If
+    multiple instances of asyncoro are to be running on same host,
+    they all can be started with the same 'udp_port', so that asyncoro
+    instances automatically find each other.
 
-    'name' is used in locating peers. They must be unique. If used in
-    network mode and 'name' is not given, it is set to string
-    'node:port'.
+    'name' is used in locating peers. They must be unique. If 'name'
+    is not given, it is set to string 'node:port'.
 
     'ext_ip_addr' is the IP address of NAT firewall/gateway if
     asyncoro is behind that firewall/gateway.
@@ -312,24 +315,20 @@ class AsynCoro(asyncoro.AsynCoro):
         if self.__class__.__instance is None:
             super(AsynCoro, self).__init__(notifier=notifier)
             self.__class__.__instance = self
-            self._name = name
             if node:
                 node = socket.gethostbyname(node)
             else:
                 node = socket.gethostbyname(socket.gethostname())
-            self._stream_peers = {}
-            self._rcoros = {}
-            self._rchannels = {}
-            self._rcis = {}
-            self._requests = {}
+            if not udp_port:
+                udp_port = 51350
             if not dest_path_prefix:
                 dest_path_prefix = os.path.join(os.sep, 'tmp', 'asyncoro')
             self.dest_path_prefix = os.path.abspath(dest_path_prefix)
             if not os.path.isdir(self.dest_path_prefix):
                 os.makedirs(self.dest_path_prefix)
             self.max_file_size = max_file_size
-            if not udp_port:
-                udp_port = 51350
+            self._certfile = certfile
+            self._keyfile = keyfile
             self._udp_sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
             if hasattr(socket, 'SO_REUSEADDR'):
                 self._udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -346,6 +345,10 @@ class AsynCoro(asyncoro.AsynCoro):
             self._location = Location(*self._tcp_sock.getsockname())
             if not self._location.port:
                 raise Exception('could not start network server at %s' % (self._location))
+            if name:
+                self._name = name
+            else:
+                self._name = str(self._location)
             if ext_ip_addr:
                 try:
                     ext_ip_addr = socket.gethostbyname(ext_ip_addr)
@@ -353,8 +356,6 @@ class AsynCoro(asyncoro.AsynCoro):
                     logger.warning('invalid ext_ip_addr ignored')
                 else:
                     self._location.addr = ext_ip_addr
-            if not name:
-                self._name = str(self._location)
 
             self._secret = secret
             if secret is None:
@@ -363,12 +364,14 @@ class AsynCoro(asyncoro.AsynCoro):
             else:
                 self._signature = os.urandom(20).encode('hex')
                 self._auth_code = hashlib.sha1(self._signature + secret).hexdigest()
-            self._certfile = certfile
-            self._keyfile = keyfile
+            self._stream_peers = {}
+            self._rcoros = {}
+            self._rchannels = {}
+            self._rcis = {}
+            self._requests = {}
             self._tcp_sock.listen(32)
-            logger.info('network server "%s" at %s, udp_port=%s, tcp_port=%s',
-                        self._name, self._location.addr, self._udp_sock.getsockname()[1],
-                        self._location.port)
+            logger.info('network server %s@ %s, udp_port=%s', '"%s" ' % name if name else '',
+                        self._location, self._udp_sock.getsockname()[1])
             self._tcp_sock = AsyncSocket(self._tcp_sock, keyfile=self._keyfile,
                                          certfile=self._certfile)
             self._tcp_coro = Coro(self._tcp_proc)
@@ -395,6 +398,8 @@ class AsynCoro(asyncoro.AsynCoro):
         self._rchannels = {}
         self._rcis = {}
         self._requests = {}
+        if os.path.isdir(self.dest_path_prefix) and len(os.listdir(self.dest_path_prefix)) == 0:
+            os.rmdir(self.dest_path_prefix)
 
     def locate(self, name, timeout=None):
         """Must be used with 'yield' as
@@ -947,8 +952,6 @@ class AsynCoro(asyncoro.AsynCoro):
                             if isinstance(subscriber, Coro):
                                 if subscriber._location == self._location:
                                     subscriber = self._coros.get(int(subscriber._id), None)
-                                else:
-                                    subscriber._id = int(subscriber._id)
                                 reply = yield channel.subscribe(subscriber)
                             elif isinstance(subsriber, Channel):
                                 if subscriber._location == self._location:
@@ -969,8 +972,6 @@ class AsynCoro(asyncoro.AsynCoro):
                             if isinstance(subscriber, Coro):
                                 if subscriber._location == self._location:
                                     subscriber = self._coros.get(int(subscriber._id), None)
-                                else:
-                                    subscriber._id = int(subscriber._id)
                                 reply = yield channel.unsubscribe(subscriber)
                             elif isinstance(subsriber, Channel):
                                 if subscriber._location == self._location:
@@ -1164,6 +1165,13 @@ class AsynCoro(asyncoro.AsynCoro):
         else:
             # logger.warning('coro "%s" is not registered', name)
             return -1
+
+    def __repr__(self):
+        s = str(self._location)
+        if s == self._name:
+            return s
+        else:
+            return '"%s" @ %s' % (self._name, s)
 
 asyncoro._NetRequest = _NetRequest
 asyncoro._Peer = _Peer

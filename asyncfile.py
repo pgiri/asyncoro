@@ -45,7 +45,7 @@ class AsyncFile(object):
             self._fd = None
             self._fileno = fd
         else:
-            ValueError('invalid file descriptor')
+            raise ValueError('invalid file descriptor')
         self._timeout = None
         self._read_task = None
         self._write_task = None
