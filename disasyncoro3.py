@@ -155,16 +155,20 @@ class _Peer(object):
 
     @staticmethod
     def register_callback(callback):
-        if inspect.isfunction(callback):
-            _Peer.callback = weakref.proxy(callback)
-            for peer in _Peer.peers.values():
-                try:
-                    _Peer.callback(peer.name, peer.location, 1)
-                except:
-                    logger.warning('peer status callback failed')
-                    logger.debug(traceback.format_exc())
+        if callback:
+            if inspect.isfunction(callback):
+                _Peer.callback = weakref.proxy(callback,
+                                               lambda ref: setattr(_Peer, 'callback', None))
+                for peer in _Peer.peers.itervalues():
+                    try:
+                        _Peer.callback(peer.name, peer.location, 1)
+                    except:
+                        logger.warning('peer status callback failed')
+                        logger.debug(traceback.format_exc())
+            else:
+                logger.warning('invalid peer status callback ignored')
         else:
-            logger.warning('invalid peer status callback ignored')
+            _Peer.callback = None
 
 class RCI(object):
     """Remote Coro (Callable) Interface.
