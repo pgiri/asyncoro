@@ -134,76 +134,84 @@ class Computation(object):
             for xf in self._xfer_files:
                 yield Computation._asyncoro.del_file(peer.location, xf)
 
-def discoro_server(name='discoro_server', coro=None):
+def discoro_server(name='discoro_server'):
     """Server that receives computations and runs coroutines for it.
     """
-    # coro.set_daemon()
-    coro.register(name)
+    _discoro_coro = asyncoro.AsynCoro.cur_coro()
+    _discoro_coro.register(name)
+    # _discoro_coro.set_daemon()
     # os.chdir(asyncoro.AsynCoro.instance().dest_path_prefix)
-    computations = {}
-    globalvars = localvars = cmd = rcoro = msg = computation = func = var = job_coro = None
-    globalvars = list(globals().keys())
-    localvars = list(locals().keys())
-    globalvars.extend(localvars)
+    _discoro_computations = {}
+    _discoro_computation_vars = {}
+    _discoro_globalvars = _discoro_localvars = _discoro_cmd = _discoro_rcoro = None
+    _discoro_msg = _discoro_computation = _discoro_func = _discoro_job_coro = None
+    _discoro_globalvars = list(globals().keys())
+    _discoro_localvars = list(locals().keys())
+    _discoro_globalvars.extend(_discoro_localvars)
 
     while True:
-        msg = yield coro.receive()
+        _discoro_msg = yield _discoro_coro.receive()
         try:
-            cmd = msg['cmd']
+            _discoro_cmd = _discoro_msg['cmd']
         except:
             asyncoro.logger.debug(traceback.format_exc())
             continue
-        if cmd == 'run':
-            computation = computations.get(msg['computation'], None)
-            if not computation:
-                asyncoro.logger.debug('invalid computation to run')
-                msg['coro'].send(None)
-                continue
+        if _discoro_cmd == 'run':
             try:
-                func = globals()[computation._name]
-                job_coro = asyncoro.Coro(func, *msg['args'], **msg['kwargs'])
+                assert isinstance(_discoro_msg['coro'], asyncoro.Coro)
+                _discoro_computation = _discoro_computations[_discoro_msg['computation']]
+                _discoro_func = globals()[_discoro_computation._name]
+                _discoro_job_coro = asyncoro.Coro(_discoro_func, *_discoro_msg['args'],
+                                                  **_discoro_msg['kwargs'])
             except:
-                job_coro = None
-                asyncoro.logger.debug('invalid computation "%s" to run' % (computation._name))
+                asyncoro.logger.debug('invalid computation to run')
                 asyncoro.logger.debug(traceback.format_exc())
-            msg['coro'].send(job_coro)
-        elif cmd == 'ping':
-            client = msg['coro']
-            # TODO: maintain heartbeat times and remove computations from dead clients?
-        elif cmd == 'setup':
-            rcoro = msg['coro']
-            computation = msg['computation']
-            if computation._name in computations or not computation._code:
-                asyncoro.logger.warning('invalid computation "%s"' % computation._name)
-                rcoro.send(-1)
+                _discoro_msg['coro'].send(None)
                 continue
+            else:
+                _discoro_msg['coro'].send(_discoro_job_coro)
+        elif _discoro_cmd == 'ping':
+            # _discoro_client = _discoro_msg['coro']
+            # TODO: maintain heartbeat times and remove computations from dead clients?
+            pass
+        elif _discoro_cmd == 'setup':
             try:
-                computation._code = compile(computation._code, '<string>', 'exec')
-                exec(computation._code)
+                _discoro_rcoro = _discoro_msg['coro']
+                assert isinstance(_discoro_rcoro, asyncoro.Coro)
+                _discoro_computation = _discoro_msg['computation']
+                _discoro_computation._code = compile(_discoro_computation._code, '<string>', 'exec')
+                exec(_discoro_computation._code)
                 globals().update(locals())
             except:
                 asyncoro.logger.warning('invalid computation')
                 asyncoro.logger.debug(traceback.format_exc())
-                rcoro.send(-1)
+                _discoro_rcoro.send(-1)
                 continue
-            asyncoro.logger.debug('computation "%s" from "%s"' % (computation._name, msg['coro']))
-            computations[computation._name] = computation
-            rcoro.send(0)
-        elif cmd == 'close':
-            computation = computations.pop(msg['computation'], None)
-            if not computation:
-                asyncoro.logger.warning('invalid computation "%s" to delete' % msg['computation'])
-                continue
-            asyncoro.logger.debug('deleting computation "%s"' % computation._name)
-            if computation._cleanup:
-                for var in list(globals().keys()):
-                    if var not in globalvars:
-                        globals().pop(var, None)
-                for var in list(locals().keys()):
-                    if var not in localvars:
-                        locals().pop(var, None)
+            asyncoro.logger.debug('computation "%s" from "%s"' % \
+                                  (_discoro_computation._name, _discoro_msg['coro']))
+            _discoro_computations[_discoro_computation._name] = _discoro_computation
+            _discoro_gvars = [_discoro_var for _discoro_var in globals().keys() \
+                              if _discoro_var not in _discoro_globalvars]
+            _discoro_lvars = [_discoro_var for _discoro_var in locals().keys() \
+                              if _discoro_var not in _discoro_localvars]
+            _discoro_computation_vars[_discoro_computation._name] = (_discoro_gvars, _discoro_lvars)
+            _discoro_globalvars.extend(_discoro_gvars)
+            _discoro_localvars.extend(_discoro_lvars)
+            _discoro_rcoro.send(0)
+        elif _discoro_cmd == 'close':
+            try:
+                _discoro_computation = _discoro_computations.pop(_discoro_msg['computation'], None)
+                asyncoro.logger.debug('deleting computation "%s"' % _discoro_computation._name)
+                _discoro_gvars, _discoro_lvars = \
+                                _discoro_computation_vars.pop(_discoro_computation._name, ([], []))
+                for _discoro_var in _discoro_gvars:
+                    globals().pop(_discoro_var, None)
+                for _discoro_var in _discoro_lvars:
+                    locals().pop(_discoro_var, None)
+            except:
+                asyncoro.logger.warning('invalid computation to delete')
         else:
-            asyncoro.logger.warning('invalid command "%s" ignored' % cmd)
+            asyncoro.logger.warning('invalid command ignored')
 
 if __name__ == '__main__':
     import logging
