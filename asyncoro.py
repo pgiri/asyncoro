@@ -2772,10 +2772,13 @@ class CategorizeMessages(object):
         """
         if inspect.isfunction(categorize):
             argspec = inspect.getargspec(categorize)
-            if len(argspec.args) == 1:
-                self._categorize.insert(0, categorize)
-            else:
-                logger.warning('invalid categorize function ignored')
+            if len(argspec.args) != 1:
+                categorize = None
+        elif type(categorize) != functools.partial:
+            categorize = None
+
+        if categorize:
+            self._categorize.append(categorize)
         else:
             logger.warning('invalid categorize function ignored')
 
@@ -2802,7 +2805,7 @@ class CategorizeMessages(object):
             msg = yield self._coro.receive(timeout=timeout, alarm_value=alarm_value)
             if msg == alarm_value:
                 raise StopIteration(msg)
-            for categorize in self._categorize:
+            for categorize in reversed(self._categorize):
                 c = categorize(msg)
                 if c == category:
                     raise StopIteration(msg)
