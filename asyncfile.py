@@ -59,8 +59,14 @@ class AsyncFile(object):
         """Read at most 'size' bytes from file; if 'size' <= 0, all
         data up to EOF is read and returned. If 'full' is True,
         exactly 'size' bytes are returned (unless EOF or timeout occur
-        before). If 'timeout' is given, Exception('timedout') will be
-        thrown in coroutine if read is not complete before timeout.
+        before).
+
+        If no data has been read before timeout, then
+        Exception('timedout') will be thrown.
+
+        If timeout is given and full is True and timeout expires
+        before all the data could be read, it returns partial data
+        read before timeout if any data has been read.
 
         Must be used in a coroutine with 'yield' as
         'data = yield fd.read(1024)'
@@ -98,7 +104,7 @@ class AsyncFile(object):
                 buf, self._buflist = ''.join(self._buflist), []
             AsyncFile._notifier.clear(self, _AsyncPoller._Read)
             self._read_coro._proceed_(buf)
-            self._read_coro = None
+            self._read_coro = self._read_task = None
 
         if not size or size < 0:
             size = 0
@@ -159,6 +165,13 @@ class AsyncFile(object):
         waits till all data in buf is written; otherwise, it waits
         until one write completes. It returns length of data written.
 
+        If no data has been written before timeout, then
+        Exception('timedout') will be thrown.
+
+        If timeout is given and full is True and timeout expires
+        before all the data could be written, it returns length of
+        data written before timeout if any data has been written.
+
         Must be used with 'yield' as
         'n = yield fd.write(buf)' to write (some) data in buf.
         """
@@ -178,7 +191,7 @@ class AsyncFile(object):
             if n == len(view) or not full:
                 AsyncFile._notifier.clear(self, _AsyncPoller._Write)
                 self._write_coro._proceed_(written)
-                self._write_coro = None
+                self._write_coro = self._write_task = None
             else:
                 view = view[n:]
                 self._write_task = partial_func(_write, self, view, written, full)
@@ -209,9 +222,20 @@ class AsyncFile(object):
 
     def _timed_out(self):
         if self._read_coro:
-            self._read_coro.throw(Exception('timedout'))
+            if self._read_task and self._buflist:
+                buf, self._buflist = ''.join(self._buflist), []
+                AsyncFile._notifier.clear(self, _AsyncPoller._Read)
+                self._read_coro._proceed_(buf)
+                self._read_coro = self._read_task = None
+            else:
+                self._read_coro.throw(Exception('timedout'))
         if self._write_coro:
-            self._write_coro.throw(Exception('timedout'))
+            written = 0
+            if self._write_task:
+                written = self._write_task.args[2]
+            AsyncFile._notifier.clear(self, _AsyncPoller._Write)
+            self._write_coro._proceed_(written)
+            self._write_coro = self._write_task = None
 
 class AsyncPipe(object):
     """Asynchronous interface for (connected) pipes.
