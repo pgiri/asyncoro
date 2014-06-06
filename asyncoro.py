@@ -12,7 +12,7 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "2.6"
+__version__ = "2.7"
 
 __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
@@ -2299,8 +2299,18 @@ class Coro(object):
         chance that coro being terminated is currently running and can
         interfere with GenratorExit exception that will be thrown to
         coro.
+
+        Can also be used on remotely running coroutines.
         """
-        return Coro._asyncoro._terminate_coro(self)
+        if self._location == Coro._asyncoro._location:
+            return Coro._asyncoro._terminate_coro(self)
+        else:
+            request = _NetRequest('terminate_coro', kwargs={'coro':self._id},
+                                  dst=self._location, timeout=2)
+            if _Peer.send_req(request):
+                logger.warning('remote coro at %s may not be valid', self._location)
+                return -1
+            return 0
 
     def hot_swappable(self, flag):
         if Coro._asyncoro.cur_coro() == self:
@@ -2348,7 +2358,7 @@ class Coro(object):
             reply = Coro._asyncoro._monitor(self, observe)
         else:
             # remote coro
-            request = _NetRequest('monitor', kwargs={'monitor':self, 'coro':observe},
+            request = _NetRequest('monitor', kwargs={'monitor':self, 'coro':observe._id},
                                   dst=observe._location, timeout=2)
             reply = yield Coro._asyncoro._sync_reply(request)
         raise StopIteration(reply)
@@ -3338,7 +3348,7 @@ class AsynCoro(object):
                 self._complete.wait()
             if self._location:
                 def _terminate(self, peer, coro=None):
-                    req = _NetRequest('terminate', kwargs={'peer':self._location},
+                    req = _NetRequest('peer_closed', kwargs={'peer':self._location},
                                       dst=peer.location, timeout=2)
                     yield self._sync_reply(req)
                 for peer in _Peer.peers.values():

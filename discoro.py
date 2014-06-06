@@ -2,14 +2,17 @@
 for details.
 
 This module provides API for distributing generator functions and
-their dependencies to create remote coroutines (for distributed
-programming). Note that all coroutines execute in the same thread, so
-CPU intensive computations are not suitable with this framework.
-dispy project (http://dispy.sourceforge.net) may be better choice for
-such tasks; alternately, this 'discoro' program can be run multiple
-instances on same machine (one instance per processor, for example)
-and distribute computations to each of them, one computation per
-discoro.
+their dependencies (files, Python functions, classes) to create remote
+coroutines (for distributed programming/computing). Note that all
+coroutines execute in the same thread and run on same processor. If
+CPU intensive computations are to be run, then this program should be
+run with multiple instances (see below for '-c' option to this
+program). This program, however, doesn't schedule jobs - client needs
+to schedule them to use CPUs effectively. Alternately, dispy project
+(http://dispy.sourceforge.net) could be used for compute intensive
+tasks.
+
+See 'discoro_client.py' for an example.
 """
 
 import os
@@ -47,14 +50,12 @@ class Computation(object):
                 self._name = func.__name__
             else:
                 self._name = func.func_name
-            lines = inspect.getsourcelines(func)[0]
-            lines[0] = lines[0].lstrip()
-            self._code = ''.join(lines)
+            self._code = inspect.getsource(func).lstrip()
         else:
             raise Exception('Invalid computation; must be generator: %s' % (computation.func_name))
 
         self._cleanup = cleanup
-        depend_ids = {}
+        depend_ids = set()
         self._xfer_files = []
         for dep in depends:
             if isinstance(dep, str) or inspect.ismodule(dep):
@@ -70,7 +71,7 @@ class Computation(object):
                     fd = open(dep, 'rb')
                     fd.close()
                     self._xfer_files.append(dep)
-                    depend_ids[dep] = dep
+                    depend_ids.add(dep)
                 except:
                     raise Exception('File "%s" is not valid' % dep)
             elif inspect.isfunction(dep) or inspect.isclass(dep) or hasattr(dep, '__class__'):
@@ -80,21 +81,19 @@ class Computation(object):
                     dep = dep.__class__
                 if id(dep) in depend_ids:
                     continue
-                lines = inspect.getsourcelines(dep)[0]
-                lines[0] = lines[0].lstrip()
-                self._code += '\n' + ''.join(lines)
-                depend_ids[id(dep)] = id(dep)
+                self._code += '\n' + inspect.getsource(dep).lstrip()
+                depend_ids.add(id(dep))
             else:
                 self._code = None
                 raise Exception('Invalid function: %s' % dep)
-        if self._code:
-            # make sure code can be compiled
-            code = compile(self._code, '<string>', 'exec')
-            del code
+        # make sure code can be compiled
+        compile(self._code, '<string>', 'exec')
 
     def setup(self, peer, timeout=None):
         """Sends computation fragment to peer ('discoro'
         coroutine). This method should be called once for each peer.
+
+        Must be used with yield as 'v = yield computation.setup(peer)'
         """
         if not self._code:
             raise StopIteration(-1)
@@ -105,10 +104,10 @@ class Computation(object):
                 raise StopIteration(-1)
             for i, xf in enumerate(self._xfer_files):
                 reply = yield Computation._asyncoro.send_file(peer.location, xf, timeout=timeout)
-                if reply != 0:
-                    asyncoro.logger.debug('failed to transfer file %s' % xf)
+                if reply < 0:
+                    asyncoro.logger.debug('failed to transfer file %s: %s' % (xf, reply))
                     self._xfer_files = self._xfer_files[:i]
-                    self.close(peer)
+                    yield self.close(peer)
                     raise StopIteration(-1)
             raise StopIteration(0)
         coro = asyncoro.Coro(_setup, self, peer, timeout)
@@ -118,6 +117,8 @@ class Computation(object):
         """Once 'setup', the computation can be run as many times as
         necessary. Each 'run' creates a coroutine at peer and returns
         reference to that remote coroutine.
+
+        Must be used with yield as 'rcoro = yield computation.run(peer, ...)'
         """
         def _run(self, peer, coro=None):
             peer.send({'cmd':'run', 'coro':coro, 'computation':self._name,
@@ -128,18 +129,20 @@ class Computation(object):
 
     def close(self, peer):
         """Removes computation at peer.
+
+        Must be used with yield as 'yield computation.close(peer)'
         """
         peer.send({'cmd':'close', 'computation':self._name})
         if self._cleanup:
             for xf in self._xfer_files:
                 yield Computation._asyncoro.del_file(peer.location, xf)
 
-def discoro_server(name='discoro_server'):
+def discoro_server(_discoro_name='discoro_server'):
     """Server that receives computations and runs coroutines for it.
     """
     _discoro_coro = asyncoro.AsynCoro.cur_coro()
-    _discoro_coro.register(name)
-    # _discoro_coro.set_daemon()
+    _discoro_coro.register(_discoro_name)
+    asyncoro.logger.debug('discoro %s started' % _discoro_coro)
     # os.chdir(asyncoro.AsynCoro.instance().dest_path_prefix)
     _discoro_computations = {}
     _discoro_computation_vars = {}
@@ -157,8 +160,10 @@ def discoro_server(name='discoro_server'):
             asyncoro.logger.debug(traceback.format_exc())
             continue
         if _discoro_cmd == 'run':
+            _discoro_rcoro = _discoro_msg.get('coro', None)
+            if not isinstance(_discoro_rcoro, asyncoro.Coro):
+                continue
             try:
-                assert isinstance(_discoro_msg['coro'], asyncoro.Coro)
                 _discoro_computation = _discoro_computations[_discoro_msg['computation']]
                 _discoro_func = globals()[_discoro_computation._name]
                 _discoro_job_coro = asyncoro.Coro(_discoro_func, *_discoro_msg['args'],
@@ -166,18 +171,18 @@ def discoro_server(name='discoro_server'):
             except:
                 asyncoro.logger.debug('invalid computation to run')
                 asyncoro.logger.debug(traceback.format_exc())
-                _discoro_msg['coro'].send(None)
-                continue
-            else:
-                _discoro_msg['coro'].send(_discoro_job_coro)
+                _discoro_job_coro = None
+            _discoro_rcoro.send(_discoro_job_coro)
         elif _discoro_cmd == 'ping':
-            # _discoro_client = _discoro_msg['coro']
+            _discoro_rcoro = _discoro_msg.get('coro', None)
+            if not isinstance(_discoro_rcoro, asyncoro.Coro):
+                continue
             # TODO: maintain heartbeat times and remove computations from dead clients?
-            pass
         elif _discoro_cmd == 'setup':
+            _discoro_rcoro = _discoro_msg.get('coro', None)
+            if not isinstance(_discoro_rcoro, asyncoro.Coro):
+                continue
             try:
-                _discoro_rcoro = _discoro_msg['coro']
-                assert isinstance(_discoro_rcoro, asyncoro.Coro)
                 _discoro_computation = _discoro_msg['computation']
                 _discoro_computation._code = compile(_discoro_computation._code, '<string>', 'exec')
                 exec(_discoro_computation._code)
@@ -210,14 +215,124 @@ def discoro_server(name='discoro_server'):
                     locals().pop(_discoro_var, None)
             except:
                 asyncoro.logger.warning('invalid computation to delete')
+                _discoro_rcoro = _discoro_msg.get('coro', None)
+                if not isinstance(_discoro_rcoro, asyncoro.Coro):
+                    continue
+                _discoro_rcoro.send(0)
+        elif _discoro_cmd == 'quit':
+            break
         else:
-            asyncoro.logger.warning('invalid command ignored')
+            asyncoro.logger.warning('invalid command "%s" ignored' % _discoro_cmd)
+
+    # wait until all computations are done; process only 'ping' and 'close'
+    _discoro_coro.set_daemon()
+    while True:
+        _discoro_msg = yield _discoro_coro.receive()
+        try:
+            _discoro_cmd = _discoro_msg['cmd']
+        except:
+            asyncoro.logger.debug(traceback.format_exc())
+            continue
+        if _discoro_cmd == 'ping':
+            _discoro_rcoro = _discoro_msg.get('coro', None)
+            if not isinstance(_discoro_rcoro, asyncoro.Coro):
+                continue
+            # TODO: maintain heartbeat times and remove computations from dead clients?
+        elif _discoro_cmd == 'close':
+            try:
+                _discoro_computation = _discoro_computations.pop(_discoro_msg['computation'], None)
+                asyncoro.logger.debug('deleting computation "%s"' % _discoro_computation._name)
+                _discoro_gvars, _discoro_lvars = \
+                                _discoro_computation_vars.pop(_discoro_computation._name, ([], []))
+                for _discoro_var in _discoro_gvars:
+                    globals().pop(_discoro_var, None)
+                for _discoro_var in _discoro_lvars:
+                    locals().pop(_discoro_var, None)
+            except:
+                asyncoro.logger.warning('invalid computation to delete')
+        else:
+            asyncoro.logger.warning('invalid command "%s" ignored' % _discoro_cmd)
+            _discoro_rcoro = _discoro_msg.get('coro', None)
+            if not isinstance(_discoro_rcoro, asyncoro.Coro):
+                continue
+            _discoro_rcoro.send(-1)
+
+def _discoro_process(_discoro_config, _discoro_queue):
+    _discoro_scheduler = asyncoro.AsynCoro(**_discoro_config)
+    _discoro_coro = asyncoro.Coro(discoro_server)
+    _discoro_queue.put(asyncoro.serialize(_discoro_coro))
+    _discoro_scheduler.join(show_running=False)
 
 if __name__ == '__main__':
-    import logging
-    asyncoro.logger.setLevel(logging.DEBUG)
-    scheduler = asyncoro.AsynCoro.instance()
-    discoro = asyncoro.Coro(discoro_server)
+
+    """
+    If '-c' option is used with a positive number, discoro server is
+    run that many instances, so CPU intesive coroutines can be invoked
+    on them. If the number is negative, that many CPUs are not used
+    (from the available CPUs). The default value for this option is
+    '1', so only instance runs. If this value is given as '0', then
+    all the available CPUs are used.
+
+    If '-d' option is used, debug logging is enabled.
+
+    Remaining options are similar to disasyncoro.
+    """
+
+    import logging, argparse, multiprocessing, time
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-c', '--cpus', dest='cpus', type=int, default=1,
+                        help='number of CPUs/discoro instances to run; ' \
+                        'if negative, that many CPUs are not used')
+    parser.add_argument('-d', '--debug', action='store_true', dest='loglevel', default=False,
+                        help='if given, debug messages are printed')
+    parser.add_argument('-n', '--node', dest='node', default=None,
+                        help='node name or IP address')
+    parser.add_argument('--ext_ip_addr', dest='ext_ip_addr', default=None,
+                        help='External IP address to use (needed in case of NAT firewall/gateway)')
+    parser.add_argument('-u', '--udp_port', dest='udp_port', type=int, default=51350,
+                        help='UDP port number to use')
+    parser.add_argument('--dest_path_prefix', dest='dest_path_prefix', default=None,
+                        help='path prefix where files sent by peers are stored')
+    parser.add_argument('--max_file_size', dest='max_file_size', default=None, type=int,
+                        help='maximum file size of any file transferred')
+    parser.add_argument('-s', '--secret', dest='secret', default='',
+                        help='authentication secret for handshake with peers')
+    parser.add_argument('--certfile', dest='certfile', default=None,
+                        help='file containing SSL certificate')
+    parser.add_argument('--keyfile', dest='keyfile', default=None,
+                        help='file containing SSL key')
+    _discoro_config = vars(parser.parse_args(sys.argv[1:]))
+    del parser
+
+    if _discoro_config['loglevel']:
+        asyncoro.logger.setLevel(logging.DEBUG)
+    else:
+        asyncoro.logger.setLevel(logging.INFO)
+    del _discoro_config['loglevel']
+
+    cpus = multiprocessing.cpu_count()
+
+    if _discoro_config['cpus'] > 0:
+        if _discoro_config['cpus'] > cpus:
+            raise Exception('CPU count must be <= %s' % cpus)
+        cpus = _discoro_config['cpus']
+    elif _discoro_config['cpus'] < 0:
+        if -_discoro_config['cpus'] >= cpus:
+            raise Exception('CPU count must be > -%s' % cpus)
+        cpus += _discoro_config['cpus']
+    del _discoro_config['cpus']
+
+    _discoro_queue = multiprocessing.Queue()
+    _discoro_processes = []
+    for i in range(1, cpus):
+        _discoro_processes.append(multiprocessing.Process(target=_discoro_process,
+                                                          args=(_discoro_config, _discoro_queue)))
+        _discoro_processes[-1].start()
+        time.sleep(0.05)
+
+    _discoro_scheduler = asyncoro.AsynCoro(**_discoro_config)
+    _discoro_coro = asyncoro.Coro(discoro_server)
+
     while True:
         try:
             cmd = sys.stdin.readline().strip().lower()
@@ -225,5 +340,14 @@ if __name__ == '__main__':
                 break
         except KeyboardInterrupt:
             break
-    # TODO: wait until all computations are done?
-    discoro.terminate()
+
+    asyncoro.logger.debug('terminating servers')
+    while not _discoro_queue.empty():
+        _coro = asyncoro.unserialize(_discoro_queue.get())
+        _coro.send({'cmd':'quit'})
+    _discoro_coro.send({'cmd':'quit'})
+
+    for _i, _proc in enumerate(_discoro_processes, start=1):
+        if _proc.is_alive():
+            asyncoro.logger.info('  -- waiting for process %s' % _i)
+            _proc.join()

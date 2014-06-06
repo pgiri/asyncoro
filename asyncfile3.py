@@ -4,6 +4,8 @@ for details.
 This module provides API for asynchronous file and pipe processing;
 for now it works with Linux, OS X and likely other UNIX variants, but
 not Windows.
+
+See 'pipe_csum.py', 'pipe_grep.py' and 'socket_afile.py' for example.
 """
 
 __all__ = ['AsyncFile', 'AsyncPipe']

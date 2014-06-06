@@ -154,12 +154,12 @@ class _Peer(object):
                     logger.debug(traceback.format_exc())
 
     @staticmethod
-    def register_callback(callback):
+    def status_callback(callback):
         if callback:
             if inspect.isfunction(callback):
                 _Peer.callback = weakref.proxy(callback,
                                                lambda ref: setattr(_Peer, 'callback', None))
-                for peer in _Peer.peers.itervalues():
+                for peer in _Peer.peers.values():
                     try:
                         _Peer.callback(peer.name, peer.location, 1)
                     except:
@@ -355,8 +355,15 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             if not dest_path_prefix:
                 dest_path_prefix = os.path.join(os.sep, 'tmp', 'asyncoro')
             self.dest_path_prefix = os.path.abspath(dest_path_prefix)
+            # TODO: avoid race condition (use locking to check/create atomically?)
             if not os.path.isdir(self.dest_path_prefix):
-                os.makedirs(self.dest_path_prefix)
+                try:
+                    os.makedirs(self.dest_path_prefix)
+                except:
+                    # likely another asyncoro created this directory
+                    if not os.path.isdir(self.dest_path_prefix):
+                        logger.warning('failed to create "%s"' % self.dest_path_prefix)
+                        logger.debug(traceback.format_exc())
             self.max_file_size = max_file_size
             self._certfile = certfile
             self._keyfile = keyfile
@@ -485,8 +492,6 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             raise StopIteration(-1)
         if not udp_port:
             udp_port = 51350
-        ping_msg = {'location':self._location, 'signature':self._signature, 'version':__version__}
-        ping_msg = b'ping:' + serialize(ping_msg)
         stream_peers = [(addr, port, peer) for (addr, port), peer in _Peer.peers.items() \
                         if (addr == node and (tcp_port == 0 or tcp_port == port))]
         if stream_send:
@@ -498,6 +503,12 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 peer.stream = False
                 self._stream_peers.pop((addr, port), None)
             self._stream_peers.pop((node, tcp_port), None)
+
+        if (node, tcp_port) in _Peer.peers:
+            raise StopIteration(0)
+
+        ping_msg = {'location':self._location, 'signature':self._signature, 'version':__version__}
+        ping_msg = b'ping:' + serialize(ping_msg)
         sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
         sock.settimeout(2)
         try:
@@ -522,7 +533,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
         raise StopIteration(0)
 
     def peer_status(self, callback):
-        _Peer.register_callback(callback)
+        _Peer.status_callback(callback)
 
     def send_file(self, location, file, dest_path=None, overwrite=False, timeout=None):
         """Must be used with 'yield' as
@@ -716,21 +727,21 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 if req.dst != self._location:
                     logger.warning('ignoring invalid "send" (%s != %s)' % (req.dst, self._location))
                 else:
-                    cid = req.kwargs.get('coro', None)
-                    if cid is not None:
-                        coro = self._coros.get(int(cid), None)
-                        if coro is not None:
+                    coro = req.kwargs.get('coro', None)
+                    if coro is not None:
+                        coro = self._coros.get(int(coro), None)
+                        if isinstance(coro, Coro):
                             reply = coro.send(req.kwargs['message'])
                         else:
-                            logger.warning('ignoring message to invalid coro %s', cid)
+                            logger.warning('ignoring message to invalid coro %s', coro)
                     else:
-                        name = req.kwargs.get('channel', None)
-                        if name is not None:
-                            channel = self._channels.get(name, None)
-                            if channel is not None:
+                        channel = req.kwargs.get('channel', None)
+                        if channel is not None:
+                            channel = self._channels.get(channel, None)
+                            if isinstance(channel, Channel):
                                 reply = channel.send(req.kwargs['message'])
                             else:
-                                logger.warning('ignoring message to channel "%s"', name)
+                                logger.warning('ignoring message to channel "%s"', channel)
                         else:
                             logger.warning('ignoring invalid recipient to "send"')
                 yield conn.send_msg(serialize(reply))
@@ -741,23 +752,23 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 if req.dst != self._location:
                     logger.warning('ignoring invalid "deliver" (%s != %s)' % (req.dst, self._location))
                 else:
-                    cid = req.kwargs.get('coro', None)
-                    if cid is not None:
-                        coro = self._coros.get(int(cid), None)
-                        if coro is not None:
+                    coro = req.kwargs.get('coro', None)
+                    if coro is not None:
+                        coro = self._coros.get(int(coro), None)
+                        if isinstance(coro, Coro):
                             coro.send(req.kwargs['message'])
                             reply = 1
                         else:
-                            logger.warning('ignoring message to invalid coro %s', cid)
+                            logger.warning('ignoring message to invalid coro %s', coro)
                     else:
-                        name = req.kwargs.get('channel', None)
-                        if name is not None:
-                            channel = self._channels.get(name, None)
-                            if channel is not None:
+                        channel = req.kwargs.get('channel', None)
+                        if channel is not None:
+                            channel = self._channels.get(channel, None)
+                            if isinstance(channel, Channel):
                                 reply = yield channel.deliver(
                                     req.kwargs['message'], timeout=req.timeout, n=req.kwargs['n'])
                             else:
-                                logger.warning('ignoring message to channel "%s"', name)
+                                logger.warning('ignoring message to channel "%s"', channel)
                         else:
                             logger.warning('ignoring invalid recipient to "send"')
                 yield conn.send_msg(serialize(reply))
@@ -837,26 +848,22 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 assert req.src is None
                 assert req.dst == self._location
                 reply = -1
-                rcoro = req.kwargs.get('coro', None)
                 monitor = req.kwargs.get('monitor', None)
-                if isinstance(rcoro, Coro) and isinstance(monitor, Coro):
-                    coro = self._coros.get(int(rcoro._id), None)
-                    if isinstance(coro, Coro):
-                        assert monitor._location != self._location
-                        reply = self._monitor(monitor, coro)
+                coro = req.kwargs.get('coro', None)
+                if coro is not None:
+                    coro = self._coros.get(int(coro), None)
+                if isinstance(coro, Coro) and isinstance(monitor, Coro):
+                    assert monitor._location != self._location
+                    reply = self._monitor(monitor, coro)
                 yield conn.send_msg(serialize(reply))
-            elif req.name == 'exception':
-                # synchronous message
-                assert req.src is None
-                assert req.dst == self._location
+            elif req.name == 'terminate_coro':
                 reply = -1
-                rcoro = req.kwargs.get('coro', None)
-                if isinstance(rcoro, Coro):
-                    coro = self._coros.get(int(rcoro._id), None)
-                    if isinstance(coro, Coro):
-                        exc = req.kwargs.get('exception', None)
-                        if isinstance(exc, tuple):
-                            reply = self._throw(coro, *exc)
+                coro = req.kwargs.get('coro', None)
+                if coro is not None:
+                    coro = self._coros.get(int(coro), None)
+                if isinstance(coro, Coro):
+                    coro.terminate()
+                    reply = 0
                 yield conn.send_msg(serialize(reply))
             elif req.name == 'ping':
                 try:
@@ -876,7 +883,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                     break
                 peer = _Peer.peers.get((peer_loc.addr, peer_loc.port), None)
                 if peer and peer.auth == auth_code:
-                    logger.debug('ignoring peer: %s' % (peer_loc))
+                    logger.debug('%s: ignoring peer: %s' % (self._location, peer_loc))
                     break
                 pong = _NetRequest('pong',
                                    kwargs={'loc':self._location, 'signature':self._signature,
@@ -891,23 +898,12 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                     reply = yield sock.recv_msg()
                     assert reply == b'ack'
                 except:
-                    logger.debug('ignoring peer %s', peer_loc)
+                    logger.debug('%s: ignoring peer: %s' % (self._location, peer_loc))
                     break
                 finally:
                     sock.close()
 
-                logger.debug('found asyncoro at %s' % peer_loc)
-                # relay ping to other asyncoro's running on same node
-                peers = [(port, peer) for ((addr, port), peer) in _Peer.peers.items() \
-                         if addr == self._location.addr and port != self._location.port]
-                for port, peer in peers:
-                    relay_req = _NetRequest('ping',
-                                            kwargs={'loc':peer_loc, 'version':__version__,
-                                                    'signature':req.kwargs['signature'],
-                                                    'name':req.kwargs['name']},
-                                            dst=Location(self._location.addr, port), timeout=1)
-                    _Peer.send_req(relay_req)
-
+                logger.debug('%s: found asyncoro at %s' % (self._location, peer_loc))
                 if (peer_loc.addr, peer_loc.port) in _Peer.peers:
                     break
                 peer = _Peer(req.kwargs['name'], peer_loc, auth_code, self._keyfile, self._certfile)
@@ -951,27 +947,16 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                     # assert peer_loc == req.src
                     peer = _Peer.peers.get((peer_loc.addr, peer_loc.port), None)
                     if peer and peer.auth == auth_code:
-                        logger.debug('ignoring peer: %s' % (peer_loc))
+                        logger.debug('%s: ignoring peer: %s' % (self._location, peer_loc))
                         yield conn.send_msg(b'nak')
                         break
                     yield conn.send_msg(b'ack')
                 except:
-                    logger.debug('ignoring peer: %s' % peer_loc)
+                    logger.debug('%s: ignoring peer: %s' % (self._location, peer_loc))
                     # logger.debug(traceback.format_exc())
                     break
 
-                logger.debug('found asyncoro at %s' % peer_loc)
-                # relay ping to other asyncoro's running on same node
-                peers = [(port, peer) for ((addr, port), peer) in _Peer.peers.items() \
-                         if addr == self._location.addr and port != self._location.port]
-                for port, peer in peers:
-                    relay_req = _NetRequest('ping',
-                                            kwargs={'loc':peer_loc, 'version':__version__,
-                                                    'name':req.kwargs['name'],
-                                                    'signature':req.kwargs['signature']},
-                                            dst=Location(self._location.addr, port), timeout=1)
-                    _Peer.send_req(relay_req)
-
+                logger.debug('%s: found asyncoro at %s' % (self._location, peer_loc))
                 if (peer_loc.addr, peer_loc.port) in _Peer.peers:
                     break
                 peer = _Peer(req.kwargs['name'], peer_loc, auth_code, self._keyfile, self._certfile)
@@ -1000,10 +985,10 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 assert req.src is None
                 assert req.dst == self._location
                 reply = -1
-                name = req.kwargs.get('channel', None)
-                if name:
-                    channel = self._channels.get(name, None)
-                    if channel is not None and channel._location == self._location:
+                channel = req.kwargs.get('channel', None)
+                if channel is not None:
+                    channel = self._channels.get(channel, None)
+                    if isinstance(channel, Channel) and channel._location == self._location:
                         subscriber = req.kwargs.get('subscriber', None)
                         if subscriber is not None:
                             if isinstance(subscriber, Coro):
@@ -1020,10 +1005,10 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 assert req.src is None
                 assert req.dst == self._location
                 reply = -1
-                name = req.kwargs.get('channel', None)
-                if name:
-                    channel = self._channels.get(name, None)
-                    if channel is not None and channel._location == self._location:
+                channel = req.kwargs.get('channel', None)
+                if channel is not None:
+                    channel = self._channels.get(channel, None)
+                    if isinstance(channel, Channel) and channel._location == self._location:
                         subscriber = req.kwargs.get('subscriber', None)
                         if subscriber is not None:
                             if isinstance(subscriber, Coro):
@@ -1135,7 +1120,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 else:
                     reply = -1
                 yield conn.send_msg(serialize(reply))
-            elif req.name == 'terminate':
+            elif req.name == 'peer_closed':
                 # synchronous message
                 assert req.src is None
                 peer = req.kwargs.get('peer', None)
