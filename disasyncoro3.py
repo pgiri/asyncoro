@@ -4,6 +4,11 @@ for details.
 This module adds API for distributed programming to AsynCoro.
 """
 
+__author__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
+__copyright__ = "Copyright (c) 2012-2014 Giridhar Pemmasani"
+__license__ = "MIT"
+__url__ = "http://asyncoro.sourceforge.net"
+
 import socket
 import inspect
 import traceback
@@ -132,6 +137,8 @@ class _Peer(object):
                 self.conn.close()
                 self.conn = None
                 req.reply = None
+            except GeneratorExit:
+                break
             except:
                 # logger.debug(traceback.format_exc())
                 self.conn.close()
@@ -146,6 +153,11 @@ class _Peer(object):
         peer = _Peer.peers.pop((location.addr, location.port), None)
         if peer:
             peer.req_coro.terminate()
+            peer.stream = False
+            if peer.conn:
+                peer.conn.shutdown(socket.SHUT_WR)
+                peer.conn.close()
+                peer.conn = None
             if _Peer.callback:
                 try:
                     _Peer.callback(peer.name, peer.location, 0)
@@ -500,8 +512,12 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             self._stream_peers[(node, tcp_port)] = True
         else:
             for addr, port, peer in stream_peers:
-                peer.stream = False
                 self._stream_peers.pop((addr, port), None)
+                peer.stream = False
+                if peer.conn:
+                    peer.conn.shutdown(socket.SHUT_WR)
+                    peer.conn.close()
+                    peer.conn = None
             self._stream_peers.pop((node, tcp_port), None)
 
         if (node, tcp_port) in _Peer.peers:
@@ -1125,7 +1141,8 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 assert req.src is None
                 peer = req.kwargs.get('peer', None)
                 if peer:
-                    logger.debug('peer %s:%s terminated' % (peer.addr, peer.port))
+                    logger.debug('peer %s terminated' % (peer))
+                    self._stream_peers.pop((peer.addr, peer.port), None)
                     _Peer.remove(peer)
                 try:
                     yield conn.send_msg(serialize(b'ack'))

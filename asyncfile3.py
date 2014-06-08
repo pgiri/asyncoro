@@ -8,6 +8,11 @@ not Windows.
 See 'pipe_csum.py', 'pipe_grep.py' and 'socket_afile.py' for example.
 """
 
+__author__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
+__copyright__ = "Copyright (c) 2014 Giridhar Pemmasani"
+__license__ = "MIT"
+__url__ = "http://asyncoro.sourceforge.net"
+
 __all__ = ['AsyncFile', 'AsyncPipe']
 
 import subprocess

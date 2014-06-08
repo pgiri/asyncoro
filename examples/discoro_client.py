@@ -1,5 +1,6 @@
-# Run 'discoro.py' (server for getting computations from clients and
-# running them as coroutines) with this program
+# Run 'discoro.py' program (e.g., with '-c 0' option to use all
+# available processors) for getting computations from clients and
+# running them as coroutines, along with this program.
 
 # Example where this client sends computation to remote discoro server
 # to run that computation as remote coroutine. Remote coroutines and
@@ -26,7 +27,10 @@ class C(object):
 # coroutines there
 def compute(obj, client, coro=None):
     # obj is an instance of C
-    import math
+    import math, os
+    # any files transferred are stored under dest_path_prefix
+    os.chdir(asyncoro.AsynCoro.instance().dest_path_prefix)
+
     # this coroutine and client can use message passing;
     # get data from client
     n = yield coro.receive()
@@ -35,13 +39,13 @@ def compute(obj, client, coro=None):
     # send result back to client
     yield client.deliver(obj, timeout=3)
 
-def heartbeat(peer, interval=5, coro=None):
+def heartbeat(computation, peer, interval=10, coro=None):
     # check heartbeat of peer
     coro.set_daemon()
     no_pulse = 0
     while True:
         yield coro.sleep(interval)
-        if (yield peer.deliver({'cmd':'ping', 'coro':coro}, timeout=3)) == 1:
+        if (yield computation.ping(peer)) == 0:
             no_pulse = 0
         else:
             no_pulse += interval
@@ -60,7 +64,7 @@ def client_proc(computation, location, coro=None):
     # distribute computation to server
     if (yield computation.setup(server, timeout=3)):
         raise Exception('setup on %s failed' % location)
-    hb_coro = asyncoro.Coro(heartbeat, server)
+    hb_coro = asyncoro.Coro(heartbeat, computation, server)
     # create n coroutines at server with this computation; if the
     # computations are CPU intensive, running more than one coroutine
     # on a server at the same time is not advisable
@@ -69,12 +73,12 @@ def client_proc(computation, location, coro=None):
         obj = C(i) # create object of C
         rcoro = yield computation.run(server, obj, coro)
         r = random.uniform(10, 100) # send data to remote coro
-        print('%s: %d, %.3f' % (location, i, r))
+        print('sending %d, %.3f to %s' % (i, r, location))
         rcoro.send(r)
     for i in range(n): # get results from remote coros
         # result is instance of C
         result = yield coro.receive()
-        print('%s: %d, result = %s' % (location, i, result))
+        print('result: %d, %s from %s' % (i, result, location))
     yield computation.close(server)
     hb_coro.terminate()
     # disable streaming; otherwise, peer remains connected preventing

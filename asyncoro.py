@@ -6,7 +6,7 @@ See http://asyncoro.sourceforge.net for details.
 
 __author__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __email__ = "pgiri@yahoo.com"
-__copyright__ = "Copyright 2012, Giridhar Pemmasani"
+__copyright__ = "Copyright (c) 2012-2014 Giridhar Pemmasani"
 __contributors__ = []
 __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
