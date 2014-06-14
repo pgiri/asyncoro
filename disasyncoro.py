@@ -97,6 +97,7 @@ class _Peer(object):
         while 1:
             if not self.reqs:
                 if not self.stream and self.conn:
+                    self.conn.shutdown(socket.SHUT_WR)
                     self.conn.close()
                     self.conn = None
                 self.reqs_pending.clear()
@@ -109,9 +110,18 @@ class _Peer(object):
                     self.conn.settimeout(req.timeout)
                 try:
                     yield self.conn.connect((self.location.addr, self.location.port))
+                except GeneratorExit:
+                    if self.conn:
+                        self.conn.shutdown(socket.SHUT_WR)
+                        self.conn.close()
+                        self.conn = None
+                    break
                 except:
                     # TODO: delete peer?
-                    self.conn = None
+                    if self.conn:
+                        self.conn.shutdown(socket.SHUT_WR)
+                        self.conn.close()
+                        self.conn = None
                     req.reply = None
                     if req.event:
                         req.event.set()
@@ -130,19 +140,27 @@ class _Peer(object):
                 if len(exc.args) == 1 and exc.args[0] == 'hangup':
                     logger.warning('peer "%s" not reachable' % self.location)
                     # TODO: remove peer?
+                self.conn.shutdown(socket.SHUT_WR)
                 self.conn.close()
                 self.conn = None
                 req.reply = None
             except socket.timeout:
+                self.conn.shutdown(socket.SHUT_WR)
                 self.conn.close()
                 self.conn = None
                 req.reply = None
             except GeneratorExit:
+                if self.conn:
+                    self.conn.shutdown(socket.SHUT_WR)
+                    self.conn.close()
+                    self.conn = None
                 break
             except:
                 # logger.debug(traceback.format_exc())
-                self.conn.close()
-                self.conn = None
+                if self.conn:
+                    self.conn.shutdown(socket.SHUT_WR)
+                    self.conn.close()
+                    self.conn = None
                 req.reply = None
             finally:
                 if req.event:
@@ -152,12 +170,8 @@ class _Peer(object):
     def remove(location):
         peer = _Peer.peers.pop((location.addr, location.port), None)
         if peer:
-            peer.req_coro.terminate()
             peer.stream = False
-            if peer.conn:
-                peer.conn.shutdown(socket.SHUT_WR)
-                peer.conn.close()
-                peer.conn = None
+            peer.req_coro.terminate()
             if _Peer.callback:
                 try:
                     _Peer.callback(peer.name, peer.location, 0)
@@ -339,11 +353,9 @@ class AsynCoro(asyncoro.AsynCoro):
     'certfile' and 'keyfile' are path names for files containing SSL
     certificates; see Python 'ssl' module.
 
-    'dest_path_prefix' is path to directory (folder) where transferred
-    files are saved. If path doesn't exist, asyncoro creates
-    directory with that path. Senders may specify 'dest_path' with
-    'send_file', in which case target file will be saved under
-    dest_path_prefix + dest_path.
+    'dest_path' is path to directory (folder) where transferred files
+    are saved. If path doesn't exist, asyncoro creates directory with
+    that path.
 
     'max_file_size' is maximum length of file in bytes allowed for
     transferred files. If it is 0 or None (default), there is no
@@ -355,7 +367,7 @@ class AsynCoro(asyncoro.AsynCoro):
 
     def __init__(self, udp_port=0, tcp_port=0, node=None, ext_ip_addr=None,
                  name=None, secret='', certfile=None, keyfile=None, notifier=None,
-                 dest_path_prefix=None, max_file_size=None):
+                 dest_path=None, max_file_size=None):
         if self.__class__.__instance is None:
             super(AsynCoro, self).__init__(notifier=notifier)
             self.__class__.__instance = self
@@ -365,17 +377,17 @@ class AsynCoro(asyncoro.AsynCoro):
                 node = socket.gethostbyname(socket.gethostname())
             if not udp_port:
                 udp_port = 51350
-            if not dest_path_prefix:
-                dest_path_prefix = os.path.join(os.sep, 'tmp', 'asyncoro')
-            self.dest_path_prefix = os.path.abspath(dest_path_prefix)
+            if not dest_path:
+                dest_path = os.path.join(os.sep, 'tmp', 'asyncoro')
+            self.dest_path = os.path.abspath(dest_path)
             # TODO: avoid race condition (use locking to check/create atomically?)
-            if not os.path.isdir(self.dest_path_prefix):
+            if not os.path.isdir(self.dest_path):
                 try:
-                    os.makedirs(self.dest_path_prefix)
+                    os.makedirs(self.dest_path)
                 except:
                     # likely another asyncoro created this directory
-                    if not os.path.isdir(self.dest_path_prefix):
-                        logger.warning('failed to create "%s"' % self.dest_path_prefix)
+                    if not os.path.isdir(self.dest_path):
+                        logger.warning('failed to create "%s"' % self.dest_path)
                         logger.debug(traceback.format_exc())
             self.max_file_size = max_file_size
             self._certfile = certfile
@@ -428,14 +440,14 @@ class AsynCoro(asyncoro.AsynCoro):
             self._tcp_coro = Coro(self._tcp_proc)
             self._udp_coro = Coro(self._udp_proc)
 
-    def terminate(self, await_non_daemons=True):
-        """Terminate (singleton) instance of AsynCoro. This 'kills'
-        all running coroutines.
-
+    def finish(self):
+        """Wait until all non-daemon coroutines finish and then
+        shutdown the scheduler.
+        
         Should be called from main program (or a thread, but _not_
         from coroutines).
         """
-        super(AsynCoro, self).terminate(await_non_daemons)
+        super(AsynCoro, self).finish()
         if self._tcp_sock:
             self._tcp_sock.close()
             self._tcp_sock = None
@@ -449,8 +461,8 @@ class AsynCoro(asyncoro.AsynCoro):
         self._rchannels = {}
         self._rcis = {}
         self._requests = {}
-        if os.path.isdir(self.dest_path_prefix) and len(os.listdir(self.dest_path_prefix)) == 0:
-            os.rmdir(self.dest_path_prefix)
+        if os.path.isdir(self.dest_path) and len(os.listdir(self.dest_path)) == 0:
+            os.rmdir(self.dest_path)
 
     def locate(self, name, timeout=None):
         """Must be used with 'yield' as
@@ -515,24 +527,13 @@ class AsynCoro(asyncoro.AsynCoro):
             for addr, port, peer in stream_peers:
                 self._stream_peers.pop((addr, port), None)
                 peer.stream = False
-                if peer.conn:
-                    peer.conn.shutdown(socket.SHUT_WR)
-                    peer.conn.close()
-                    peer.conn = None
             self._stream_peers.pop((node, tcp_port), None)
 
         if (node, tcp_port) in _Peer.peers:
+            req = _NetRequest('stream', kwargs={'send':stream_send},
+                              src=self._location, dst=Location(node, tcp_port))
+            _Peer.send_req(req)
             raise StopIteration(0)
-
-        ping_msg = {'location':self._location, 'signature':self._signature, 'version':__version__}
-        ping_msg = 'ping:' + serialize(ping_msg)
-        sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
-        sock.settimeout(2)
-        try:
-            yield sock.sendto(ping_msg, (node, udp_port))
-        except:
-            pass
-        sock.close()
 
         if tcp_port:
             req = _NetRequest('ping', kwargs={'loc':self._location, 'signature':self._signature,
@@ -546,26 +547,37 @@ class AsynCoro(asyncoro.AsynCoro):
             except:
                 pass
             sock.close()
+        else:
+            ping_msg = {'location':self._location, 'signature':self._signature,
+                        'version':__version__}
+            ping_msg = 'ping:' + serialize(ping_msg)
+            sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+            sock.settimeout(2)
+            try:
+                yield sock.sendto(ping_msg, (node, udp_port))
+            except:
+                pass
+            sock.close()
 
         raise StopIteration(0)
 
     def peer_status(self, callback):
         _Peer.status_callback(callback)
 
-    def send_file(self, location, file, dest_path=None, overwrite=False, timeout=None):
+    def send_file(self, location, file, dir=None, overwrite=False, timeout=None):
         """Must be used with 'yield' as
         'val = yield scheduler.send_file(location, "file1")'.
 
-        Transfer 'file' to peer at 'location'. If 'dest_path' is not
-        None, it must be a relative path (not absolute path), in which
-        case, file will be saved at peer's dest_path_prefix +
-        dest_path. Returns -1 in case of error, 0 if the file is
-        transferred, 1 if the same file is already at the destination
-        with same size, timestamp and permissions (so file is not
-        transferred) and os.stat structure if a file with same name is
-        at the destination with different size/timestamp/permissions,
-        but 'overwrite' is False. If return value is 0, the sender may
-        want to delete file with 'del_file' later.
+        Transfer 'file' to peer at 'location'. If 'dir' is not None,
+        it must be a relative path (not absolute path), in which case,
+        file will be saved at peer's dest_path + dir. Returns -1 in
+        case of error, 0 if the file is transferred, 1 if the same
+        file is already at the destination with same size, timestamp
+        and permissions (so file is not transferred) and os.stat
+        structure if a file with same name is at the destination with
+        different size/timestamp/permissions, but 'overwrite' is
+        False. If return value is 0, the sender may want to delete
+        file with 'del_file' later.
         """
         try:
             stat_buf = os.stat(file)
@@ -573,17 +585,17 @@ class AsynCoro(asyncoro.AsynCoro):
             raise StopIteration(-1)
         if not ((stat.S_IMODE(stat_buf.st_mode) & stat.S_IREAD) and stat.S_ISREG(stat_buf.st_mode)):
             raise StopIteration(-1)
-        if isinstance(dest_path, str) and dest_path:
-            dest_path = dest_path.strip()
-            # reject absolute path for dest_path
-            if os.path.join(os.sep, dest_path) == dest_path:
+        if isinstance(dir, str) and dir:
+            dir = dir.strip()
+            # reject absolute path for dir
+            if os.path.join(os.sep, dir) == dir:
                 raise StopIteration(-1)
         peer = _Peer.peers.get((location.addr, location.port), None)
         if peer is None:
             logger.debug('%s is not a valid peer', location)
             raise StopIteration(-1)
         kwargs = {'file':os.path.basename(file), 'stat_buf':stat_buf,
-                  'overwrite':overwrite == True, 'dest_path':dest_path}
+                  'overwrite':overwrite == True, 'dir':dir}
         req = _NetRequest('send_file', kwargs=kwargs, dst=location, timeout=timeout)
         sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                            keyfile=self._keyfile, certfile=self._certfile)
@@ -621,19 +633,19 @@ class AsynCoro(asyncoro.AsynCoro):
             sock.close()
         raise StopIteration(reply)
 
-    def del_file(self, location, file, dest_path=None, timeout=None):
+    def del_file(self, location, file, dir=None, timeout=None):
         """Must be used with 'yield' as
         'loc = yield scheduler.del_file(location, "file1")'.
 
-        Delete 'file' from peer at 'location'. 'dest_path' must be
+        Delete 'file' from peer at 'location'. 'dir' must be
         same as that used for 'send_file'.
         """
-        if isinstance(dest_path, str) and dest_path:
-            dest_path = dest_path.strip()
-            # reject absolute path for dest_path
-            if os.path.join(os.sep, dest_path) == dest_path:
+        if isinstance(dir, str) and dir:
+            dir = dir.strip()
+            # reject absolute path for dir
+            if os.path.join(os.sep, dir) == dir:
                 raise StopIteration(-1)
-        kwargs = {'file':os.path.basename(file), 'dest_path':dest_path}
+        kwargs = {'file':os.path.basename(file), 'dir':dir}
         req = _NetRequest('del_file', kwargs=kwargs, dst=location, timeout=timeout)
         reply = yield self._sync_reply(req)
         if reply is None:
@@ -749,7 +761,8 @@ class AsynCoro(asyncoro.AsynCoro):
                         if isinstance(coro, Coro):
                             reply = coro.send(req.kwargs['message'])
                         else:
-                            logger.warning('ignoring message to invalid coro %s', coro)
+                            logger.warning('ignoring message to invalid coro %s',
+                                           req.kwargs['coro'])
                     else:
                         channel = req.kwargs.get('channel', None)
                         if channel is not None:
@@ -757,7 +770,8 @@ class AsynCoro(asyncoro.AsynCoro):
                             if isinstance(channel, Channel):
                                 reply = channel.send(req.kwargs['message'])
                             else:
-                                logger.warning('ignoring message to channel "%s"', channel)
+                                logger.warning('ignoring message to channel "%s"',
+                                               req.kwargs['channel'])
                         else:
                             logger.warning('ignoring invalid recipient to "send"')
                 yield conn.send_msg(serialize(reply))
@@ -775,7 +789,8 @@ class AsynCoro(asyncoro.AsynCoro):
                             coro.send(req.kwargs['message'])
                             reply = 1
                         else:
-                            logger.warning('ignoring message to invalid coro %s', coro)
+                            logger.warning('ignoring message to invalid coro %s',
+                                           req.kwargs['coro'])
                     else:
                         channel = req.kwargs.get('channel', None)
                         if channel is not None:
@@ -784,7 +799,8 @@ class AsynCoro(asyncoro.AsynCoro):
                                 reply = yield channel.deliver(
                                     req.kwargs['message'], timeout=req.timeout, n=req.kwargs['n'])
                             else:
-                                logger.warning('ignoring message to channel "%s"', channel)
+                                logger.warning('ignoring message to channel "%s"',
+                                               req.kwargs['channel'])
                         else:
                             logger.warning('ignoring invalid recipient to "send"')
                 yield conn.send_msg(serialize(reply))
@@ -917,7 +933,8 @@ class AsynCoro(asyncoro.AsynCoro):
                 finally:
                     sock.close()
 
-                logger.debug('%s: found asyncoro at %s' % (self._location, peer_loc))
+                logger.debug('%s: found asyncoro "%s" at %s' % (self._location, req.kwargs['name'],
+                                                                peer_loc))
                 if (peer_loc.addr, peer_loc.port) in _Peer.peers:
                     break
                 peer = _Peer(req.kwargs['name'], peer_loc, auth_code, self._keyfile, self._certfile)
@@ -969,7 +986,8 @@ class AsynCoro(asyncoro.AsynCoro):
                     # logger.debug(traceback.format_exc())
                     break
 
-                logger.debug('%s: found asyncoro at %s' % (self._location, peer_loc))
+                logger.debug('%s: found asyncoro "%s" at %s' % (self._location, req.kwargs['name'],
+                                                                peer_loc))
                 if (peer_loc.addr, peer_loc.port) in _Peer.peers:
                     break
                 peer = _Peer(req.kwargs['name'], peer_loc, auth_code, self._keyfile, self._certfile)
@@ -1059,17 +1077,17 @@ class AsynCoro(asyncoro.AsynCoro):
                 assert req.src is None
                 assert req.dst == self._location
                 tgt = os.path.basename(req.kwargs['file'])
-                dest_path = req.kwargs['dest_path']
-                if isinstance(dest_path, str):
-                    tgt = os.path.join(dest_path, tgt)
-                tgt = os.path.abspath(os.path.join(self.dest_path_prefix, tgt))
+                dir = req.kwargs['dir']
+                if isinstance(dir, str):
+                    tgt = os.path.join(dir, tgt)
+                tgt = os.path.abspath(os.path.join(self.dest_path, tgt))
                 stat_buf = req.kwargs['stat_buf']
                 resp = 0
                 if self.max_file_size and stat_buf.st_size > self.max_file_size:
                     logger.warning('file "%s" too big (%s) - must be smaller than %s',
                                    req.kwargs['file'], stat_buf.st_size, self.max_file_size)
                     resp = -1
-                elif not tgt.startswith(self.dest_path_prefix):
+                elif not tgt.startswith(self.dest_path):
                     resp = -1
                 elif os.path.isfile(tgt):
                     sbuf = os.stat(tgt)
@@ -1115,15 +1133,15 @@ class AsynCoro(asyncoro.AsynCoro):
                 assert req.src is None
                 assert req.dst == self._location
                 tgt = os.path.basename(req.kwargs['file'])
-                dest_path = req.kwargs['dest_path']
-                if isinstance(dest_path, str) and dest_path:
-                    tgt = os.path.join(dest_path, tgt)
-                tgt = os.path.join(self.dest_path_prefix, tgt)
-                if tgt.startswith(self.dest_path_prefix) and os.path.isfile(tgt):
+                dir = req.kwargs['dir']
+                if isinstance(dir, str) and dir:
+                    tgt = os.path.join(dir, tgt)
+                tgt = os.path.join(self.dest_path, tgt)
+                if tgt.startswith(self.dest_path) and os.path.isfile(tgt):
                     os.remove(tgt)
                     d = os.path.dirname(tgt)
                     try:
-                        while d > self.dest_path_prefix and os.path.isdir(d):
+                        while d > self.dest_path and os.path.isdir(d):
                             os.rmdir(d)
                             d = os.path.dirname(d)
                     except:
@@ -1136,18 +1154,23 @@ class AsynCoro(asyncoro.AsynCoro):
             elif req.name == 'peer_closed':
                 # synchronous message
                 assert req.src is None
-                peer = req.kwargs.get('peer', None)
-                if peer:
-                    logger.debug('peer %s terminated' % (peer))
-                    self._stream_peers.pop((peer.addr, peer.port), None)
-                    _Peer.remove(peer)
+                peer_loc = req.kwargs.get('loc', None)
+                if peer_loc:
+                    logger.debug('peer %s terminated' % (peer_loc))
+                    self._stream_peers.pop((peer_loc.addr, peer_loc.port), None)
+                    _Peer.remove(peer_loc)
                 try:
                     yield conn.send_msg(serialize('ack'))
                 except:
                     pass
                 break
+            elif req.name == 'stream':
+                yield conn.send_msg(serialize('ack'))
+                # if not req.kwargs['send']:
+                #     break
             else:
                 logger.warning('invalid request "%s" ignored', req.name)
+
         conn.close()
 
     def _async_reply(self, req, peer, dst=None):

@@ -56,29 +56,38 @@ def client_proc(computation, location, coro=None):
     server = yield asyncoro.Coro.locate('discoro_server', location, timeout=2)
     if not server:
         raise Exception('server not found at %s' % location)
-    # if lot of messages are sent to server, it may be efficient to
-    # stream messages; similarly, if lot of data is sent back, the
-    # function 'compute' can set the streaming to this client
+    # if messages are sent to server at high frequency, it may be
+    # efficient to stream messages; similarly, if lot of data is sent
+    # back, the function 'compute' can set the streaming to this
+    # client
     yield scheduler.peer(location.addr, tcp_port=location.port, stream_send=True)
 
     # distribute computation to server
     if (yield computation.setup(server, timeout=3)):
         raise Exception('setup on %s failed' % location)
     hb_coro = asyncoro.Coro(heartbeat, computation, server)
-    # create n coroutines at server with this computation; if the
-    # computations are CPU intensive, running more than one coroutine
-    # on a server at the same time is not advisable
-    n = 2
+
+    n = 3
     for i in range(n):
-        obj = C(i) # create object of C
-        rcoro = yield computation.run(server, obj, coro)
-        r = random.uniform(10, 100) # send data to remote coro
-        print('sending %d, %.3f to %s' % (i, r, location))
-        rcoro.send(r)
-    for i in range(n): # get results from remote coros
-        # result is instance of C
-        result = yield coro.receive()
-        print('result: %d, %s from %s' % (i, result, location))
+        # create k coroutines at server with this computation.  Note
+        # at any time only one coroutine runs, so compute intensive
+        # tasks won't benefit from concurrent scheduling
+        k = 2
+        for i in range(k):
+            obj = C(i) # create object of C
+            rcoro = yield computation.run(server, obj, coro)
+            if not isinstance(rcoro, asyncoro.Coro):
+                print('failed to run on %s' % server.location)
+                k -= 1
+                # terminate heartbeat too?
+                continue
+            r = random.uniform(10, 100) # send data to remote coro
+            print('sending %d, %.3f to %s' % (i, r, location))
+            rcoro.send(r)
+        for i in range(k):
+            # result is instance of C
+            result = yield coro.receive()
+            print('result: %d, %s from %s' % (i, result, location))
     yield computation.close(server)
     hb_coro.terminate()
     # disable streaming; otherwise, peer remains connected preventing
