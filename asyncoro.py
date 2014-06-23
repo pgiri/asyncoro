@@ -12,7 +12,7 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "2.8"
+__version__ = "2.9"
 
 __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
@@ -219,6 +219,9 @@ class _AsyncSocket(object):
     def __exit__(self, exc_type, exc_value, trace):
         self.close()
 
+    def __cmp__(self, other):
+        return cmp(self._fileno, other._fileno)
+
     def setdefaulttimeout(self, timeout):
         if isinstance(timeout, (int, float)) and timeout > 0:
             self._rsock.setdefaulttimeout(timeout)
@@ -274,7 +277,7 @@ class _AsyncSocket(object):
             self._read_task = self._read_result = self._read_coro = None
         if self._write_coro:
             sent = 0
-            if isinstance(self._write_result, memoryview):
+            if isinstance(self._write_result, buffer):
                 sent = self._write_task.args[1] - len(self._write_result)
             if sent:
                 self._write_coro._proceed_(sent)
@@ -510,7 +513,7 @@ class _AsyncSocket(object):
                         coro, self._write_coro = self._write_coro, None
                         coro._proceed_(None)
 
-        self._write_result = memoryview(data)
+        self._write_result = buffer(data)
         self._write_task = functools.partial(_sendall, self, len(data))
         self._write_coro = AsynCoro.cur_coro()
         self._write_coro._await_()
@@ -522,7 +525,7 @@ class _AsyncSocket(object):
         Synchronous version of async_sendall.
         """
         # TODO: is socket's sendall better?
-        buf = memoryview(data)
+        buf = buffer(data)
         while len(buf) > 0:
             sent = self._rsock.send(buf)
             if sent < 0:
@@ -840,7 +843,7 @@ if platform.system() == 'Windows':
                             self.wset.add(fid)
                         if cur_event & _AsyncPoller._Error:
                             self.xset.add(fid)
-                    elif fd._timeout:
+                    elif fd._timeout_id:
                         self.iocp_notifier._del_timeout(fd)
                     if self.polling:
                         self.cmd_wsock.send('m')
@@ -941,7 +944,6 @@ if platform.system() == 'Windows':
                     self.iocp = win32file.CreateIoCompletionPort(win32file.INVALID_HANDLE_VALUE,
                                                                  None, 0, 0)
                     self._timeouts = []
-                    self._timeout_fds = []
                     self.poll_timeout = 0
                     self._lock = threading.Lock()
                     self.async_poller = _AsyncPoller(self)
@@ -954,6 +956,7 @@ if platform.system() == 'Windows':
                                                self.cmd_rsock._read_overlap, 0)
                     if err and err != winerror.ERROR_IO_PENDING:
                         logger.warning('WSARecv error: %s', err)
+                    logger.debug('poller: IOCP')
 
             def cmd_rsock_recv(self, err, n):
                 if n == 0:
@@ -971,10 +974,10 @@ if platform.system() == 'Windows':
                 elif self.poll_timeout == _AsyncNotifier._Block or timeout < self.poll_timeout:
                     self.cmd_wsock.send('I')
 
-            def register(self, fd, event=0):
-                win32file.CreateIoCompletionPort(fd._fileno, self.iocp, 1, 0)
+            def register(self, handle, event=0):
+                win32file.CreateIoCompletionPort(handle, self.iocp, 1, 0)
 
-            def unregister(self, fd):
+            def unregister(self, handle):
                 pass
 
             def modify(self, fd, event):
@@ -985,7 +988,7 @@ if platform.system() == 'Windows':
                 if timeout == 0:
                     self.poll_timeout = 0
                 elif self._timeouts:
-                    self.poll_timeout = self._timeouts[0] - _time()
+                    self.poll_timeout = self._timeouts[0][0] - _time()
                     if self.poll_timeout < 0.0001:
                         self.poll_timeout = 0
                     elif timeout is not None:
@@ -1009,9 +1012,8 @@ if platform.system() == 'Windows':
                 if timeout == 0:
                     now = _time()
                     self._lock.acquire()
-                    while self._timeouts and self._timeouts[0] <= now:
-                        fd = self._timeout_fds.pop(0)
-                        fd_timeout = self._timeouts.pop(0)
+                    while self._timeouts and self._timeouts[0][0] <= now:
+                        fd_timeout, fd = self._timeouts.pop(0)
                         if fd._timeout_id == fd_timeout:
                             fd._timeout_id = None
                             fd._timed_out()
@@ -1019,12 +1021,10 @@ if platform.system() == 'Windows':
 
             def _add_timeout(self, fd):
                 if fd._timeout:
-                    timeout = _time() + fd._timeout
                     self._lock.acquire()
-                    i = bisect_left(self._timeouts, timeout)
-                    self._timeouts.insert(i, timeout)
-                    self._timeout_fds.insert(i, fd)
-                    fd._timeout_id = timeout
+                    fd._timeout_id = _time() + fd._timeout
+                    i = bisect_left(self._timeouts, (fd._timeout_id, fd))
+                    self._timeouts.insert(i, (fd._timeout_id, fd))
                     self._lock.release()
                 else:
                     fd._timeout_id = None
@@ -1032,19 +1032,14 @@ if platform.system() == 'Windows':
             def _del_timeout(self, fd):
                 if fd._timeout_id:
                     self._lock.acquire()
-                    i = bisect_left(self._timeouts, fd._timeout_id)
-                    # in case of identical timeouts (unlikely?), search for
-                    # correct index where fd is
+                    i = bisect_left(self._timeouts, (fd._timeout_id, fd))
                     while i < len(self._timeouts):
-                        if self._timeout_fds[i] == fd:
-                            # assert fd._timeout_id == self._timeouts[i]
+                        if self._timeouts[i] == (fd._timeout_id, fd):
                             del self._timeouts[i]
-                            del self._timeout_fds[i]
                             fd._timeout_id = None
                             break
-                        if fd._timeout_id != self._timeouts[i]:
-                            logger.warning('fd %s with %s is not found',
-                                           fd._fileno, fd._timeout_id)
+                        if fd._timeout_id != self._timeouts[i][0]:
+                            logger.warning('fd %s with %s is not found', fd._fileno, fd._timeout_id)
                             break
                         i += 1
                     self._lock.release()
@@ -1053,6 +1048,8 @@ if platform.system() == 'Windows':
                 self.async_poller.terminate()
                 self.cmd_rsock.close()
                 self.cmd_wsock.close()
+                if len(self._timeouts):
+                    logger.warning('pending timeouts: %s' % (len(self._timeouts)))
                 win32file.CloseHandle(self.iocp)
                 self.iocp = None
                 self.cmd_rsock_buf = None
@@ -1076,7 +1073,7 @@ if platform.system() == 'Windows':
                     if self._rsock.type & socket.SOCK_STREAM:
                         self._read_overlap = pywintypes.OVERLAPPED()
                         self._write_overlap = pywintypes.OVERLAPPED()
-                        self._notifier.register(self)
+                        self._notifier.register(self._fileno)
                     else:
                         self._notifier = _AsyncPoller.instance()
                 else:
@@ -1088,10 +1085,24 @@ if platform.system() == 'Windows':
                     if self._rsock.type & socket.SOCK_STREAM:
                         if self._read_overlap or self._write_overlap:
                             win32file.CancelIo(self._fileno)
-                        else:
-                            self._read_overlap = None
-                            self._write_overlap = None
                     self._notifier = None
+
+            def _timed_out(self):
+                if self._rsock.type & socket.SOCK_STREAM:
+                    if self._read_overlap or self._write_overlap:
+                        win32file.CancelIo(self._fileno)
+                if self._read_coro:
+                    if self._rsock.type & socket.SOCK_DGRAM:
+                        self._notifier.clear(self, _AsyncPoller._Read)
+                        self._read_task = None
+                    self._read_coro.throw(socket.timeout('timed out'))
+                    self._read_result = self._read_coro = None
+                if self._write_coro:
+                    if self._rsock.type & socket.SOCK_DGRAM:
+                        self._notifier.clear(self, _AsyncPoller._Write)
+                        self._write_task = None
+                    self._write_coro.throw(socket.timeout('timed out'))
+                    self._write_result = self._write_coro = None
 
             def setblocking(self, blocking):
                 _AsyncSocket.setblocking(self, blocking)
@@ -1244,7 +1255,7 @@ if platform.system() == 'Windows':
                             if coro:
                                 coro.throw(socket.error(err))
                     else:
-                        self._write_result = buffer(self._write_result, n)
+                        self._write_result = self._write_result[n:]
                         if len(self._write_result) == 0:
                             if self._timeout and self._notifier:
                                 self._notifier._del_timeout(self)
@@ -1263,7 +1274,7 @@ if platform.system() == 'Windows':
                                 if coro:
                                     coro.throw(socket.error(err))
 
-                self._write_result = buffer(data, 0)
+                self._write_result = buffer(data)
                 self._write_overlap.object = functools.partial(_sendall, self)
                 self._write_coro = AsynCoro.cur_coro()
                 self._write_coro._await_()
@@ -1508,7 +1519,6 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                 self._fds = {}
                 self._events = {}
                 self._timeouts = []
-                self._timeout_fds = []
                 self.cmd_rsock, self.cmd_wsock = _AsyncPoller._socketpair()
                 self.cmd_wsock.setblocking(0)
                 self.cmd_rsock = AsyncSocket(self.cmd_rsock)
@@ -1526,7 +1536,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
             if timeout == 0:
                 poll_timeout = timeout
             elif self._timeouts:
-                poll_timeout = self._timeouts[0] - _time()
+                poll_timeout = self._timeouts[0][0] - _time()
                 if poll_timeout < 0.0001:
                     poll_timeout = 0
                 elif timeout is not None:
@@ -1574,9 +1584,8 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
 
             if timeout == 0:
                 now = _time()
-                while self._timeouts and self._timeouts[0] <= now:
-                    fd = self._timeout_fds.pop(0)
-                    fd_timeout = self._timeouts.pop(0)
+                while self._timeouts and self._timeouts[0][0] <= now:
+                    fd_timeout, fd = self._timeouts.pop(0)
                     if fd._timeout_id == fd_timeout:
                         fd._timeout_id = None
                         fd._timed_out()
@@ -1584,6 +1593,8 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
         def terminate(self):
             self.cmd_wsock.close()
             self.cmd_rsock.close()
+            if len(self._timeouts):
+                logger.warning('pending timeouts: %s' % (len(self._timeouts)))
             if hasattr(self._poller, 'terminate'):
                 self._poller.terminate()
             else:
@@ -1595,33 +1606,28 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                                        fd._fileno, traceback.format_exc())
             self._poller = None
             self._timeouts = []
-            self._timeout_fds = []
             self._fds = {}
             self.__class__.__instance = None
 
         def _add_timeout(self, fd):
             if fd._timeout:
-                timeout = _time() + fd._timeout
-                i = bisect_left(self._timeouts, timeout)
-                self._timeouts.insert(i, timeout)
-                self._timeout_fds.insert(i, fd)
-                fd._timeout_id = timeout
+                fd._timeout_id = _time() + fd._timeout
+                i = bisect_left(self._timeouts, (fd._timeout_id, fd))
+                self._timeouts.insert(i, (fd._timeout_id, fd))
             else:
                 fd._timeout_id = None
 
         def _del_timeout(self, fd):
             if fd._timeout_id:
-                i = bisect_left(self._timeouts, fd._timeout_id)
+                i = bisect_left(self._timeouts, (fd._timeout_id, fd))
                 # in case of identical timeouts (unlikely?), search for
                 # correct index where fd is
                 while i < len(self._timeouts):
-                    if self._timeout_fds[i] == fd:
-                        # assert fd._timeout_id == self._timeouts[i]
+                    if self._timeouts[i] == (fd._timeout_id, fd):
                         del self._timeouts[i]
-                        del self._timeout_fds[i]
                         fd._timeout_id = None
                         break
-                    if fd._timeout_id != self._timeouts[i]:
+                    if fd._timeout_id != self._timeouts[i][0]:
                         logger.warning('fd %s with %s is not found', fd._fileno, fd._timeout_id)
                         break
                     i += 1

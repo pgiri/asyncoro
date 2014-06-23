@@ -1,7 +1,11 @@
-# Asynchronous file example. The file descriptor is associated with
-# socket. The client sends data in chunks and server reads lines from
-# the data receivd from client. Both compute sha1sum to check that
-# data is received correctly.
+# Asynchronous file example. Works with Linux, OS X and other Unix
+# variants, but not Windows, as in Windows sockets don't support file
+# I/O for asynchronous I/O.
+
+# The file descriptor is associated with socket. The client sends data
+# in chunks and server reads lines from the data receivd from
+# client. Both compute checksum to check that data is received
+# correctly.
 
 # argv[1] must be a text file
 
@@ -20,7 +24,8 @@ def client_proc(host, port, input, coro=None):
     sock = asyncoro.AsyncSocket(sock)
     yield sock.connect((host, port))
     # data can be written to this asynchronous socket; however, for
-    # illustration, convert its file descriptor to asynchronous instead
+    # illustration, convert its file descriptor to asynchronous file
+    # and write to that instead
     afd = asyncfile.AsyncFile(sock)
     input = open(input)
     csum = hashlib.sha1()
@@ -35,7 +40,8 @@ def client_proc(host, port, input, coro=None):
 
 def server_proc(conn, coro=None):
     # conn is a synchronous socket (as it is obtained from synchronous
-    # 'accept'); it's file-descriptor is converted to asynchronous version
+    # 'accept'); it's file-descriptor is converted to asynchronous
+    # file to read data from that
     afd = asyncfile.AsyncFile(conn)
     csum = hashlib.sha1()
     nlines = 0

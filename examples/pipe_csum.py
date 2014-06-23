@@ -5,7 +5,7 @@
 
 # argv[1] must be a text file
 
-import sys, os, logging, traceback, subprocess
+import sys, os, logging, traceback, subprocess, platform
 
 if sys.version_info.major > 2:
     import asyncoro3 as asyncoro
@@ -15,13 +15,17 @@ else:
     import asyncfile
     
 def communicate(input, coro=None):
-    popen = subprocess.Popen(['sha1sum'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    if platform.system() == 'Windows':
+        # asyncfile.Popen must be used instead of subprocess.Popen
+        pipe = asyncfile.Popen([r'\cygwin64\bin\sha1sum.exe'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    else:
+        pipe = subprocess.Popen(['sha1sum'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     # convert pipe to asynchronous version
-    apipe = asyncfile.AsyncPipe(popen)
+    async_pipe = asyncfile.AsyncPipe(pipe)
     # 'communicate' takes either the data or file descriptor with data
     # (if file is too large to read in full) as input
     input = open(input)
-    stdout, stderr = yield apipe.communicate(input)
+    stdout, stderr = yield async_pipe.communicate(input)
     print('communicate sha1sum: %s' % stdout)
 
 def custom_feeder(input, coro=None):
@@ -41,10 +45,15 @@ def custom_feeder(input, coro=None):
         pipe.stdout.close()
         raise StopIteration(data)
 
-    popen = subprocess.Popen(['sha1sum'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-    apipe = asyncfile.AsyncPipe(popen)
-    reader = asyncoro.Coro(read_proc, apipe)
-    writer = asyncoro.Coro(write_proc, open(input), apipe)
+    if platform.system() == 'Windows':
+        # asyncfile.Popen must be used instead of subprocess.Popen
+        pipe = asyncfile.Popen([r'\cygwin64\bin\sha1sum.exe'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    else:
+        pipe = subprocess.Popen(['sha1sum'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+
+    async_pipe = asyncfile.AsyncPipe(pipe)
+    reader = asyncoro.Coro(read_proc, async_pipe)
+    writer = asyncoro.Coro(write_proc, open(input), async_pipe)
     stdout = yield reader.finish()
     print('     feeder sha1sum: %s' % stdout)
 
