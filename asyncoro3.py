@@ -1,7 +1,12 @@
 """
-asyncoro: Framework for concurrent, distributed, network programming
-with asynchronous completions and coroutines.
-See http://asyncoro.sourceforge.net for details.
+This file is part of asyncoro; see http://asyncoro.sourceforge.net
+for details.
+
+This module provides framework for concurrent, asynchronous network
+programming with coroutines, asynchronous completions and message
+passing. Other modules in asyncoro download package provide API for
+distributed programming, asynchronous pipes, distributed concurrent
+communicating processes.
 """
 
 __author__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
@@ -64,6 +69,9 @@ else:
     from errno import EWOULDBLOCK
     from errno import EINVAL
     from time import time as _time
+
+if sys.version_info >= (3,3):
+    from time import perf_counter as _time
 
 def serialize(obj):
     return pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
@@ -220,7 +228,9 @@ class _AsyncSocket(object):
         self.close()
 
     def __cmp__(self, other):
-        return cmp(self._fileno, other._fileno)
+        if isinstance(other, AsyncSocket):
+            return cmp(self._fileno, other._fileno)
+        return 1
 
     def setdefaulttimeout(self, timeout):
         if isinstance(timeout, (int, float)) and timeout > 0:
@@ -791,7 +801,7 @@ if platform.system() == 'Windows':
                 if update:
                     if self._fds.pop(fid, None) != fd:
                         self._lock.release()
-                        logger.debug('fd %s is not registered', fd._fileno)
+                        logger.debug('fd %s is not registered', fid)
                         return
                     event = self._events.pop(fid, 0)
                 else:
@@ -967,6 +977,7 @@ if platform.system() == 'Windows':
                                                self.cmd_rsock._read_overlap, 0)
                     if err and err != winerror.ERROR_IO_PENDING:
                         logger.warning('WSARecv error: %s', err)
+                    logger.debug('poller: IOCP')
 
             def cmd_rsock_recv(self, err, n):
                 if n == 0:
@@ -1057,9 +1068,9 @@ if platform.system() == 'Windows':
             def terminate(self):
                 self.async_poller.terminate()
                 self.cmd_rsock.close()
+                self.cmd_wsock.close()
                 if len(self._timeouts):
                     logger.warning('pending timeouts: %s' % (len(self._timeouts)))
-                self.cmd_wsock.close()
                 win32file.CloseHandle(self.iocp)
                 self.iocp = None
                 self.cmd_rsock_buf = None
@@ -1093,9 +1104,26 @@ if platform.system() == 'Windows':
                 if self._notifier:
                     self._notifier.unregister(self)
                     if self._rsock.type & socket.SOCK_STREAM:
-                        if self._read_overlap or self._write_overlap:
+                        if (self._read_overlap and self._read_overlap.object) or \
+                               (self._write_overlap and self._write_overlap.object):
+                            def _cleanup_(self, rc, n):
+                                self._read_overlap.object = self._write_overlap.object = None
+                                self._read_overlap = self._write_overlap = None
+                                self._notifier = None
+                                if rc != winerror.ERROR_OPERATION_ABORTED:
+                                    logger.warning('CancelIo failed?: %x' % rc)
+                            if self._read_overlap and self._read_overlap.object:
+                                self._read_overlap.object = functools.partial(_cleanup_, self)
+                            if self._write_overlap and self._write_overlap.object:
+                                self._read_overlap.object = functools.partial(_cleanup_, self)
                             win32file.CancelIo(self._fileno)
-                    self._notifier = None
+                        else:
+                            self._read_overlap = self._write_overlap = None
+                            self._notifier = None
+                        self._read_result = self._write_result = None
+                        self._read_coro = self._write_coro = None
+                    else:
+                        self._notifier = None
 
             def _timed_out(self):
                 if self._rsock.type & socket.SOCK_STREAM:
@@ -1133,7 +1161,7 @@ if platform.system() == 'Windows':
                     if err or n == 0:
                         self._read_overlap.object = self._read_result = None
                         if err == winerror.ERROR_OPERATION_ABORTED:
-                            self._read_overlap = None
+                            self._read_coro = None
                         else:
                             if not err:
                                 err = winerror.ERROR_CONNECTION_INVALID
@@ -1168,9 +1196,9 @@ if platform.system() == 'Windows':
                     if self._timeout and self._notifier:
                         self._notifier._del_timeout(self)
                     if err or n == 0:
-                        self._write_overlap.object = None
+                        self._write_overlap.object = self._write_result = None
                         if err == winerror.ERROR_OPERATION_ABORTED:
-                            self._write_overlap = None
+                            self._write_coro = None
                         else:
                             if not err:
                                 err = winerror.ERROR_CONNECTION_INVALID
@@ -1203,7 +1231,7 @@ if platform.system() == 'Windows':
                         view.release()
                         self._read_overlap.object = self._read_result = None
                         if err == winerror.ERROR_OPERATION_ABORTED:
-                            self._read_overlap = None
+                            self._read_coro = None
                         else:
                             if not err:
                                 err = winerror.ERROR_CONNECTION_INVALID
@@ -1225,6 +1253,7 @@ if platform.system() == 'Windows':
                             if coro:
                                 coro._proceed_(buf)
                         else:
+                            self._read_overlap.object = functools.partial(_recvall, self, view)
                             err, n = win32file.WSARecv(self._fileno, view, self._read_overlap, 0)
                             if err and err != winerror.ERROR_IO_PENDING:
                                 if self._timeout and self._notifier:
@@ -1257,7 +1286,7 @@ if platform.system() == 'Windows':
                             self._notifier._del_timeout(self)
                         self._write_overlap.object = self._write_result = None
                         if err == winerror.ERROR_OPERATION_ABORTED:
-                            self._write_overlap = None
+                            self._write_coro = None
                         else:
                             if not err:
                                 err = winerror.ERROR_CONNECTION_INVALID
@@ -1317,7 +1346,7 @@ if platform.system() == 'Windows':
                             self._read_overlap.object = self._read_result = None
                             self.close()
                             if err == winerror.ERROR_OPERATION_ABORTED:
-                                self._read_overlap = None
+                                self._read_coro = None
                             else:
                                 coro, self._read_coro = self._read_coro, None
                                 if coro:
@@ -1335,7 +1364,7 @@ if platform.system() == 'Windows':
                             self._notifier._del_timeout(self)
                         self._read_overlap.object = self._read_result = None
                         if err == winerror.ERROR_OPERATION_ABORTED:
-                            self._read_overlap = None
+                            self._read_coro = None
                         else:
                             coro, self._read_coro = self._read_coro, None
                             if coro:
@@ -1396,7 +1425,7 @@ if platform.system() == 'Windows':
                             self._read_overlap.object = self._read_result = None
                             conn.close()
                             if err == winerror.ERROR_OPERATION_ABORTED:
-                                self._read_overlap = None
+                                self._read_coro = None
                             else:
                                 coro, self._read_coro = self._read_coro, None
                                 if coro:
@@ -1414,7 +1443,7 @@ if platform.system() == 'Windows':
                             self._notifier._del_timeout(self)
                         self._read_overlap.object = self._read_result = None
                         if err == winerror.ERROR_OPERATION_ABORTED:
-                            self._read_overlap = None
+                            self._read_coro = None
                         else:
                             coro, self._read_coro = self._read_coro, None
                             if coro:

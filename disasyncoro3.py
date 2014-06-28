@@ -19,10 +19,15 @@ import hashlib
 import random
 import collections
 import copy
+import tempfile
 import weakref
 
-import asyncoro3 as asyncoro
-from asyncoro3 import *
+try:
+    import asyncoro3 as asyncoro
+    from asyncoro3 import *
+except ImportError:
+    import asyncoro
+    from asyncoro import *
 
 __version__ = asyncoro.__version__
 __all__ = asyncoro.__all__ + ['RCI']
@@ -377,7 +382,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             if not udp_port:
                 udp_port = 51350
             if not dest_path:
-                dest_path = os.path.join(os.sep, 'tmp', 'asyncoro')
+                dest_path = os.path.join(os.sep, tempfile.gettempdir(), 'asyncoro')
             self.dest_path = os.path.abspath(dest_path)
             # TODO: avoid race condition (use locking to check/create atomically?)
             if not os.path.isdir(self.dest_path):
@@ -607,7 +612,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             if reply == 0:
                 fd = open(file, 'rb')
                 while True:
-                    data = fd.read(1024000)
+                    data = fd.read(10240000)
                     if not data:
                         break
                     yield sock.sendall(data)

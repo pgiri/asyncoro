@@ -29,7 +29,10 @@ import inspect
 import traceback
 
 if sys.version_info.major >= 3:
-    import disasyncoro3 as asyncoro
+    try:
+        import disasyncoro3 as asyncoro
+    except ImportError:
+        import disasyncoro as asyncoro
 else:
     import disasyncoro as asyncoro
 

@@ -31,9 +31,10 @@ import asyncoro
 from asyncoro import _AsyncPoller, AsynCoro, Coro
 
 if platform.system() == 'Windows':
+    __all__ += ['pipe', 'Popen']
+
     import itertools
     import tempfile
-    import threading
     import win32file
     import win32pipe
     import win32event
@@ -42,8 +43,6 @@ if platform.system() == 'Windows':
     import winnt
     import pywintypes
     import msvcrt
-
-    __all__ += ['pipe']
 
     _pipe_id = itertools.count()
 
@@ -71,6 +70,7 @@ if platform.system() == 'Windows':
             if rc == winerror.ERROR_PIPE_CONNECTED:
                 win32event.SetEvent(overlapped.hEvent)
             rc = win32event.WaitForSingleObject(overlapped.hEvent, 1000)
+            overlapped = None
             if rc != win32event.WAIT_OBJECT_0:
                 asyncoro.logger.warning('connect failed: %s' % rc)
                 raise Exception(rc)
@@ -87,28 +87,27 @@ if platform.system() == 'Windows':
         and stderr support overlapped I/O.
         """
         def __init__(self, args, stdin=None, stdout=None, stderr=None, **kwargs):
-            self.stdin_rh = self.stdin_wh = None
-            self.stdout_rh = self.stdout_wh = None
-            self.stderr_rh = self.stderr_wh = None
             self.stdin = self.stdout = self.stderr = None
 
-            stdin_rfd = stdout_wfd = stderr_wfd = None
+            stdin_rh = stdin_wh = stdout_rh = stdout_wh = stderr_rh = stderr_wh = None
 
             if stdin == subprocess.PIPE:
-                self.stdin_rh, self.stdin_wh = pipe()
-                stdin_rfd = msvcrt.open_osfhandle(self.stdin_rh, os.O_RDONLY)
+                stdin_rh, stdin_wh = pipe()
+                stdin_rfd = msvcrt.open_osfhandle(stdin_rh.Detach(), os.O_RDONLY)
+                self.stdin_rh = stdin_rh
             else:
                 stdin_rfd = stdin
+                self.stdin_rh = None
 
             if stdout == subprocess.PIPE:
-                self.stdout_rh, self.stdout_wh  = pipe()
-                stdout_wfd = msvcrt.open_osfhandle(self.stdout_wh, 0)
+                stdout_rh, stdout_wh = pipe()
+                stdout_wfd = msvcrt.open_osfhandle(stdout_wh, 0)
             else:
                 stdout_wfd = stdout
 
             if stderr == subprocess.PIPE:
-                self.stderr_rh, self.stderr_wh = pipe()
-                stderr_wfd = msvcrt.open_osfhandle(self.stderr_wh, 0)
+                stderr_rh, stderr_wh = pipe()
+                stderr_wfd = msvcrt.open_osfhandle(stderr_wh, 0)
             elif stderr == subprocess.STDOUT:
                 stderr_wfd = stdout_wfd
             else:
@@ -118,18 +117,17 @@ if platform.system() == 'Windows':
                 super(Popen, self).__init__(args, stdin=stdin_rfd, stdout=stdout_wfd,
                                             stderr=stderr_wfd, **kwargs)
             except:
-                for handle in (self.stdin_rh, self.stdin_wh, self.stdout_rh, self.stdout_wh,
-                          self.stderr_rh, self.stderr_wh):
+                for handle in (stdin_rh, stdin_wh, stdout_rh, stdout_wh, stderr_rh, stderr_wh):
                     if handle is not None:
                         win32file.CloseHandle(handle)
                 raise
             else:
-                if self.stdin_wh is not None:
-                    self.stdin = AsyncFile(self.stdin_wh, mode='w')
-                if self.stdout_rh is not None:
-                    self.stdout = AsyncFile(self.stdout_rh, mode='r')
-                if self.stderr_rh is not None:
-                    self.stderr = AsyncFile(self.stderr_rh, mode='r')
+                if stdin_wh is not None:
+                    self.stdin = AsyncFile(stdin_wh, mode='w')
+                if stdout_rh is not None:
+                    self.stdout = AsyncFile(stdout_rh, mode='r')
+                if stderr_rh is not None:
+                    self.stderr = AsyncFile(stderr_rh, mode='r')
             finally:
                 if stdin == subprocess.PIPE:
                     os.close(stdin_rfd)
@@ -142,25 +140,26 @@ if platform.system() == 'Windows':
             """It is advised to call 'close' on the pipe so both
             handles of pipe are closed.
             """
-            if self.stdin:
-                if isinstance(self.stdin, AsyncFile) and self.stdin._handle:
-                    self.stdin.close()
-                win32file.CloseHandle(self.stdin_rh)
+            if isinstance(self.stdin, AsyncFile):
+                self.stdin.close()
                 self.stdin = None
-            if self.stdout:
-                if isinstance(self.stdout, AsyncFile) and self.stdout._handle:
-                    self.stdout.close()
-                win32file.CloseHandle(self.stdin_wh)
+            if self.stdin_rh:
+                win32pipe.DisconnectNamedPipe(self.stdin_rh)
+                win32file.CloseHandle(self.stdin_rh)
+                self.stdin_rh = None
+            if isinstance(self.stdout, AsyncFile):
+                self.stdout.close()
                 self.stdout = None
-            if self.stderr:
-                if isinstance(self.stderr, AsyncFile) and self.stderr._handle:
-                    self.stderr.close()
-                win32file.CloseHandle(self.stderr_wh)
+            if isinstance(self.stderr, AsyncFile):
+                self.stderr.close()
                 self.stderr = None
 
         def terminate(self):
             self.close()
             super(Popen, self).terminate()
+
+        def __del__(self):
+            self.terminate()
 
     class _AsyncFile(object):
         """Asynchronous file interface. Under Windows asynchronous I/O
@@ -269,7 +268,7 @@ if platform.system() == 'Windows':
                     try:
                         rc, _ = win32file.ReadFile(self._handle, self._read_result, self._overlap)
                     except pywintypes.error as exc:
-                        rc = exc[0]
+                        rc = exc.winerror
                     if rc and rc != winerror.ERROR_IO_PENDING:
                         buf, self._buflist = ''.join(self._buflist), []
                         self._overlap.object = self._read_result = None
@@ -306,13 +305,13 @@ if platform.system() == 'Windows':
             try:
                 rc, _ = win32file.ReadFile(self._handle, self._read_result, self._overlap)
             except pywintypes.error as exc:
-                if exc[0] == winerror.ERROR_BROKEN_PIPE:
+                if exc.winerror == winerror.ERROR_BROKEN_PIPE:
                     buf, self._buflist = ''.join(self._buflist), []
                     self._read_coro._proceed_(buf)
                     self._read_result = self._read_coro = self._overlap.object = None
                     return
                 else:
-                    rc = exc[0]
+                    rc = exc.winerror
             if rc and rc != winerror.ERROR_IO_PENDING:
                 self._overlap.object = self._read_result = self._read_coro = None
                 raise IOError(rc, 'ReadFile', str(rc))
@@ -350,7 +349,7 @@ if platform.system() == 'Windows':
                 try:
                     rc, _ = win32file.WriteFile(self._handle, self._write_result, self._overlap)
                 except pywintypes.error as exc:
-                    rc = exc[0]
+                    rc = exc.winerror
                 if rc and rc != winerror.ERROR_IO_PENDING:
                     self._overlap.object = self._write_result = None
                     if self._timeout:
@@ -369,12 +368,12 @@ if platform.system() == 'Windows':
             try:
                 rc, _ = win32file.WriteFile(self._handle, self._write_result, self._overlap)
             except pywintypes.error as exc:
-                if exc[0] == winerror.ERROR_BROKEN_PIPE:
+                if exc.winerror == winerror.ERROR_BROKEN_PIPE:
                     self._write_coro._proceed_(0)
                     self._write_result = self._write_coro = self._overlap.object = None
                     return
                 else:
-                    rc = exc[0]
+                    rc = exc.winerror
             if rc and rc != winerror.ERROR_IO_PENDING:
                 self._overlap.object = self._write_result = self._write_coro = None
                 raise IOError(rc, 'WriteFile', str(rc))
@@ -686,6 +685,8 @@ class AsyncPipe(object):
         if platform.system() == 'Windows':
             if not isinstance(first, Popen) or not isinstance(last, Popen):
                 raise ValueError('argument must be asyncfile.Popen object')
+            self.first = first
+            self.last = last
             if first.stdin:
                 self.stdin = first.stdin
             else:
@@ -701,6 +702,8 @@ class AsyncPipe(object):
         else:
             if not isinstance(first, subprocess.Popen) or not isinstance(last, subprocess.Popen):
                 raise ValueError('argument must be subprocess.Popen object')
+            self.first = None
+            self.last = None
             if first.stdin:
                 self.stdin = AsyncFile(first.stdin)
             else:
@@ -781,3 +784,23 @@ class AsyncPipe(object):
 
         raise StopIteration((yield stdout_coro.finish()) if self.stdout else None,
                             (yield stderr_coro.finish()) if self.stderr else None)
+
+    def close(self):
+        if self.first:
+            if self.first == self.last:
+                self.last = None
+            self.first.close()
+            self.first = None
+        if self.last:
+            self.last.close()
+            self.last = None
+
+    def __del__(self):
+        self.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, trace):
+        self.close()
+        return True
