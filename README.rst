@@ -1,5 +1,5 @@
- asyncoro
-##########
+asyncoro
+########
 
 asyncoro is a Python framework for concurrent, distributed,
 asynchronous network programming.
