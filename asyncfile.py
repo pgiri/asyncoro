@@ -2,14 +2,15 @@
 for details.
 
 This module provides API for asynchronous file and pipe processing.
-They works with Windows, Linux, OS X and likely other UNIX
+They work with Windows, Linux, OS X and likely other UNIX
 variants. Note that regular (on-disk) files don't support asynchronous
 I/O, as they are non-blocking and can't be used for polling to signal
 read/write events - they are always ready to be read/written.
 
-In Windows Popen in this module must be used instead of
-subprocess.Popen. See 'pipe_csum.py', 'pipe_grep.py' and
-'socket_afile.py' for examples.
+Under Windows, pipes must be opened with Popen in this module instead
+of Popen in subprocess module.
+
+See 'pipe_csum.py', 'pipe_grep.py' and 'socket_afile.py' for examples.
 """
 
 __author__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
@@ -49,8 +50,8 @@ if platform.system() == 'Windows':
     def pipe(bufsize=8192):
         """Creates overlapped (asynchronous) pipe.
         """
-        name = tempfile.mktemp(prefix=r'\\.\pipe\asyncoro-pipe-%d-%d-' %
-                               (os.getpid(), next(_pipe_id)))
+        name = tempfile.mkstemp(prefix=r'\\.\pipe\asyncoro-pipe-%d-%d-' %
+                                (os.getpid(), next(_pipe_id)))
         rh = wh = None
         try:
             rh = win32pipe.CreateNamedPipe(
@@ -80,6 +81,7 @@ if platform.system() == 'Windows':
                 win32file.CloseHandle(rh)
             if wh is not None:
                 win32file.CloseHandle(wh)
+            os.remove(name)
             raise
 
     class Popen(subprocess.Popen):
@@ -155,6 +157,8 @@ if platform.system() == 'Windows':
                 self.stderr = None
 
         def terminate(self):
+            """Close pipe and terminate child process.
+            """
             self.close()
             super(Popen, self).terminate()
 
@@ -382,6 +386,9 @@ if platform.system() == 'Windows':
                 _AsyncFile._notifier._add_timeout(self)
 
         def seek(self, offset, whence=os.SEEK_SET):
+            """Similar to 'seek' of file descriptor; works only for
+            regular files.
+            """
             if whence == os.SEEK_SET:
                 self._overlap.Offset = offset
             elif whence == os.SEEK_CUR:
@@ -395,12 +402,20 @@ if platform.system() == 'Windows':
                     self._overlap.Offset = offset
 
         def tell(self):
+            """Similar to 'tell' of file descriptor; works only for
+            regular files.
+            """
             return self._overlap.Offset
 
         def fileno(self):
+            """Similar to 'fileno' of file descriptor; works only for
+            regular files.
+            """
             return self._fileno
 
         def close(self):
+            """Similar to 'close' of file descriptor.
+            """
             if self._handle:
                 try:
                     flags = win32pipe.GetNamedPipeInfo(self._handle)[0]
@@ -427,6 +442,8 @@ if platform.system() == 'Windows':
                     _close_(self, 0, 0)
 
         def _timed_out(self):
+            """Internal use only.
+            """
             if self._read_coro:
                 if self._buflist:
                     buf, self._buflist = ''.join(self._buflist), []
@@ -454,11 +471,11 @@ else:
             """'fd' is either a file object (e.g., obtained with 'open')
             or a file number (e.g., obtained with socket's fileno()).
             """
-            if AsyncFile._notifier is None:
-                AsyncFile._notifier = asyncoro._AsyncNotifier.instance()
+            if _AsyncFile._notifier is None:
+                _AsyncFile._notifier = asyncoro._AsyncNotifier.instance()
             if hasattr(fd, 'fileno'):
                 if hasattr(fd, '_fileno'):
-                    AsyncFile._notifier.unregister(fd)
+                    _AsyncFile._notifier.unregister(fd)
                 self._fd = fd
                 self._fileno = fd.fileno()
             elif isinstance(fd, int):
@@ -505,7 +522,7 @@ else:
                     else:
                         raise
                 except:
-                    AsyncFile._notifier.clear(self, _AsyncPoller._Read)
+                    _AsyncFile._notifier.clear(self, _AsyncPoller._Read)
                     self._read_task = None
                     coro, self._read_coro = self._read_coro, None
                     coro.throw(*sys.exc_info())
@@ -523,7 +540,7 @@ else:
                         return
                 if self._buflist:
                     buf, self._buflist = ''.join(self._buflist), []
-                AsyncFile._notifier.clear(self, _AsyncPoller._Read)
+                _AsyncFile._notifier.clear(self, _AsyncPoller._Read)
                 self._read_coro._proceed_(buf)
                 self._read_coro = self._read_task = None
 
@@ -542,7 +559,7 @@ else:
             self._read_task = partial_func(_read, self, size, full)
             self._read_coro = AsynCoro.cur_coro()
             self._read_coro._await_()
-            AsyncFile._notifier.add(self, _AsyncPoller._Read)
+            _AsyncFile._notifier.add(self, _AsyncPoller._Read)
 
         def write(self, buf, full=False, timeout=None):
             """Write data in 'buf' to fd. If 'full' is True, the function
@@ -566,14 +583,14 @@ else:
                     if exc.errno in (errno.EAGAIN, errno.EINTR):
                         n = 0
                     else:
-                        AsyncFile._notifier.clear(self, _AsyncPoller._Write)
+                        _AsyncFile._notifier.clear(self, _AsyncPoller._Write)
                         self._write_task = None
                         coro, self._write_coro = self._write_coro, None
                         coro.throw(*sys.exc_info())
                         return
                 written += n
                 if n == len(view) or not full:
-                    AsyncFile._notifier.clear(self, _AsyncPoller._Write)
+                    _AsyncFile._notifier.clear(self, _AsyncPoller._Write)
                     self._write_coro._proceed_(written)
                     self._write_coro = self._write_task = None
                 else:
@@ -588,11 +605,13 @@ else:
             self._write_task = partial_func(_write, self, view, 0, full)
             self._write_coro = AsynCoro.cur_coro()
             self._write_coro._await_()
-            AsyncFile._notifier.add(self, _AsyncPoller._Write)
+            _AsyncFile._notifier.add(self, _AsyncPoller._Write)
 
         def close(self):
+            """Close file descriptor.
+            """
             if self._fileno:
-                AsyncFile._notifier.unregister(self)
+                _AsyncFile._notifier.unregister(self)
                 if self._fd:
                     self._fd.close()
                 self._fd = self._fileno = None
@@ -601,23 +620,27 @@ else:
                 self._buflist = []
 
         def _eof(self):
+            """Internal use only.
+            """
             if self._read_task and self._read_coro:
                 self._read_task()
 
         def _timed_out(self):
+            """Internal use only.
+            """
             if self._read_coro:
                 if self._read_task and self._buflist:
                     buf, self._buflist = ''.join(self._buflist), []
-                    AsyncFile._notifier.clear(self, _AsyncPoller._Read)
+                    _AsyncFile._notifier.clear(self, _AsyncPoller._Read)
                     self._read_coro._proceed_(buf)
-                    self._read_coro = self._read_task = None
                 else:
                     self._read_coro.throw(IOError('timedout'))
+                self._read_coro = self._read_task = None
             if self._write_coro:
                 written = 0
                 if self._write_task:
                     written = self._write_task.args[2]
-                AsyncFile._notifier.clear(self, _AsyncPoller._Write)
+                _AsyncFile._notifier.clear(self, _AsyncPoller._Write)
                 self._write_coro._proceed_(written)
                 self._write_coro = self._write_task = None
 

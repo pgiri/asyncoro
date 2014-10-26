@@ -51,7 +51,7 @@ else:
     p1 = subprocess.Popen(['grep', '-i', 'error'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     p2 = subprocess.Popen(['wc'], stdin=p1.stdout, stdout=subprocess.PIPE)
     async_pipe = asyncfile.AsyncPipe(p1, p2)
-    asyncoro.Coro(writer, async_pipe, '/var/log/kern.log')
+    asyncoro.Coro(writer, async_pipe, '/var/log/syslog')
     asyncoro.Coro(line_reader, async_pipe)
 
     # alternate example:

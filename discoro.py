@@ -27,6 +27,7 @@ import os
 import sys
 import inspect
 import traceback
+import functools
 
 if sys.version_info.major >= 3:
     try:
@@ -63,7 +64,7 @@ class Computation(object):
                 self._name = func.func_name
             self._code = inspect.getsource(func).lstrip()
         else:
-            raise Exception('Invalid computation; must be generator: %s' % (computation.func_name))
+            raise Exception('Invalid computation; must be generator')
 
         self._cleanup = cleanup
         depend_ids = set()
@@ -100,7 +101,7 @@ class Computation(object):
         # make sure code can be compiled
         compile(self._code, '<string>', 'exec')
 
-    def setup(self, peer, timeout=None):
+    def setup(self, peer, timeout=None, func=None, args=(), kwargs={}):
         """Sends computation to peer. This method should be called
         once for each peer. Gives 0 if the setup is successful.
 
@@ -108,8 +109,9 @@ class Computation(object):
         """
         if not self._code:
             raise StopIteration(-1)
-        def _setup(self, peer, timeout, coro=None):
-            peer.send({'cmd':'setup', 'client':coro, 'computation':self})
+        def _setup(self, peer, timeout, func, name, args, kwargs, coro=None):
+            peer.send({'cmd':'setup', 'client':coro, 'computation':self, 'func':func,
+                       'name':name, 'args':args, 'kwargs':kwargs})
             reply = yield coro.receive(timeout=timeout)
             if reply != 0:
                 raise StopIteration(-1)
@@ -121,7 +123,21 @@ class Computation(object):
                     yield self.close(peer)
                     raise StopIteration(-1)
             raise StopIteration(0)
-        coro = asyncoro.Coro(_setup, self, peer, timeout)
+        name = None
+        if func:
+            if inspect.isfunction(func):
+                if sys.version_info.major >= 3:
+                    name = func.__name__
+                else:
+                    name = func.func_name
+                func = inspect.getsource(func).lstrip()
+            else:
+                logger.warning('Invalid setup function ignored')
+                func = None
+                args = ()
+                kwargs = {}
+
+        coro = asyncoro.Coro(_setup, self, peer, timeout, func, name, args, kwargs)
         yield coro.finish()
 
     def run(self, peer, *args, **kwargs):
@@ -139,12 +155,27 @@ class Computation(object):
         coro = asyncoro.Coro(_run, self, peer)
         yield coro.finish()
 
-    def close(self, peer):
+    def close(self, peer, func=None, args=(), kwargs={}):
         """Removes computation at peer.
 
         Must be used with yield as 'yield computation.close(peer)'
         """
-        peer.send({'cmd':'close', 'computation':self._name})
+        msg = {'cmd':'close', 'computation':self._name}
+        if func:
+            if inspect.isfunction(func):
+                if sys.version_info.major >= 3:
+                    name = func.__name__
+                else:
+                    name = func.func_name
+                func = inspect.getsource(func).lstrip()
+                msg['name'] = name
+                msg['args'] = args
+                msg['kwargs'] = kwargs
+            else:
+                logger.warning('invalid close function ignored')
+                func = None
+        msg['func'] = func
+        peer.send(msg)
         if self._cleanup:
             for xf in self._xfer_files:
                 yield Computation._asyncoro.del_file(peer.location, xf)
@@ -217,6 +248,12 @@ def discoro_server(_discoro_name='discoro_server'):
                 _discoro_computation = _discoro_msg['computation']
                 exec(compile(_discoro_computation._code, '<string>', 'exec'))
                 globals().update(locals())
+                if _discoro_msg['func']:
+                    try:
+                        exec(compile(_discoro_msg['func'], '<string>', 'exec'))
+                        locals()[_discoro_msg['name']](*_discoro_msg['args'], **_discoro_msg['kwargs'])
+                    except:
+                        logger.warning('setup function failed: %s' % traceback.format_exc())
             except:
                 asyncoro.logger.warning('invalid computation')
                 asyncoro.logger.debug(traceback.format_exc())
@@ -239,6 +276,12 @@ def discoro_server(_discoro_name='discoro_server'):
             try:
                 _discoro_computation = _discoro_computations.pop(_discoro_msg['computation'], None)
                 asyncoro.logger.debug('deleting computation "%s"' % _discoro_computation._name)
+                if _discoro_msg['func']:
+                    try:
+                        exec(compile(_discoro_msg['func'], '<string>', 'exec'))
+                        locals()[_discoro_msg['name']](*_discoro_msg['args'], **_discoro_msg['kwargs'])
+                    except:
+                        logger.warning('cleanup function failed: %s' % traceback.format_exc())
                 for _discoro_var in _discoro_computation._globals:
                     globals().pop(_discoro_var, None)
                 for _discoro_var in _discoro_computation._locals:
@@ -320,10 +363,9 @@ if __name__ == '__main__':
     used.
 
     '-n' option can be used to specify prefix name for asyncoro
-    schedulers. This name is appended with hyphen followed by
-    processor number (starting with 0) when AsynCoro is created. Note
-    that the names in a cluster must be unique; otherwise, 'locate'
-    may give inconsistent results.
+    schedulers. This name is appended with hyphen followed by a unique
+    number when AsynCoro is created. Note that the names in a cluster
+    must be unique; otherwise, 'locate' may give inconsistent results.
 
     If '-d' option is used, debug logging is enabled.
 
@@ -341,7 +383,7 @@ if __name__ == '__main__':
                         help='External IP address to use (needed in case of NAT firewall/gateway)')
     parser.add_argument('-u', '--udp_port', dest='udp_port', type=int, default=51350,
                         help='UDP port number to use')
-    parser.add_argument('-n', '--name', dest='name', default=None,
+    parser.add_argument('-n', '--name', dest='name', default='discoro_server',
                         help='(symbolic) name given to AsynCoro schdulers on this node')
     parser.add_argument('--dest_path', dest='dest_path', default=None,
                         help='path where files sent by peers are stored')
@@ -364,9 +406,7 @@ if __name__ == '__main__':
         asyncoro.logger.setLevel(logging.INFO)
     del _discoro_config['loglevel']
 
-    _discoro_name = _discoro_config['name']
     _discoro_cpus = multiprocessing.cpu_count()
-
     if _discoro_config['cpus'] > 0:
         if _discoro_config['cpus'] > _discoro_cpus:
             raise Exception('CPU count must be <= %s' % _discoro_cpus)
@@ -377,19 +417,18 @@ if __name__ == '__main__':
         _discoro_cpus += _discoro_config['cpus']
     del _discoro_config['cpus']
 
+    _discoro_name = _discoro_config['name']
     _discoro_queue = multiprocessing.Queue()
     _discoro_processes = []
-    for _discoro_proc_id in range(1, _discoro_cpus):
-        if _discoro_name:
-            _discoro_config['name'] = _discoro_name + '-%s' % _discoro_proc_id
+    for _discoro_proc_id in range(2, _discoro_cpus + 1):
+        _discoro_config['name'] = _discoro_name + '-%s' % _discoro_proc_id
         _discoro_processes.append(multiprocessing.Process(target=_discoro_process,
                                                           args=(_discoro_config, _discoro_queue)))
         _discoro_processes[-1].start()
         time.sleep(0.05)
 
-    _discoro_proc_id = 0
-    if _discoro_name:
-        _discoro_config['name'] = _discoro_name + '-%s' % _discoro_proc_id
+    _discoro_proc_id = 1
+    _discoro_config['name'] = _discoro_name + '-%s' % _discoro_proc_id
     _discoro_scheduler = asyncoro.AsynCoro(**_discoro_config)
     _discoro_coro = asyncoro.Coro(discoro_server)
 

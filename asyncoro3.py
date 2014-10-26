@@ -17,7 +17,7 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "2.9"
+__version__ = "3.0"
 
 __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
@@ -2259,10 +2259,6 @@ class Coro(object):
             # request is queued for asynchronous processing
             if _Peer.send_req(request):
                 logger.warning('remote coro at %s may not be valid', self._location)
-                # def _unsub(self, rchannels, coro=None):
-                #     for rchannel in rchannels:
-                #         yield rchannel.unsubscribe(self)
-                # Coro(_unsub, self, list(Coro._asyncoro._rchannels.values()))
                 return -1
             else:
                 return 0
@@ -2284,10 +2280,6 @@ class Coro(object):
             reply = yield Coro._asyncoro._sync_reply(request, alarm_value=0)
             if reply < 0:
                 logger.warning('remote coro at %s may not be valid', self._location)
-                # def _unsub(self, rchannels, coro=None):
-                #     for rchannel in rchannels:
-                #         yield rchannel.unsubscribe(self)
-                # Coro(_unsub, self, list(Coro._asyncoro._rchannels.values()))
                 reply = 0
         raise StopIteration(reply)
 
@@ -2469,14 +2461,14 @@ class Location(object):
     identify where they are running, where to send a message etc.
 
     Users can create instances (which can be passed to 'locate'
-    methods) 'addr' is IP address and 'tcp_port' is TCP port (not UDP
-    port) where (peer) asyncoro runs network services.
+    methods) 'host' is either name or IP address and 'tcp_port' is TCP
+    port where (peer) asyncoro runs network services.
     """
 
     __slots__ = ('addr', 'port')
 
-    def __init__(self, addr, tcp_port):
-        self.addr = addr
+    def __init__(self, host, tcp_port):
+        self.addr = socket.gethostbyname(host)
         self.port = tcp_port
 
     def __eq__(self, other):
@@ -2715,10 +2707,6 @@ class Channel(object):
             # request is queued for asynchronous processing
             if _Peer.send_req(request):
                 logger.warning('remote channel at %s may not be valid', self._location)
-                # def _unsub(channel, rchannels, coro=None):
-                #     for rchannel in rchannels:
-                #         yield rchannel.unsubscribe(channel)
-                # Coro(_unsub, self, list(Channel._asyncoro._rchannels.values()))
                 return -1
         return 0
 
@@ -2793,10 +2781,6 @@ class Channel(object):
             if reply < 0:
                 logger.warning('remote channel "%s" at %s may have gone away!',
                                self._name, self._location)
-                # def _unsub(channel, rchannels, coro=None):
-                #     for rchannel in rchannels:
-                #         yield rchannel.unsubscribe(channel)
-                # Coro(_unsub, self, list(Channel._asyncoro._rchannels.values()))
                 reply = 0
             raise StopIteration(reply)
 
@@ -2824,7 +2808,7 @@ class Channel(object):
         return s
 
 class CategorizeMessages(object):
-    """Splits messages to coroutine in to categories so that they can
+    """Splits messages to coroutine into categories so that they can
     be processed on priority basis, for example.
     """
 
@@ -2875,7 +2859,7 @@ class CategorizeMessages(object):
             msg = c.popleft()
             raise StopIteration(msg)
         if timeout:
-            start = time.time()
+            start = _time()
         while True:
             msg = yield self._coro.receive(timeout=timeout, alarm_value=alarm_value)
             if msg == alarm_value:
@@ -2893,7 +2877,7 @@ class CategorizeMessages(object):
             else:
                 self._categories[None].append(msg)
             if timeout:
-                now = time.time()
+                now = _time()
                 timeout -= now - start
                 start = now
 
@@ -3147,15 +3131,28 @@ class AsynCoro(object, metaclass=MetaSingleton):
         else:
             coro._timeout = None
             # TODO: check that another HotSwapException is not pending?
-            coro._exceptions.append((HotSwapException, HotSwapException(coro._new_generator)))
-            coro._new_generator = None
-            # assert coro._state != AsynCoro._AwaitIO_
-            if coro._state in (AsynCoro._Suspended, AsynCoro._AwaitMsg_):
-                self._suspended.discard(cid)
+            if coro._state == None:
+                # assert coro._id not in self._scheduled
+                # assert coro._id not in self._suspended
+                coro._generator = coro._new_generator
+                coro._value = None
+                if coro._complete == 0:
+                    coro._complete = None
+                elif isinstance(coro._complete, Event):
+                    coro._complete.clear()
                 self._scheduled.add(cid)
                 coro._state = AsynCoro._Scheduled
-                if self._polling and len(self._scheduled) == 1:
-                    self._notifier.interrupt()
+                coro._hot_swappable = False
+            else:
+                coro._exceptions.append((HotSwapException, HotSwapException(coro._new_generator)))
+                # assert coro._state != AsynCoro._AwaitIO_
+                if coro._state in (AsynCoro._Suspended, AsynCoro._AwaitMsg_):
+                    self._suspended.discard(cid)
+                    self._scheduled.add(cid)
+                    coro._state = AsynCoro._Scheduled
+            coro._new_generator = None
+            if self._polling and len(self._scheduled) == 1:
+                self._notifier.interrupt()
         self._lock.release()
         return 0
 
@@ -3286,59 +3283,63 @@ class AsynCoro(object, metaclass=MetaSingleton):
                                 logger.warning('closing %s raised exception: %s',
                                                coro._name, traceback.format_exc())
                         # delete this coro
-                        if self._coros.pop(coro._id, None) == coro:
-                            if coro._state not in (AsynCoro._Scheduled, AsynCoro._Running):
-                                logger.warning('coro "%s" is in state: %s' % (coro._name, coro._state))
-                            self._scheduled.discard(coro._id)
-                            if coro._complete:
-                                coro._complete.set()
+                        if coro._state not in (AsynCoro._Scheduled, AsynCoro._Running):
+                            logger.warning('coro "%s" is in state: %s' % (coro._name, coro._state))
+                        monitors = list(coro._monitors)
+                        for monitor in monitors:
+                            if monitor._location == self._location:
+                                if coro._exceptions:
+                                    exc = MonitorException(coro, coro._exceptions[0])
+                                else:
+                                    exc = MonitorException(coro, (StopIteration,
+                                                                  StopIteration(coro._value)))
+                                if self._coros.get(monitor._id, None) == monitor:
+                                    monitor.send(exc)
+                                else:
+                                    logger.warning('monitor for %s/%s has gone away!',
+                                                   coro._name, coro._id)
+                                    coro._monitors.discard(monitor)
                             else:
-                                coro._complete = 0
-                            coro._state = None
-                            coro._generator = None
+                                # remote monitor; prepare serializable data
+                                if coro._exceptions:
+                                    exc = coro._exceptions[0][:2]
+                                    try:
+                                        serialize(exc[1])
+                                    except pickle.PicklingError:
+                                        # send only the type
+                                        exc = (exc[0], type(exc[1].args[0]))
+                                    exc = MonitorException(coro, exc)
+                                    coro._exceptions = []
+                                else:
+                                    exc = coro._value
+                                    try:
+                                        serialize(exc)
+                                    except pickle.PicklingError:
+                                        exc = type(exc)
+                                    exc = MonitorException(coro, (StopIteration,
+                                                                  StopIteration(exc)))
+                                monitor.send(exc)
+                        if not coro._monitors or not coro._exceptions:
+                            coro._msgs.clear()
+                            coro._monitors.clear()
+                            coro._exceptions = []
+                            if self._coros.pop(coro._id, None) != coro:
+                                logger.warning('invalid coro: %s, %s' % (coro._id, coro._state))
                             if coro._daemon is True:
                                 self._daemons -= 1
-                            if len(self._coros) == self._daemons:
-                                self._complete.set()
-                            for monitor in coro._monitors:
-                                if monitor._location == self._location:
-                                    if coro._exceptions:
-                                        exc = MonitorException(coro, coro._exceptions[0])
-                                        coro._exceptions = []
-                                    else:
-                                        exc = MonitorException(coro, (StopIteration,
-                                                                      StopIteration(coro._value)))
-                                    monitor = self._coros.get(monitor._id, None)
-                                    if monitor:
-                                        monitor.send(exc)
-                                    else:
-                                        logger.warning('monitor for %s/%s has gone away!',
-                                                       coro._name, coro._id)
-                                else:
-                                    # remote monitor; prepare serializable data
-                                    if coro._exceptions:
-                                        exc = coro._exceptions[0][:2]
-                                        try:
-                                            serialize(exc[1])
-                                        except pickle.PicklingError:
-                                            # send only the type
-                                            exc = (exc[0], type(exc[1].args[0]))
-                                        exc = MonitorException(coro, exc)
-                                        coro._exceptions = []
-                                    else:
-                                        exc = coro._value
-                                        try:
-                                            serialize(exc)
-                                        except pickle.PicklingError:
-                                            exc = type(exc)
-                                        exc = MonitorException(coro, (StopIteration,
-                                                                      StopIteration(exc)))
-                                    monitor.send(exc)
-                            if not coro._monitors or not coro._exceptions:
-                                coro._msgs.clear()
-                            coro._monitors.clear()
+                        elif coro._monitors:
+                            # a (local) monitor can restart it with hot_swap
+                            coro._hot_swappable = True
+                            coro._exceptions = []
+                        coro._state = None
+                        coro._generator = None
+                        if coro._complete:
+                            coro._complete.set()
                         else:
-                            logger.warning('coro %s/%s already removed?', coro._name, coro._id)
+                            coro._complete = 0
+                        self._scheduled.discard(coro._id)
+                        if len(self._coros) == self._daemons:
+                            self._complete.set()
                     self._lock.release()
                 else:
                     self._lock.acquire()

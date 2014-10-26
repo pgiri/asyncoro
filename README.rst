@@ -1,63 +1,96 @@
-asyncoro
-********
+ asyncoro
+##########
 
-:version: 1.4
-:site: `Home`_
-:pythons: 2.7+, 3.1+
-:platforms: Windows, Linux, Mac OS X
+asyncoro is a Python framework for concurrent, distributed,
+asynchronous network programming.
 
+Unlike with other asynchronous frameworks, programs developed with
+asyncoro have **same logic and structure** as programs with threads,
+except for a few syntactic changes - mostly using *yield* with
+asynchronous completions that give control to asyncoro's scheduler,
+which interleaves executions of coroutines, similar to the way an
+operating system executes multiple processes. In addition, asyncoro
+has many additional features, including message passing for
+communication, distributed computing/programming etc.
 
-asyncoro makes asynchronous programming in Python 2.7+ and Python 3.1+
-easy. Using it looks like:
+Unlike threads, creating processes (coroutines) with asyncoro is very
+efficient. Moreover, with asyncoro context switch occurs only when
+coroutines use *yield* (typically with an asychronous call), so there
+is no need for locking and there is no overhead of unnecessary context
+switches.
 
-.. code-block:: python
-
-    import asyncoro, random, time
-    def coro_proc(n, coro=None):
-        s = random.uniform(0.5, 3)
-        print('%f: coroutine %d sleeping for %f seconds' % (time.time(), n, s))
-        yield coro.sleep(s)
-        print('%f: coroutine %d terminating' % (time.time(), n))
-
-    for i in range(10):
-        asyncoro.Coro(coro_proc, i)
-
-Read below for more details, or go `Home`_ for even more details.
-
-**Table of Contents**
-
-.. contents::
-    :local:
-    :depth: 2
-    :backlinks: none
+asyncoro works with Python versions 2.7+ and 3.1+. It has been tested
+with Linux, Mac OS X and Windows; it may work on other platforms, too.
 
 Features
-========
+--------
 
-* Asynchronous (non-blocking) sockets, for concurrent processing of
-  (heavy) network traffic
-* Efficient polling mechanisms epoll, kqueue, /dev/poll (and poll and
-  select if necessary), and Windows I/O Completion Ports (IOCP) for
-  high performance and scalability
-* SSL for security
-* Asynchronous timers, including non-blocking sleep
-* Asynchronous locking primitives similar to Python threading module
-* Message passing, for (local and remote) coroutines to exchange
-  messages one-to-one or through broadcasting channels
+* No callbacks or event loops! No need to lock critical sections either,
+
+* Efficient polling mechanisms epoll, kqueue, /dev/poll, Windows
+  I/O Completion Ports (IOCP) for high performance and
+  scalability,
+
+* Asynchronous (non-blocking) sockets and pipes, for concurrent
+  processing of I/O,
+
+* SSL for security,
+
+* Asynchronous timers, including non-blocking sleep,
+
+* Asynchronous locking primitives similar to Python threading module,
+
+* `Message passing <http://en.wikipedia.org/wiki/Message_passing>`_
+  for (local and remote) coroutines to exchange messages one-to-one
+  with `Message Queue Pattern
+  <http://en.wikipedia.org/wiki/Message_queue>`_ or through
+  broadcasting channels with `Publish-Subscribe Pattern
+  <http://en.wikipedia.org/wiki/Publish/subscribe>`_,
+
+* `Location transparency
+  <http://en.wikipedia.org/wiki/Location_transparency>`_ with naming
+  and locating (local and remote) resources,
+
 * Remote execution of coroutines for distributed/parallel programming
-  (using message passing)
-* Monitoring and restarting of (local or remote) coroutines, for fault
-  detection and fault-tolerance
+  with Remote Coroutine Invocation and message passing,
+
+* Monitoring and restarting of (local or remote) coroutines, for
+  fault detection and fault-tolerance,
+
 * Hot-swapping of coroutine functions, for dynamic system
-  reconfiguration
-* Thread pools with asynchronous task completions, for executing time
-  consuming synchronous tasks
-* Asynchronous database cursor operations (using asynchronous thread pool)
+  reconfiguration,
 
-License
-=======
+* Distributing computation fragments for remote execution of
+  coroutines,
 
-asyncoro is distriubuted under the MIT license.
+* Thread pools with asynchronous task completions, for executing
+  time consuming synchronous tasks,
+
+Installation
+------------
+To install asyncoro for Python 2.7+, run::
+
+   pip install asyncoro
+
+or to install asyncoro for Python 3.1+, run::
+
+   pip3 install asyncoro
+
+Dependencies
+------------
+
+asyncoro is implemented with standard modules in Python. Under Windows
+efficient polling notifier I/O Completion Ports (IOCP) is supported
+only if `pywin32
+<http://sourceforge.net/projects/pywin32/files/pywin32/>`_ is
+installed; otherwise, inefficient *select* notifier is used.
 
 
-.. _Home: http://asyncoro.sourceforge.net
+Authors
+-------
+* Giridhar Pemmasani
+
+Links
+-----
+* `Project page <http://asyncoro.sourceforge.net>`_.
+* `Tutorial/Examples <http://asyncoro.sourceforge.net/tutorial.html>`_.

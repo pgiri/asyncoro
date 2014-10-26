@@ -22,12 +22,8 @@ import copy
 import tempfile
 import weakref
 
-try:
-    import asyncoro3 as asyncoro
-    from asyncoro3 import *
-except ImportError:
-    import asyncoro
-    from asyncoro import *
+import asyncoro
+from asyncoro import *
 
 __version__ = asyncoro.__version__
 __all__ = asyncoro.__all__ + ['RCI']
