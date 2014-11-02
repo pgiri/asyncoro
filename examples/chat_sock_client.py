@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 
 # run at least two instances of this program on either same node or
-# multiple nodes on local network, along with 'chat_server.py'; text
-# typed in a client is sent to the all other clients
+# multiple nodes on local network, along with 'chat_sock_server.py';
+# text typed in a client is sent to the all other clients
 
 import sys, socket, logging, time
 import asyncoro

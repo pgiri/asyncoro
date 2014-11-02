@@ -1,0 +1,77 @@
+Example files in this directory are meant to illustrate features of
+asyncoro framework. They are not necessarily efficient versions, nor
+very useful. Most examples are based on client/server model of
+communication.
+
+dispy project (http://dispy.sourceforge.net) uses asyncoro to
+implement Python framework for distributed and parallel computing.
+
+* chat_chan_client.py and chat_chan_server.py use broadcasting over
+  a channel to send messages to all participants to implement a
+  simple chat (message) service.
+
+* chat_sock_client.py and chat_sock_server.py use asynchronous network
+  programming, coroutines and message passing to implement a chat
+  (message) server that is used by clients to broadcast messages.
+
+* discoro_client.py uses discoro (server) to distribute a computation
+  (and its dependencies) and execute remote coroutines. The client and
+  remote coroutines use message passing to exhcange data.
+
+* hotswap.py and hotswap_funcs.py illustrate how a running coroutine
+  function can be swapped with a new function. The currently running
+  function checks/validates the function being replaced, any
+  unprocessed messages in the coroutine are processed with new
+  functionality.
+
+* pipe_csum.py uses asynchronous pipes to write data to and read data
+  from a system program (that computes checksum of data).
+
+* pipe_grep.py uses chained pipes with asynchronous read and write
+  interface to count number of lines matching a pattern.
+
+* rci_monitor_client.py and rci_monitor_server.py illustrate another
+  approach to execute remote coroutines: The server registers a
+  function and client requests to execute coroutine with that
+  function. Compare this to discoro_client.py where the client sends
+  the computation itself to the remote server, so the client can
+  execute arbitrary functions, whereas with RCI only registered
+  functions can be executed by clients.
+
+* remote_channel_client.py and remote_channel_server.py use
+  broadcasting channels to exchange messages among a sender and
+  local/remote recipients.
+
+* remote_coro_client.py and remote_coro_server.py exchange messages
+  with one-to-one message passing to exchange messages between two
+  remote coroutines.
+
+* socket_afile.py creates a server and a client connected with a
+  socket, which is then converted to asynchronous file. The server and
+  client exchange data with asynchronous file interface. This example
+  doesn't work in Windows, as sockets in Windows don't have underlying
+  file.
+
+* tut_channel.py is another example illustrating usage of broadcasting
+  channel to exchange messages in local coroutines.
+
+* tut_client.py and tut_server.py show message passing between remote
+  client and server coroutines.
+
+* tut_client_server.py shows message passing between local client and
+  server coroutines. The remote version and local version are similar,
+  except that remote versions register/locate coroutines.
+
+* tut_coros.py creates a number of coroutines that each suspend
+  execution for a brief period. The number of coroutines created can
+  be increased to thousands or tens of thousands to show asyncoro can
+  scale well.
+
+* tut_sock_client.py and tut_sock_server.py use asynchronous network
+  programmming to communicate.
+
+* udp.py creates client server coroutines that communicate using
+  asynchronous UDP sockets.
+
+* webserver.py is an impelementation of "Ping Pong" benchmark server
+  described at http://nichol.as/asynchronous-servers-in-python.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-# chat server; must be used with 'chat_client.py'
+# chat server; must be used with 'chat_sock_client.py'
 
 import sys, socket, logging, collections
 # messages are sent as strings, instead of bytes, so this program
