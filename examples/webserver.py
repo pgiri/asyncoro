@@ -7,10 +7,7 @@
 #     --rate=400 --send-buffer=4096 --recv-buffer=16384 --num-calls=1 --num-conns=2000
 
 import sys, socket
-if sys.version_info.major >= 3:
-    import asyncoro3 as asyncoro
-else:
-    import asyncoro
+import asyncoro
 
 def process(conn, coro=None):
     msg = "HTTP/1.0 200 OK\r\nContent-Length: 5\r\n\r\nPong!\r\n"

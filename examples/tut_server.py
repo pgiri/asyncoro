@@ -4,10 +4,7 @@
 # see http://asyncoro.sourceforge.net/tutorial.html for details.
 
 import sys, random, logging
-if sys.version_info.major >= 3:
-    import disasyncoro3 as asyncoro
-else:
-    import disasyncoro as asyncoro
+import disasyncoro as asyncoro
 
 def server_proc(coro=None):
     coro.set_daemon()

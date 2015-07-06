@@ -1,13 +1,8 @@
 # Asynchronous pipe example using chained Popen
 
 import sys, logging, subprocess, traceback, platform
-
-if sys.version_info.major > 2:
-    import asyncoro3 as asyncoro
-    import asyncfile3 as asyncfile
-else:
-    import asyncoro
-    import asyncfile
+import asyncoro
+import asyncfile
     
 def writer(apipe, inp, coro=None):
     fd = open(inp)
@@ -51,7 +46,7 @@ else:
     p1 = subprocess.Popen(['grep', '-i', 'error'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     p2 = subprocess.Popen(['wc'], stdin=p1.stdout, stdout=subprocess.PIPE)
     async_pipe = asyncfile.AsyncPipe(p1, p2)
-    asyncoro.Coro(writer, async_pipe, '/var/log/syslog')
+    asyncoro.Coro(writer, async_pipe, '/var/log/kern.log')
     asyncoro.Coro(line_reader, async_pipe)
 
     # alternate example:

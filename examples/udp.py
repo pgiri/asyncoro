@@ -5,10 +5,7 @@
 # explicitly).
 
 import sys, socket
-if sys.version_info.major >= 3:
-    import asyncoro3 as asyncoro
-else:
-    import asyncoro
+import asyncoro
 
 def server_proc(n, sock, coro=None):
     for i in range(n):

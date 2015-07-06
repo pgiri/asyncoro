@@ -10,13 +10,8 @@
 # argv[1] must be a text file
 
 import socket, logging, hashlib, sys, os
-
-if sys.version_info.major > 2:
-    import asyncoro3 as asyncoro
-    import asyncfile3 as asyncfile
-else:
-    import asyncoro
-    import asyncfile
+import asyncoro
+import asyncfile
 
 def client_proc(host, port, input, coro=None):
     # client reads input file and sends data in chunks

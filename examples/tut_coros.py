@@ -5,10 +5,7 @@
 # details.
 
 import sys, random, time
-if sys.version_info.major >= 3:
-    import asyncoro3 as asyncoro
-else:
-    import asyncoro
+import asyncoro
 
 def coro_proc(n, coro=None):
     s = random.uniform(0.5, 3)

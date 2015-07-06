@@ -6,13 +6,8 @@
 # argv[1] must be a text file
 
 import sys, os, logging, traceback, subprocess, platform
-
-if sys.version_info.major > 2:
-    import asyncoro3 as asyncoro
-    import asyncfile3 as asyncfile
-else:
-    import asyncoro
-    import asyncfile
+import asyncoro
+import asyncfile
     
 def communicate(input, coro=None):
     if platform.system() == 'Windows':

@@ -8,10 +8,7 @@
 # different computers, 'host' address must be changed appropriately.
 
 import sys, socket
-if sys.version_info.major >= 3:
-    import asyncoro3 as asyncoro
-else:
-    import asyncoro
+import asyncoro
 
 def process(conn, coro=None):
     global n

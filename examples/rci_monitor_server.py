@@ -9,10 +9,7 @@
 
 import sys, logging
 # import disasyncoro to use distributed version of AsynCoro
-if sys.version_info.major >= 3:
-    import disasyncoro3 as asyncoro
-else:
-    import disasyncoro as asyncoro
+import disasyncoro as asyncoro
 
 def rci_1(a, b=1, coro=None):
     asyncoro.logger.debug('running %s/%s with %s, %s', coro.name, id(coro), a, b)

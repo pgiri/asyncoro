@@ -5,10 +5,7 @@
 
 import sys, logging
 # import disasyncoro to use distributed version of AsynCoro
-if sys.version_info.major >= 3:
-    import disasyncoro3 as asyncoro
-else:
-    import disasyncoro as asyncoro
+import disasyncoro as asyncoro
 
 def sender_proc(rchannel, coro=None):
     # send messages to channel; 'deliver' is used with n=2, so

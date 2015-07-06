@@ -5,10 +5,7 @@
 # see http://asyncoro.sourceforge.net/tutorial.html for details.
 
 import sys, socket, random
-if sys.version_info.major >= 3:
-    import asyncoro3 as asyncoro
-else:
-    import asyncoro
+import asyncoro
 
 def client(host, port, n, coro=None):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

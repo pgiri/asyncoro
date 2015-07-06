@@ -17,7 +17,7 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "3.1"
+__version__ = "3.2"
 
 __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
@@ -1520,7 +1520,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                     _AsyncPoller._Read = select.EPOLLIN | select.EPOLLPRI
                     _AsyncPoller._Write = select.EPOLLOUT
                     _AsyncPoller._Hangup = select.EPOLLHUP
-                    _AsyncPoller._Error = select.EPOLLHUP | select.EPOLLERR
+                    _AsyncPoller._Error = select.EPOLLERR
                     _AsyncPoller._Block = -1
                 elif hasattr(select, 'kqueue'):
                     logger.debug('poller: kqueue')
@@ -1538,7 +1538,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                     _AsyncPoller._Read = select.POLLIN | select.POLLPRI
                     _AsyncPoller._Write = select.POLLOUT
                     _AsyncPoller._Hangup = select.POLLHUP
-                    _AsyncPoller._Error = select.POLLHUP | select.POLLERR
+                    _AsyncPoller._Error = select.POLLERR
                     _AsyncPoller._Block = -1
                     self.timeout_multiplier = 1000
                 elif hasattr(select, 'poll'):
@@ -1547,7 +1547,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                     _AsyncPoller._Read = select.POLLIN | select.POLLPRI
                     _AsyncPoller._Write = select.POLLOUT
                     _AsyncPoller._Hangup = select.POLLHUP
-                    _AsyncPoller._Error = select.POLLHUP | select.POLLERR
+                    _AsyncPoller._Error = select.POLLERR
                     _AsyncPoller._Block = -1
                     self.timeout_multiplier = 1000
                 else:
@@ -1622,6 +1622,9 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                             fd._write_task()
                     elif event & _AsyncPoller._Hangup:
                         fd._eof()
+                    elif event & _AsyncPoller._Error:
+                        logger.warning('error on fd %s', fd._fileno)
+                        self.unregister(fd)
             except:
                 logger.debug(traceback.format_exc())
 
@@ -2117,7 +2120,7 @@ class Coro(object):
     _asyncoro = None
 
     def __init__(self, target, *args, **kwargs):
-        self._generator = self.__get_generator(target, *args, **kwargs)
+        self._generator = Coro.__get_generator(self, target, *args, **kwargs)
         self._name = target.__name__
         self._id = id(self)
         self._state = None
@@ -2393,7 +2396,7 @@ class Coro(object):
         'alarm_value').
         """
         try:
-            generator = self.__get_generator(target, *args, **kwargs)
+            generator = Coro.__get_generator(self, target, *args, **kwargs)
         except:
             logger.warning('%s is not a generator!' % target.__name__)
             return -1
@@ -2431,7 +2434,8 @@ class Coro(object):
         """
         return Coro._asyncoro._resume(self, update, AsynCoro._AwaitIO_)
 
-    def __get_generator(self, target, *args, **kwargs):
+    @staticmethod
+    def __get_generator(coro, target, *args, **kwargs):
         if not inspect.isgeneratorfunction(target):
             raise Exception('%s is not a generator!' % target.__name__)
         if not args and kwargs:
@@ -2439,7 +2443,7 @@ class Coro(object):
             kwargs = kwargs.pop('kwargs', kwargs)
         if target.__defaults__ and \
            'coro' in target.__code__.co_varnames[:target.__code__.co_argcount][-len(target.__defaults__):]:
-            kwargs['coro'] = self
+            kwargs['coro'] = coro
         return target(*args, **kwargs)
 
     def __getstate__(self):
@@ -2910,6 +2914,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
     """
 
     __instance = None
+    __cur_coro = None
 
     # in _scheduled set, waiting for turn to execute
     _Scheduled = 1
@@ -2932,7 +2937,6 @@ class AsynCoro(object, metaclass=MetaSingleton):
             self._location = None
             self._name = None
             self._coros = {}
-            self._cur_coro = None
             self._scheduled = set()
             self._suspended = set()
             self._timeouts = []
@@ -2975,7 +2979,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
     def cur_coro():
         """Must be called from a coro only.
         """
-        return AsynCoro.__instance._cur_coro
+        return AsynCoro.__cur_coro
 
     def _add(self, coro):
         """Internal use only. See Coro class.
@@ -2993,9 +2997,9 @@ class AsynCoro(object, metaclass=MetaSingleton):
         """Internal use only. See set_daemon in Coro.
         """
         self._lock.acquire()
-        if self._cur_coro != coro:
+        if AsynCoro.__cur_coro != coro:
             self._lock.release()
-            logger.warning('invalid "set_daemon" - "%s" != "%s"' % (coro, self._cur_coro))
+            logger.warning('invalid "set_daemon" - "%s" != "%s"' % (coro, AsynCoro.__cur_coro))
             return -1
         cid = coro._id
         if coro._daemon != flag:
@@ -3028,9 +3032,9 @@ class AsynCoro(object, metaclass=MetaSingleton):
         """Internal use only. See sleep/suspend in Coro.
         """
         self._lock.acquire()
-        if self._cur_coro != coro:
+        if AsynCoro.__cur_coro != coro:
             self._lock.release()
-            logger.warning('invalid "suspend" - "%s" != "%s"' % (coro, self._cur_coro))
+            logger.warning('invalid "suspend" - "%s" != "%s"' % (coro, AsynCoro.__cur_coro))
             return -1
         cid = coro._id
         if state == AsynCoro._AwaitMsg_ and coro._msgs:
@@ -3050,9 +3054,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 self._lock.release()
                 return alarm_value
             else:
-                timeout = _time() + timeout
-                heappush(self._timeouts, (timeout, cid, alarm_value))
-                coro._timeout = timeout
+                coro._timeout = _time() + timeout
+                heappush(self._timeouts, (coro._timeout, cid, alarm_value))
         self._scheduled.discard(cid)
         self._suspended.add(cid)
         coro._state = state
@@ -3222,7 +3225,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
 
             for coro in scheduled:
                 coro._state = AsynCoro._Running
-                self._cur_coro = coro
+                AsynCoro.__cur_coro = coro
 
                 try:
                     if coro._exceptions:
@@ -3260,7 +3263,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                             coro._exceptions = []
                             coro._value = None
                             # coro._msgs is not reset, so new
-                            # generator can process pending messages
+                            # coroutine can process pending messages
                             coro._state = AsynCoro._Scheduled
                         else:
                             logger.warning('invalid HotSwapException from %s/%s ignored',
@@ -3376,13 +3379,13 @@ class AsynCoro(object, metaclass=MetaSingleton):
                         coro._generator = retval
                         coro._value = None
                     self._lock.release()
-            self._cur_coro = None
+            AsynCoro.__cur_coro = None
 
         self._lock.acquire()
         for coro in self._coros.values():
             logger.debug('terminating Coro %s/%s%s', coro._name, coro._id,
                          ' (daemon)' if coro._daemon else '')
-            self._cur_coro = coro
+            AsynCoro.__cur_coro = coro
             coro._state = AsynCoro._Running
             while coro._generator:
                 try:
@@ -3415,6 +3418,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 logger.warning('running %s failed:' % (func.__name__))
                 logger.warning(traceback.format_exc())
         logging.shutdown()
+        # wait a bit for logger to flush
+        time.sleep(0.01)
         self._complete.set()
 
     def _exit(self, await_non_daemons):
@@ -3432,7 +3437,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                         coro._daemon = True
                         self._daemons += 1
                 if len(self._coros) != self._daemons:
-                    logger.warning('dameons mismatch: %s != %s' % (len(self._coros), self._daemons))
+                    logger.warning('daemons mismatch: %s != %s' % (len(self._coros), self._daemons))
                 self._complete.set()
                 self._lock.release()
 
@@ -3449,8 +3454,6 @@ class AsynCoro(object, metaclass=MetaSingleton):
             self._quit = True
             self._notifier.interrupt()
             self._complete.wait()
-            # wait a bit for logger to flush
-            time.sleep(0.01)
 
     def finish(self):
         """Wait until all non-daemon coroutines finish and then

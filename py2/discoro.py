@@ -29,7 +29,7 @@ import inspect
 import traceback
 import functools
 
-import disasyncoro as asyncoro
+import asyncoro.disasyncoro as asyncoro
 
 __all__ = ['Computation', 'discoro_server']
 

@@ -7,11 +7,7 @@
 # client can use message passing to exchange data.
 
 import sys, logging, random
-if sys.version_info.major >= 3:
-    import disasyncoro3 as asyncoro
-else:
-    import disasyncoro as asyncoro
-
+import disasyncoro as asyncoro
 import discoro
 
 # objects of C are exchanged between client and servers
