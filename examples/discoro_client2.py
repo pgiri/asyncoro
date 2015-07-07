@@ -32,21 +32,37 @@ def compute(obj, client, coro=None):
     # send result back to client
     yield client.deliver(obj, timeout=5)
 
-def client_proc(computation, coro=None):
-    # if no other clients use discoro, scheduler can be started in
-    # client itself; alternately, scheduler can be run as a program
-    discoro.Scheduler()
+def status_proc(client, coro=None):
+    # monitor status; see MonitorStatus for more comprehensive use cases
+    procs_ready = 0
+    coro.set_daemon()
+    while True:
+        msg = yield coro.receive()
+        # wait until 3 processes ready
+        if isinstance(msg, discoro.StatusMessage):
+            # print('Status: %s / %s' % (msg.location, msg.status))
+            if msg.status == discoro.Scheduler.ProcInitialized:
+                procs_ready += 1
+                if procs_ready == 3:
+                    client.send('run')
 
-    # wait a bit for scheduler to detect processes; use MonitorStatus
-    # to be notified of node / process state instead
-    yield coro.sleep(1)
+def client_proc(computation, coro=None):
+    # scheduler sends node / process status messages to status_coro
+    computation.status_coro = asyncoro.Coro(status_proc, coro)
+
+    # if no other clients use discoro, scheduler can be started in
+    # client itself; alternately, scheduler can be run separately on a node
+    discoro.Scheduler()
 
     # distribute computation to server
     if (yield computation.schedule()):
         raise Exception('schedule failed')
 
-    # wait a bit for scheduler to send computation to processes
-    yield coro.sleep(2)
+    # wait until processes are initialized; alternately, create
+    # coroutines from 'status_proc' itself
+    msg = yield coro.receive()
+    assert msg == 'run'
+
     rcoros = []
     # create remote coroutines
     for i in range(3):
@@ -54,6 +70,8 @@ def client_proc(computation, coro=None):
         rcoro = yield computation.run(compute, c, coro)
         if isinstance(rcoro, asyncoro.Coro):
             rcoros.append(rcoro)
+        else:
+            print('failed to create remote coroutine for %s' % c)
 
     # send data to remote coroutines (as messages)
     for rcoro in rcoros:
@@ -65,6 +83,7 @@ def client_proc(computation, coro=None):
         print('reply: %s' % (reply))
 
     yield computation.close()
+    yield coro.sleep(1)
 
 if __name__ == '__main__':
     asyncoro.logger.setLevel(logging.DEBUG)
