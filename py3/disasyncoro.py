@@ -12,15 +12,12 @@ __url__ = "http://asyncoro.sourceforge.net"
 import socket
 import inspect
 import traceback
-import sys
 import os
 import stat
 import hashlib
-import random
 import collections
 import copy
 import tempfile
-import weakref
 
 import asyncoro
 from asyncoro import *
@@ -31,6 +28,7 @@ __all__ = asyncoro.__all__ + ['RCI']
 # if connections to a peer are not successful consecutively
 # MaxConnectionErrors times, peer is assumed dead and removed
 MaxConnectionErrors = 10
+
 
 class _NetRequest(object):
     """Internal use only.
@@ -50,13 +48,25 @@ class _NetRequest(object):
         self.timeout = timeout
 
     def __getstate__(self):
-        state = {'name':self.name, 'kwargs':self.kwargs, 'src':self.src, 'dst':self.dst,
-                 'auth':self.auth, 'id':self.id, 'reply':self.reply, 'timeout':self.timeout}
+        state = {'name': self.name, 'kwargs': self.kwargs, 'src': self.src, 'dst': self.dst,
+                 'auth': self.auth, 'id': self.id, 'reply': self.reply, 'timeout': self.timeout}
         return state
 
     def __setstate__(self, state):
         for k, v in state.items():
             setattr(self, k, v)
+
+
+class PeerStatus(object):
+
+    Online = 1
+    Offline = 2
+
+    def __init__(self, location, name, status):
+        self.location = location
+        self.name = name
+        self.status = status
+
 
 class _Peer(object):
     """Internal use only.
@@ -66,7 +76,7 @@ class _Peer(object):
                  'reqs', 'reqs_pending', 'req_coro')
 
     peers = {}
-    callback = None
+    status_coro = None
 
     def __init__(self, name, location, auth, keyfile, certfile):
         self.name = name
@@ -80,12 +90,11 @@ class _Peer(object):
         self.reqs_pending = Event()
         _Peer.peers[(location.addr, location.port)] = self
         self.req_coro = Coro(self.req_proc)
-        if _Peer.callback:
+        if _Peer.status_coro:
             try:
-                _Peer.callback(name, location, 1)
+                _Peer.status_coro.send(PeerStatus(location, name, PeerStatus.Online))
             except:
-                logger.warning('peer status callback failed for %s@%s' % (name, location))
-                logger.debug(traceback.format_exc())
+                pass
 
     @staticmethod
     def send_req(req):
@@ -133,7 +142,7 @@ class _Peer(object):
                         req.event.set()
                     conn_errors += 1
                     if conn_errors >= MaxConnectionErrors:
-                        logger.warning('too many connection errors to %s; removing it' % \
+                        logger.warning('too many connection errors to %s; removing it' %
                                        self.location)
                         self.req_coro = None
                         # TODO: remove from _stream_peers?
@@ -157,26 +166,38 @@ class _Peer(object):
                 if len(exc.args) == 1 and exc.args[0] == 'hangup':
                     logger.warning('peer "%s" not reachable' % self.location)
                     # TODO: remove peer?
-                self.conn.shutdown(socket.SHUT_WR)
-                self.conn.close()
+                try:
+                    self.conn.shutdown(socket.SHUT_WR)
+                    self.conn.close()
+                except:
+                    pass
                 self.conn = None
                 req.reply = None
             except socket.timeout:
-                self.conn.shutdown(socket.SHUT_WR)
-                self.conn.close()
+                try:
+                    self.conn.shutdown(socket.SHUT_WR)
+                    self.conn.close()
+                except:
+                    pass
                 self.conn = None
                 req.reply = None
             except GeneratorExit:
                 if self.conn:
-                    self.conn.shutdown(socket.SHUT_WR)
-                    self.conn.close()
+                    try:
+                        self.conn.shutdown(socket.SHUT_WR)
+                        self.conn.close()
+                    except:
+                        pass
                     self.conn = None
                 break
             except:
                 # logger.debug(traceback.format_exc())
                 if self.conn:
-                    self.conn.shutdown(socket.SHUT_WR)
-                    self.conn.close()
+                    try:
+                        self.conn.shutdown(socket.SHUT_WR)
+                        self.conn.close()
+                    except:
+                        pass
                     self.conn = None
                 req.reply = None
             finally:
@@ -191,29 +212,29 @@ class _Peer(object):
             if peer.req_coro:
                 peer.req_coro.terminate()
                 peer.req_coro = None
-            if _Peer.callback:
+            if _Peer.status_coro:
                 try:
-                    _Peer.callback(peer.name, peer.location, 0)
+                    _Peer.status_coro.send(PeerStatus(peer.location, peer.name, PeerStatus.Offline))
                 except:
-                    logger.warning('peer status callback failed')
-                    logger.debug(traceback.format_exc())
+                    pass
 
     @staticmethod
-    def status_callback(callback):
-        if callback:
-            if inspect.isfunction(callback):
-                _Peer.callback = weakref.proxy(callback,
-                                               lambda ref: setattr(_Peer, 'callback', None))
-                for peer in _Peer.peers.values():
-                    try:
-                        _Peer.callback(peer.name, peer.location, 1)
-                    except:
-                        logger.warning('peer status callback failed')
-                        logger.debug(traceback.format_exc())
+    def peer_status(coro):
+        if isinstance(coro, Coro):
+            # if there is another status_coro, add or replace?
+            for peer in _Peer.peers.values():
+                try:
+                    coro.send(PeerStatus(peer.location, peer.name, PeerStatus.Online))
+                except:
+                    logger.debug(traceback.format_exc())
+                    break
             else:
-                logger.warning('invalid peer status callback ignored')
+                _Peer.status_coro = coro
+        elif coro is None:
+            _Peer.status_coro = None
         else:
-            _Peer.callback = None
+            logger.warning('invalid peer status coroutine ignored')
+
 
 class RCI(object):
     """Remote Coro (Callable) Interface.
@@ -268,7 +289,7 @@ class RCI(object):
         if RCI._asyncoro is None:
             RCI._asyncoro = AsynCoro.instance()
         if location is None:
-            req = _NetRequest('locate_rci', kwargs={'name':name},
+            req = _NetRequest('locate_rci', kwargs={'name': name},
                               src=RCI._asyncoro._location, timeout=None)
             req.event = Event()
             req.id = id(req)
@@ -283,7 +304,7 @@ class RCI(object):
                     req.reply = None
             rci = req.reply
         else:
-            req = _NetRequest('locate_rci', kwargs={'name':name}, dst=location, timeout=timeout)
+            req = _NetRequest('locate_rci', kwargs={'name': name}, dst=location, timeout=timeout)
             rci = yield RCI._asyncoro._sync_reply(req)
         raise StopIteration(rci)
 
@@ -323,7 +344,7 @@ class RCI(object):
         args and kwargs must be serializable. Returns (remote) Coro
         instance.
         """
-        req = _NetRequest('run_rci', kwargs={'name':self._name, 'args':args, 'kwargs':kwargs},
+        req = _NetRequest('run_rci', kwargs={'name': self._name, 'args': args, 'kwargs': kwargs},
                           dst=self._location, timeout=2)
         reply = yield RCI._asyncoro._sync_reply(req)
         if isinstance(reply, Coro):
@@ -334,7 +355,7 @@ class RCI(object):
             raise Exception(reply)
 
     def __getstate__(self):
-        state = {'_name':self._name, '_location':self._location}
+        state = {'_name': self._name, '_location': self._location}
         return state
 
     def __setstate__(self, state):
@@ -346,6 +367,7 @@ class RCI(object):
         if self._location:
             s = '%s@%s' % (s, self._location)
         return s
+
 
 class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
     """This adds network services to asyncoro.AsynCoro so it can
@@ -397,15 +419,16 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 udp_port = 51350
             if not dest_path:
                 dest_path = os.path.join(os.sep, tempfile.gettempdir(), 'asyncoro')
-            self.dest_path = os.path.abspath(dest_path)
+            self.__dest_path = os.path.abspath(dest_path)
+            self.__dest_path_prefix = dest_path
             # TODO: avoid race condition (use locking to check/create atomically?)
-            if not os.path.isdir(self.dest_path):
+            if not os.path.isdir(self.__dest_path):
                 try:
-                    os.makedirs(self.dest_path)
+                    os.makedirs(self.__dest_path)
                 except:
                     # likely another asyncoro created this directory
-                    if not os.path.isdir(self.dest_path):
-                        logger.warning('failed to create "%s"' % self.dest_path)
+                    if not os.path.isdir(self.__dest_path):
+                        logger.warning('failed to create "%s"' % self.__dest_path)
                         logger.debug(traceback.format_exc())
             self.max_file_size = max_file_size
             self._certfile = certfile
@@ -458,10 +481,23 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             self._tcp_coro = Coro(self._tcp_proc)
             self._udp_coro = Coro(self._udp_proc)
 
+    @property
+    def dest_path(self):
+        return self.__dest_path
+
+    @dest_path.setter
+    def dest_path(self, path):
+        path = os.path.abspath(path)
+        if path.startswith(self.__dest_path_prefix):
+            self.__dest_path = path
+        else:
+            logger.warning('dest_path not changed; path "%s" must start with "%s"' %
+                           (path, self.__dest_path_prefix))
+
     def finish(self):
         """Wait until all non-daemon coroutines finish and then
         shutdown the scheduler.
-        
+
         Should be called from main program (or a thread, but _not_
         from coroutines).
         """
@@ -479,8 +515,8 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
         self._rchannels = {}
         self._rcis = {}
         self._requests = {}
-        if os.path.isdir(self.dest_path) and len(os.listdir(self.dest_path)) == 0:
-            os.rmdir(self.dest_path)
+        if os.path.isdir(self.__dest_path) and len(os.listdir(self.__dest_path)) == 0:
+            os.rmdir(self.__dest_path)
 
     def locate(self, name, timeout=None):
         """Must be used with 'yield' as
@@ -493,7 +529,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 loc = peer.location
                 break
         else:
-            req = _NetRequest('locate_peer', kwargs={'name':name})
+            req = _NetRequest('locate_peer', kwargs={'name': name})
             req.event = Event()
             req.id = id(req)
             self._requests[req.id] = req
@@ -535,7 +571,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             raise StopIteration(-1)
         if not udp_port:
             udp_port = 51350
-        stream_peers = [(addr, port, peer) for (addr, port), peer in _Peer.peers.items() \
+        stream_peers = [(addr, port, peer) for (addr, port), peer in _Peer.peers.items()
                         if (addr == node and (tcp_port == 0 or tcp_port == port))]
         if stream_send:
             for addr, port, peer in stream_peers:
@@ -548,13 +584,13 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             self._stream_peers.pop((node, tcp_port), None)
 
         if (node, tcp_port) in _Peer.peers:
-            req = _NetRequest('stream', kwargs={'send':stream_send},
+            req = _NetRequest('stream', kwargs={'send': stream_send},
                               src=self._location, dst=Location(node, tcp_port))
             raise StopIteration(_Peer.send_req(req))
 
         if tcp_port:
-            req = _NetRequest('ping', kwargs={'loc':self._location, 'signature':self._signature,
-                                              'name':self._name, 'version':__version__},
+            req = _NetRequest('ping', kwargs={'loc': self._location, 'signature': self._signature,
+                                              'name': self._name, 'version': __version__},
                               dst=Location(node, tcp_port))
             sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
             sock.settimeout(2)
@@ -565,8 +601,8 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 pass
             sock.close()
         else:
-            ping_msg = {'location':self._location, 'signature':self._signature,
-                        'version':__version__}
+            ping_msg = {'location': self._location, 'signature': self._signature,
+                        'version': __version__}
             ping_msg = b'ping:' + serialize(ping_msg)
             sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
             sock.settimeout(2)
@@ -578,8 +614,8 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
 
         raise StopIteration(0)
 
-    def peer_status(self, callback):
-        _Peer.status_callback(callback)
+    def peer_status(self, coro):
+        _Peer.peer_status(coro)
 
     def send_file(self, location, file, dir=None, overwrite=False, timeout=None):
         """Must be used with 'yield' as
@@ -611,8 +647,8 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
         if peer is None:
             logger.debug('%s is not a valid peer', location)
             raise StopIteration(-1)
-        kwargs = {'file':os.path.basename(file), 'stat_buf':stat_buf,
-                  'overwrite':overwrite == True, 'dir':dir}
+        kwargs = {'file': os.path.basename(file), 'stat_buf': stat_buf,
+                  'overwrite': overwrite is True, 'dir': dir}
         req = _NetRequest('send_file', kwargs=kwargs, dst=location, timeout=timeout)
         sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                            keyfile=self._keyfile, certfile=self._certfile)
@@ -662,7 +698,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             # reject absolute path for dir
             if os.path.join(os.sep, dir) == dir:
                 raise StopIteration(-1)
-        kwargs = {'file':os.path.basename(file), 'dir':dir}
+        kwargs = {'file': os.path.basename(file), 'dir': dir}
         req = _NetRequest('del_file', kwargs=kwargs, dst=location, timeout=timeout)
         reply = yield self._sync_reply(req)
         if reply is None:
@@ -676,7 +712,8 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
         ping_sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
         ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         ping_sock.settimeout(2)
-        ping_msg = {'location':self._location, 'signature':self._signature, 'version':__version__}
+        ping_msg = {'location': self._location, 'signature': self._signature,
+                    'version': __version__}
         ping_msg = b'ping:' + serialize(ping_msg)
         try:
             yield ping_sock.sendto(ping_msg, ('<broadcast>', self._udp_sock.getsockname()[1]))
@@ -706,8 +743,8 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             except:
                 continue
 
-            req = _NetRequest('ping', kwargs={'loc':self._location, 'signature':self._signature,
-                                              'name':self._name, 'version':__version__},
+            req = _NetRequest('ping', kwargs={'loc': self._location, 'signature': self._signature,
+                                              'name': self._name, 'version': __version__},
                               dst=req_peer, auth=auth_code)
             sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                                keyfile=self._keyfile, certfile=self._certfile)
@@ -779,7 +816,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                         if isinstance(coro, Coro):
                             reply = coro.send(req.kwargs['message'])
                         else:
-                            logger.warning('ignoring message to invalid coro %s',
+                            logger.warning('ignoring send to invalid coro %s',
                                            req.kwargs['coro'])
                     else:
                         channel = req.kwargs.get('channel', None)
@@ -788,7 +825,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                             if isinstance(channel, Channel):
                                 reply = channel.send(req.kwargs['message'])
                             else:
-                                logger.warning('ignoring message to channel "%s"',
+                                logger.warning('ignoring send to channel "%s"',
                                                req.kwargs['channel'])
                         else:
                             logger.warning('ignoring invalid recipient to "send"')
@@ -798,7 +835,8 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 assert req.src is None
                 reply = -1
                 if req.dst != self._location:
-                    logger.warning('ignoring invalid "deliver" (%s != %s)' % (req.dst, self._location))
+                    logger.warning('ignoring invalid "deliver" (%s != %s)' %
+                                   (req.dst, self._location))
                 else:
                     coro = req.kwargs.get('coro', None)
                     if coro is not None:
@@ -807,7 +845,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                             coro.send(req.kwargs['message'])
                             reply = 1
                         else:
-                            logger.warning('ignoring message to invalid coro %s',
+                            logger.warning('ignoring deliver to invalid coro %s',
                                            req.kwargs['coro'])
                     else:
                         channel = req.kwargs.get('channel', None)
@@ -817,7 +855,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                                 reply = yield channel.deliver(
                                     req.kwargs['message'], timeout=req.timeout, n=req.kwargs['n'])
                             else:
-                                logger.warning('ignoring message to channel "%s"',
+                                logger.warning('ignoring deliver to channel "%s"',
                                                req.kwargs['channel'])
                         else:
                             logger.warning('ignoring invalid recipient to "send"')
@@ -925,7 +963,6 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                     else:
                         auth_code = hashlib.sha1(bytes(req.kwargs['signature'] + self._secret,
                                                        'ascii')).hexdigest()
-                    assert req.kwargs['version'] == __version__
                 except:
                     # logger.debug(traceback.format_exc())
                     break
@@ -936,8 +973,8 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                     logger.debug('%s: ignoring peer: %s' % (self._location, peer_loc))
                     break
                 pong = _NetRequest('pong',
-                                   kwargs={'loc':self._location, 'signature':self._signature,
-                                           'name':self._name, 'version':__version__},
+                                   kwargs={'loc': self._location, 'signature': self._signature,
+                                           'name': self._name, 'version': __version__},
                                    dst=peer_loc, auth=auth_code)
                 sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                                    keyfile=self._keyfile, certfile=self._certfile)
@@ -959,19 +996,19 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                     break
                 peer = _Peer(req.kwargs['name'], peer_loc, auth_code, self._keyfile, self._certfile)
                 if (peer_loc.addr, peer_loc.port) in self._stream_peers or \
-                       (peer_loc.addr, 0) in self._stream_peers:
+                   (peer_loc.addr, 0) in self._stream_peers:
                     peer.stream = True
 
                 for loc_req in self._requests.values():
                     if loc_req.name == 'locate_peer' and \
-                           loc_req.kwargs['name'] == req.kwargs['name']:
+                       loc_req.kwargs['name'] == req.kwargs['name']:
                         loc_req.reply = peer.location
                         loc_req.event.set()
                         break
 
                 # send pending (async) requests
-                pending_reqs = [(i, req) for i, req in self._requests.items() \
-                                if req.dst is None or req.dst == peer_loc]
+                pending_reqs = [(i, preq) for i, preq in self._requests.items()
+                                if preq.dst is None or preq.dst == peer_loc]
                 for rid, pending_req in pending_reqs:
                     sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                                        keyfile=self._keyfile, certfile=self._certfile)
@@ -1013,12 +1050,12 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                     break
                 peer = _Peer(req.kwargs['name'], peer_loc, auth_code, self._keyfile, self._certfile)
                 if (peer_loc.addr, peer_loc.port) in self._stream_peers or \
-                       (peer_loc.addr, 0) in self._stream_peers:
+                   (peer_loc.addr, 0) in self._stream_peers:
                     peer.stream = True
 
                 # send pending (async) requests
-                pending_reqs = [(i, req) for i, req in self._requests.items() \
-                                if req.dst is None or req.dst == peer_loc]
+                pending_reqs = [(i, preq) for i, preq in self._requests.items()
+                                if preq.dst is None or preq.dst == peer_loc]
                 for rid, pending_req in pending_reqs:
                     sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                                        keyfile=self._keyfile, certfile=self._certfile)
@@ -1101,20 +1138,20 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 dir = req.kwargs['dir']
                 if isinstance(dir, str):
                     tgt = os.path.join(dir, tgt)
-                tgt = os.path.abspath(os.path.join(self.dest_path, tgt))
+                tgt = os.path.abspath(os.path.join(self.__dest_path, tgt))
                 stat_buf = req.kwargs['stat_buf']
                 resp = 0
                 if self.max_file_size and stat_buf.st_size > self.max_file_size:
                     logger.warning('file "%s" too big (%s) - must be smaller than %s',
                                    req.kwargs['file'], stat_buf.st_size, self.max_file_size)
                     resp = -1
-                elif not tgt.startswith(self.dest_path):
+                elif not tgt.startswith(self.__dest_path):
                     resp = -1
                 elif os.path.isfile(tgt):
                     sbuf = os.stat(tgt)
                     if abs(stat_buf.st_mtime - sbuf.st_mtime) <= 1 and \
-                           stat_buf.st_size == sbuf.st_size and \
-                           stat.S_IMODE(stat_buf.st_mode) == stat.S_IMODE(sbuf.st_mode):
+                       stat_buf.st_size == sbuf.st_size and \
+                       stat.S_IMODE(stat_buf.st_mode) == stat.S_IMODE(sbuf.st_mode):
                         resp = 1
                     elif not req.kwargs['overwrite']:
                         resp = sbuf
@@ -1157,12 +1194,12 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 dir = req.kwargs['dir']
                 if isinstance(dir, str) and dir:
                     tgt = os.path.join(dir, tgt)
-                tgt = os.path.join(self.dest_path, tgt)
-                if tgt.startswith(self.dest_path) and os.path.isfile(tgt):
+                tgt = os.path.join(self.__dest_path, tgt)
+                if tgt.startswith(self.__dest_path) and os.path.isfile(tgt):
                     os.remove(tgt)
                     d = os.path.dirname(tgt)
                     try:
-                        while d > self.dest_path and os.path.isdir(d):
+                        while d > self.__dest_path and os.path.isdir(d):
                             os.rmdir(d)
                             d = os.path.dirname(d)
                     except:
@@ -1274,6 +1311,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             return s
         else:
             return '"%s" @ %s' % (self._name, s)
+
 
 asyncoro._NetRequest = _NetRequest
 asyncoro._Peer = _Peer

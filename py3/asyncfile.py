@@ -25,7 +25,6 @@ import os
 import sys
 import errno
 import platform
-import traceback
 from functools import partial as partial_func
 
 import asyncoro
@@ -71,7 +70,6 @@ if platform.system() == 'Windows':
             if rc == winerror.ERROR_PIPE_CONNECTED:
                 win32event.SetEvent(overlapped.hEvent)
             rc = win32event.WaitForSingleObject(overlapped.hEvent, 1000)
-            overlapped.hEvent = None
             overlapped = None
             if rc != win32event.WAIT_OBJECT_0:
                 asyncoro.logger.warning('connect failed: %s' % rc)
@@ -82,6 +80,7 @@ if platform.system() == 'Windows':
                 win32file.CloseHandle(rh)
             if wh is not None:
                 win32file.CloseHandle(wh)
+            os.remove(name)
             raise
 
     class Popen(subprocess.Popen):
@@ -157,6 +156,8 @@ if platform.system() == 'Windows':
                 self.stderr = None
 
         def terminate(self):
+            """Close pipe and terminate child process.
+            """
             self.close()
             super(Popen, self).terminate()
 
@@ -207,7 +208,7 @@ if platform.system() == 'Windows':
                     if '+' in mode:
                         access |= win32file.GENERIC_READ
                         # TODO: if reading, offset should be 0?
-                    sb = os.stat(path)
+                    sb = os.stat(path_handle)
                     self._overlap.Offset = sb.st_size
                 else:
                     self._overlap = None
@@ -216,7 +217,8 @@ if platform.system() == 'Windows':
                 flags = win32file.FILE_FLAG_OVERLAPPED
 
                 try:
-                    self._handle = win32file.CreateFile(path, access, share, None, create, flags, None)
+                    self._handle = win32file.CreateFile(path_handle, access, share, None, create,
+                                                        flags, None)
                 except:
                     self._overlap = None
                     raise
@@ -415,7 +417,8 @@ if platform.system() == 'Windows':
                 _AsyncFile._notifier._add_timeout(self)
 
         def seek(self, offset, whence=os.SEEK_SET):
-            """Set file's current position.
+            """Similar to 'seek' of file descriptor; works only for
+            regular files.
             """
             if whence == os.SEEK_SET:
                 self._overlap.Offset = offset
@@ -430,17 +433,19 @@ if platform.system() == 'Windows':
                     self._overlap.Offset = offset
 
         def tell(self):
-            """Return file's current position.
+            """Similar to 'tell' of file descriptor; works only for
+            regular files.
             """
             return self._overlap.Offset
 
         def fileno(self):
-            """Return file's integer associated with the file.
+            """Similar to 'fileno' of file descriptor; works only for
+            regular files.
             """
             return self._fileno
 
         def close(self):
-            """Close file.
+            """Similar to 'close' of file descriptor.
             """
             if self._handle:
                 try:
@@ -638,7 +643,7 @@ else:
             _AsyncFile._notifier.add(self, _AsyncPoller._Write)
 
         def close(self):
-            """Close file.
+            """Close file descriptor.
             """
             if self._fileno:
                 _AsyncFile._notifier.unregister(self)
@@ -675,6 +680,7 @@ else:
                 _AsyncFile._notifier.clear(self, _AsyncPoller._Write)
                 self._write_coro._proceed_(written)
                 self._write_coro = self._write_task = None
+
 
 class AsyncFile(_AsyncFile):
     """See _AsyncFile above.
@@ -724,6 +730,7 @@ class AsyncFile(_AsyncFile):
     def __exit__(self, exc_type, exc_value, trace):
         self.close()
         return True
+
 
 class AsyncPipe(object):
     """Asynchronous interface for (connected) pipes.

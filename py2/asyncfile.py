@@ -25,7 +25,6 @@ import os
 import sys
 import errno
 import platform
-import traceback
 from functools import partial as partial_func
 
 import asyncoro
@@ -209,7 +208,7 @@ if platform.system() == 'Windows':
                     if '+' in mode:
                         access |= win32file.GENERIC_READ
                         # TODO: if reading, offset should be 0?
-                    sb = os.stat(path)
+                    sb = os.stat(path_handle)
                     self._overlap.Offset = sb.st_size
                 else:
                     self._overlap = None
@@ -218,7 +217,8 @@ if platform.system() == 'Windows':
                 flags = win32file.FILE_FLAG_OVERLAPPED
 
                 try:
-                    self._handle = win32file.CreateFile(path, access, share, None, create, flags, None)
+                    self._handle = win32file.CreateFile(path_handle, access, share, None, create,
+                                                        flags, None)
                 except:
                     self._overlap = None
                     raise
@@ -243,7 +243,21 @@ if platform.system() == 'Windows':
             _AsyncFile._notifier.register(self._handle)
 
         def read(self, size=0, full=False, timeout=None):
-            """Must be used with 'yield' as 'buf = yield afile.read(1024)'
+            """Read at most 'size' bytes from file; if 'size' <= 0,
+            all data up to EOF is read and returned. If 'full' is
+            True, exactly 'size' bytes are returned (unless EOF or
+            timeout occur before). If EOF is encountered before any
+            more data is available, empty buffer is returned.
+
+            If no data has been read before timeout, then
+            IOError('timedout') will be thrown.
+
+            If timeout is given and full is True and timeout expires
+            before all the data could be read, it returns partial data
+            read before timeout if any data has been read.
+
+            Must be used in a coroutine with 'yield' as
+            'data = yield fd.read(1024)'
             """
             def _read(self, size, full, rc, n):
                 if rc or n == 0:
@@ -324,7 +338,19 @@ if platform.system() == 'Windows':
                 _AsyncFile._notifier._add_timeout(self)
 
         def write(self, buf, full=False, timeout=None):
-            """Must be used with 'yield' as 'n = yield afile.write(buf)'
+            """Write data in 'buf' to file. If 'full' is True, the function
+            waits till all data in buf is written; otherwise, it waits
+            until one write completes. It returns length of data written.
+
+            If no data has been written before timeout, then
+            IOError('timedout') will be thrown.
+
+            If timeout is given and full is True and timeout expires
+            before all the data could be written, it returns length of
+            data written before timeout if any data has been written.
+
+            Must be used with 'yield' as
+            'n = yield fd.write(buf)' to write (some) data in buf.
             """
             def _write(self, written, full, rc, n):
                 if rc or n == 0:
@@ -562,7 +588,7 @@ else:
             _AsyncFile._notifier.add(self, _AsyncPoller._Read)
 
         def write(self, buf, full=False, timeout=None):
-            """Write data in 'buf' to fd. If 'full' is True, the function
+            """Write data in 'buf' to file. If 'full' is True, the function
             waits till all data in buf is written; otherwise, it waits
             until one write completes. It returns length of data written.
 
@@ -644,6 +670,7 @@ else:
                 self._write_coro._proceed_(written)
                 self._write_coro = self._write_task = None
 
+
 class AsyncFile(_AsyncFile):
     """See _AsyncFile above.
     """
@@ -693,6 +720,7 @@ class AsyncFile(_AsyncFile):
         self.close()
         return True
 
+
 class AsyncPipe(object):
     """Asynchronous interface for (connected) pipes.
     """
@@ -741,18 +769,33 @@ class AsyncPipe(object):
                 self.stderr = None
 
     def write(self, buf, full=False, timeout=None):
+        """Write data in buf to stdin of pipe. See 'write' method of
+        AsyncFile for details.
+        """
         yield self.stdin.write(buf, full=full, timeout=timeout)
 
     def read(self, size=0, timeout=None):
+        """Read data from stdout of pipe. See 'read' method of
+        AsyncFile for details.
+        """
         yield self.stdout.read(size=size, timeout=timeout)
 
     def readline(self, size=0, sizehint=100, timeout=None):
+        """Read a line from stdout of pipe. See 'readline' method of
+        AsyncFile for details.
+        """
         yield self.stdout.readline(size=size, sizehint=sizehint, timeout=timeout)
 
     def read_stderr(self, size=0, timeout=None):
+        """Read data from stderr of pipe. See 'read' method of
+        AsyncFile for details.
+        """
         yield self.stderr.read(size=size, timeout=timeout)
 
     def readline_stderr(self, size=0, sizehint=100, timeout=None):
+        """Read a line from stderr of pipe. See 'readline' method of
+        AsyncFile for details.
+        """
         yield self.stderr.readline(size=size, sizehint=sizehint, timeout=timeout)
 
     def communicate(self, input=None):
@@ -809,6 +852,8 @@ class AsyncPipe(object):
                             (yield stderr_coro.finish()) if self.stderr else None)
 
     def close(self):
+        """Close pipe.
+        """
         if self.first:
             if self.first == self.last:
                 self.last = None

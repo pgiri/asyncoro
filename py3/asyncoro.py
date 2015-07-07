@@ -17,7 +17,7 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "3.2"
+__version__ = "3.3"
 
 __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
@@ -37,11 +37,7 @@ import types
 import struct
 import logging
 import errno
-import os
-import stat
-import hashlib
 import platform
-import random
 import ssl
 from heapq import heappush, heappop
 from bisect import bisect_left
@@ -70,21 +66,26 @@ else:
     from errno import EINVAL
     from time import time as _time
 
-if sys.version_info >= (3,3):
+if sys.version_info >= (3, 3):
     from time import perf_counter as _time
+
 
 def serialize(obj):
     return pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
 
+
 def unserialize(pkl):
     return pickle.loads(pkl)
 
+
 class MetaSingleton(type):
     __instance = None
+
     def __call__(cls, *args, **kwargs):
         if cls.__instance is None:
             cls.__instance = super(MetaSingleton, cls).__call__(*args, **kwargs)
         return cls.__instance
+
 
 class _AsyncSocket(object):
     """Base class for use with AsynCoro, for asynchronous I/O
@@ -227,9 +228,9 @@ class _AsyncSocket(object):
     def __exit__(self, exc_type, exc_value, trace):
         self.close()
 
-    def __cmp__(self, other):
+    def __lt__(self, other):
         if isinstance(other, AsyncSocket):
-            return cmp(self._fileno, other._fileno)
+            return self._fileno < other._fileno
         return 1
 
     def setdefaulttimeout(self, timeout):
@@ -743,6 +744,7 @@ class _AsyncSocket(object):
             self._rsock.bind(source_address)
         yield self.connect(host_port)
 
+
 if platform.system() == 'Windows':
     # use IOCP if pywin32 (http://pywin32.sf.net) is installed
     try:
@@ -751,13 +753,14 @@ if platform.system() == 'Windows':
         import pywintypes
         import winerror
     except:
-        logger.warning('Could not load pywin32 for I/O Completion Ports; ' \
+        logger.warning('Could not load pywin32 for I/O Completion Ports; '
                        'using inefficient polling for sockets')
     else:
         # for UDP we need 'select' polling (pywin32 doesn't yet support
         # UDP); _AsyncPoller below is combination of the other
         # _AsyncPoller for epoll/poll/kqueue/select and _SelectNotifier
         # below. (Un)fortunately, most of it is duplicate code
+
         class _AsyncPoller(object, metaclass=MetaSingleton):
             """Internal use only.
             """
@@ -872,7 +875,7 @@ if platform.system() == 'Windows':
 
             def poll(self):
                 self.cmd_rsock = AsyncSocket(self.cmd_rsock)
-                setattr(self.cmd_rsock, '_read_task', lambda : self.cmd_rsock._rsock.recv(128))
+                setattr(self.cmd_rsock, '_read_task', lambda: self.cmd_rsock._rsock.recv(128))
                 self.add(self.cmd_rsock, _AsyncPoller._Read)
                 while True:
                     self.polling = True
@@ -889,8 +892,7 @@ if platform.system() == 'Windows':
                         events[fid] = events.get(fid, 0) | _AsyncPoller._Error
 
                     self._lock.acquire()
-                    events = [(self._fds.get(fid, None), event) \
-                              for (fid, event) in events.items()]
+                    events = [(self._fds.get(fid, None), event) for (fid, event) in events.items()]
                     self._lock.release()
                     iocp_notify = False
                     for fd, event in events:
@@ -1105,7 +1107,7 @@ if platform.system() == 'Windows':
                     self._notifier.unregister(self)
                     if self._rsock.type & socket.SOCK_STREAM:
                         if (self._read_overlap and self._read_overlap.object) or \
-                               (self._write_overlap and self._write_overlap.object):
+                           (self._write_overlap and self._write_overlap.object):
                             def _cleanup_(self, rc, n):
                                 self._read_overlap.object = self._write_overlap.object = None
                                 self._read_overlap = self._write_overlap = None
@@ -1370,7 +1372,8 @@ if platform.system() == 'Windows':
                             if coro:
                                 coro.throw(socket.error(err))
                     else:
-                        self._rsock.setsockopt(socket.SOL_SOCKET, win32file.SO_UPDATE_CONNECT_CONTEXT, b'')
+                        self._rsock.setsockopt(socket.SOL_SOCKET,
+                                               win32file.SO_UPDATE_CONNECT_CONTEXT, b'')
                         if self._certfile:
                             self._rsock = ssl.wrap_socket(self._rsock, keyfile=self._keyfile,
                                                           certfile=self._certfile, server_side=False,
@@ -1489,6 +1492,7 @@ if platform.system() == 'Windows':
                     self._read_overlap.object = self._read_result = self._read_coro = None
                     raise socket.error(err)
 
+
 if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSingleton):
     class _AsyncPoller(object, metaclass=MetaSingleton):
         """Internal use only.
@@ -1565,7 +1569,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                 self.cmd_rsock, self.cmd_wsock = _AsyncPoller._socketpair()
                 self.cmd_wsock.setblocking(0)
                 self.cmd_rsock = AsyncSocket(self.cmd_rsock)
-                setattr(self.cmd_rsock, '_read_task', lambda : self.cmd_rsock._rsock.recv(128))
+                setattr(self.cmd_rsock, '_read_task', lambda: self.cmd_rsock._rsock.recv(128))
                 self.add(self.cmd_rsock, _AsyncPoller._Read)
 
         def interrupt(self):
@@ -1758,11 +1762,11 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
         def poll(self, timeout):
             kevents = self.poller.control(None, 500, timeout)
             events = [(kevent.ident,
-                       _AsyncPoller._Read if kevent.filter == select.KQ_FILTER_READ else \
-                           _AsyncPoller._Write if kevent.filter == select.KQ_FILTER_WRITE else 0 | \
-                           _AsyncPoller._Hangup if kevent.flags == select.KQ_EV_EOF else \
-                           _AsyncPoller._Error if kevent.flags == select.KQ_EV_ERROR else 0) \
-                          for kevent in kevents]
+                       _AsyncPoller._Read if kevent.filter == select.KQ_FILTER_READ else
+                       _AsyncPoller._Write if kevent.filter == select.KQ_FILTER_WRITE else 0 |
+                       _AsyncPoller._Hangup if kevent.flags == select.KQ_EV_EOF else
+                       _AsyncPoller._Error if kevent.flags == select.KQ_EV_ERROR else 0)
+                      for kevent in kevents]
             return events
 
     class _SelectNotifier(object, metaclass=MetaSingleton):
@@ -1814,7 +1818,9 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
     AsyncSocket = _AsyncSocket
     _AsyncNotifier = _AsyncPoller
 
+
 AsynCoroSocket = AsyncSocket
+
 
 class Lock(object):
     """'Lock' primitive for coroutines.
@@ -1854,6 +1860,7 @@ class Lock(object):
         if self._waitlist:
             wake = self._waitlist.pop(0)
             wake._proceed_(True)
+
 
 class RLock(object):
     """'RLock' primitive for coroutines.
@@ -1895,7 +1902,7 @@ class RLock(object):
         """
         coro = AsynCoro.cur_coro()
         if self._owner != coro:
-            raise RuntimeError('"%s"/%s: invalid lock release - owned by "%s"/%s' % \
+            raise RuntimeError('"%s"/%s: invalid lock release - owned by "%s"/%s' %
                                (coro._name, coro._id, self._owner._name, self._owner._id))
         self._depth -= 1
         if self._depth == 0:
@@ -1903,6 +1910,7 @@ class RLock(object):
             if self._waitlist:
                 wake = self._waitlist.pop(0)
                 wake._proceed_(True)
+
 
 class Condition(object):
     """'Condition' primitive for coroutines.
@@ -1946,7 +1954,7 @@ class Condition(object):
         """
         coro = AsynCoro.cur_coro()
         if self._owner != coro:
-            raise RuntimeError('"%s"/%s: invalid lock release - owned by "%s"/%s' % \
+            raise RuntimeError('"%s"/%s: invalid lock release - owned by "%s"/%s' %
                                (coro._name, coro._id, self._owner._name, self._owner._id))
         self._depth -= 1
         if self._depth == 0:
@@ -1973,7 +1981,7 @@ class Condition(object):
         """
         coro = AsynCoro.cur_coro()
         if self._owner != coro:
-            raise RuntimeError('"%s"/%s: invalid lock release - owned by "%s"/%s' % \
+            raise RuntimeError('"%s"/%s: invalid lock release - owned by "%s"/%s' %
                                (coro._name, coro._id, self._owner._name, self._owner._id))
         assert self._depth > 0
         depth = self._depth
@@ -2001,6 +2009,7 @@ class Condition(object):
         self._owner = coro
         self._depth = depth
         raise StopIteration(True)
+
 
 class Event(object):
     """'Event' primitive for coroutines.
@@ -2045,6 +2054,7 @@ class Event(object):
         else:
             raise StopIteration(True)
 
+
 class Semaphore(object):
     """'Semaphore' primitive for coroutines.
     """
@@ -2075,6 +2085,7 @@ class Semaphore(object):
             wake = self._waitlist.pop(0)
             wake._proceed_()
 
+
 class HotSwapException(Exception):
     """This exception is used to indicate hot-swap request and
     response.
@@ -2083,6 +2094,7 @@ class HotSwapException(Exception):
     exc.args[0] is the new generator method.
     """
     pass
+
 
 class MonitorException(Exception):
     """This execption is used to indicate that a coroutine being
@@ -2105,6 +2117,7 @@ class MonitorException(Exception):
     time coroutine terminated.
     """
     pass
+
 
 class Coro(object):
     """Creates coroutine with the given generator function and
@@ -2171,7 +2184,7 @@ class Coro(object):
             if rcoro is not None or location == Coro._asyncoro._location:
                 raise StopIteration(rcoro)
         if location is None:
-            req = _NetRequest('locate_coro', kwargs={'name':name},
+            req = _NetRequest('locate_coro', kwargs={'name': name},
                               src=Coro._asyncoro._location, timeout=timeout)
             req.id = id(req)
             Coro._asyncoro._requests[req.id] = req
@@ -2186,7 +2199,7 @@ class Coro(object):
                     req.reply = None
             rcoro = req.reply
         else:
-            req = _NetRequest('locate_coro', kwargs={'name':name}, dst=location, timeout=timeout)
+            req = _NetRequest('locate_coro', kwargs={'name': name}, dst=location, timeout=timeout)
             rcoro = yield Coro._asyncoro._sync_reply(req)
         raise StopIteration(rcoro)
 
@@ -2257,7 +2270,7 @@ class Coro(object):
         if self._location == Coro._asyncoro._location:
             return Coro._asyncoro._resume(self, message, AsynCoro._AwaitMsg_)
         else:
-            request = _NetRequest('send', kwargs={'coro':self._id, 'message':message},
+            request = _NetRequest('send', kwargs={'coro': self._id, 'message': message},
                                   dst=self._location, timeout=2)
             # request is queued for asynchronous processing
             if _Peer.send_req(request) != 0:
@@ -2278,8 +2291,10 @@ class Coro(object):
         """
         if self._location == Coro._asyncoro._location:
             reply = Coro._asyncoro._resume(self, message, AsynCoro._AwaitMsg_)
+            if reply == 0:
+                reply = 1
         else:
-            request = _NetRequest('deliver', kwargs={'coro':self._id, 'message':message},
+            request = _NetRequest('deliver', kwargs={'coro': self._id, 'message': message},
                                   dst=self._location, timeout=timeout)
             request.reply = -1
             reply = yield Coro._asyncoro._sync_reply(request, alarm_value=0)
@@ -2346,10 +2361,10 @@ class Coro(object):
             yield self._complete.wait()
         elif self._complete == 0:
             pass
-        elif isinstane(self._complete, Event):
+        elif isinstance(self._complete, Event):
             yield self._complete.wait()
         else:
-            raise RuntimeError('invalid wait on %s/%s: %s' % \
+            raise RuntimeError('invalid wait on %s/%s: %s' %
                                (self._name, self._id, type(self._complete)))
         raise StopIteration(self._value)
 
@@ -2366,7 +2381,7 @@ class Coro(object):
         if self._location == Coro._asyncoro._location:
             return Coro._asyncoro._terminate_coro(self)
         else:
-            request = _NetRequest('terminate_coro', kwargs={'coro':self._id},
+            request = _NetRequest('terminate_coro', kwargs={'coro': self._id},
                                   dst=self._location, timeout=2)
             if _Peer.send_req(request) != 0:
                 logger.warning('remote coro at %s may not be valid', self._location)
@@ -2419,11 +2434,20 @@ class Coro(object):
             reply = Coro._asyncoro._monitor(self, observe)
         else:
             # remote coro
-            request = _NetRequest('monitor', kwargs={'monitor':self, 'coro':observe._id},
+            request = _NetRequest('monitor', kwargs={'monitor': self, 'coro': observe._id},
                                   dst=observe._location, timeout=2)
             reply = yield Coro._asyncoro._sync_reply(request)
         raise StopIteration(reply)
-        
+
+    def notify(self, monitor):
+        """Similar to 'monitor' method, except that it is invoked with
+        local coroutine to add argument as monitor.
+        """
+        if Coro._asyncoro.location == self._location:
+            return Coro._asyncoro._monitor(monitor, self)
+        else:
+            return -1
+
     def _await_(self, timeout=None, alarm_value=None):
         """Internal use only.
         """
@@ -2447,9 +2471,9 @@ class Coro(object):
         return target(*args, **kwargs)
 
     def __getstate__(self):
-        state = {'_name':self._name, '_id':str(self._id), '_location':self._location}
+        state = {'_name': self._name, '_id': str(self._id), '_location': self._location}
         return state
-    
+
     def __setstate__(self, state):
         self._name = state['_name']
         self._location = state['_location']
@@ -2460,6 +2484,7 @@ class Coro(object):
         if self._location:
             s = '%s@%s' % (s, self._location)
         return s
+
 
 class Location(object):
     """Distributed asyncoro, coroutines, channels use Location to
@@ -2478,14 +2503,15 @@ class Location(object):
 
     def __eq__(self, other):
         return isinstance(other, type(self)) and \
-               self.addr == other.addr and self.port == other.port
+            self.addr == other.addr and self.port == other.port
 
     def __ne__(self, other):
         return (not isinstance(other, type(self))) or \
-               self.addr != other.addr or self.port != other.port
+            self.addr != other.addr or self.port != other.port
 
     def __repr__(self):
         return '%s:%s' % (self.addr, self.port)
+
 
 class Channel(object):
     """Subscription based channel. Broadcasts a message to all
@@ -2561,7 +2587,7 @@ class Channel(object):
         if Channel._asyncoro is None:
             Channel._asyncoro = AsynCoro.instance()
         if location is None:
-            req = _NetRequest('locate_channel', kwargs={'name':name},
+            req = _NetRequest('locate_channel', kwargs={'name': name},
                               src=Channel._asyncoro._location, timeout=None)
             req.event = Event()
             req.id = id(req)
@@ -2576,7 +2602,7 @@ class Channel(object):
                     req.reply = None
             rchannel = req.reply
         else:
-            req = _NetRequest('locate_channel', kwargs={'name':name}, dst=location, timeout=timeout)
+            req = _NetRequest('locate_channel', kwargs={'name': name}, dst=location, timeout=timeout)
             rchannel = yield Channel._asyncoro._sync_reply(req)
         raise StopIteration(rchannel)
 
@@ -2627,14 +2653,14 @@ class Channel(object):
                     subscriber._id = int(subscriber._id)
                     for s in self._subscribers:
                         if isinstance(s, Coro) and \
-                               s._id == subscriber._id and s._location == subscriber._location:
+                           s._id == subscriber._id and s._location == subscriber._location:
                             subscriber = s
                             break
                 elif isinstance(subscriber, Channel):
                     # remote channel
                     for s in self._subscribers:
                         if isinstance(s, Channel) and \
-                               s._name == subscriber._name and s._location == subscriber._location:
+                           s._name == subscriber._name and s._location == subscriber._location:
                             subscriber = s
                             break
             self._subscribers.add(subscriber)
@@ -2642,7 +2668,7 @@ class Channel(object):
             reply = 0
         else:
             # remote channel
-            kwargs = {'channel':self._name}
+            kwargs = {'channel': self._name}
             kwargs['subscriber'] = subscriber
             request = _NetRequest('subscribe', kwargs=kwargs, dst=self._location, timeout=timeout)
             reply = yield Channel._asyncoro._sync_reply(request)
@@ -2666,14 +2692,14 @@ class Channel(object):
                     subscriber._id = int(subscriber._id)
                     for s in self._subscribers:
                         if isinstance(s, Coro) and \
-                               s._id == subscriber._id and s._location == subscriber._location:
+                           s._id == subscriber._id and s._location == subscriber._location:
                             subscriber = s
                             break
                 elif isinstance(subscriber, Channel):
                     # remote channel
                     for s in self._subscribers:
                         if isinstance(s, Channel) and \
-                               s._name == subscriber._name and s._location == subscriber._location:
+                           s._name == subscriber._name and s._location == subscriber._location:
                             subscriber = s
                             break
             try:
@@ -2684,7 +2710,7 @@ class Channel(object):
                 reply = 0
         else:
             # remote channel
-            kwargs = {'channel':self._name}
+            kwargs = {'channel': self._name}
             kwargs['subscriber'] = subscriber
             request = _NetRequest('unsubscribe', kwargs=kwargs, dst=self._location, timeout=timeout)
             reply = yield Channel._asyncoro._sync_reply(request)
@@ -2715,7 +2741,7 @@ class Channel(object):
                     Coro(_unsub, self, subscriber)
         else:
             # remote channel
-            request = _NetRequest('send', kwargs={'channel':self._name, 'message':message},
+            request = _NetRequest('send', kwargs={'channel': self._name, 'message': message},
                                   dst=self._location, timeout=2)
             # request is queued for asynchronous processing
             if _Peer.send_req(request) != 0:
@@ -2756,8 +2782,8 @@ class Channel(object):
                             raise StopIteration(0)
             # during delivery, _subscribers may change, so make copy
             subscribers = list(self._subscribers)
-            info = {'reply':0, 'pending':len(subscribers), 'success':0,
-                    'done':Event(), 'invalid':[]}
+            info = {'reply': 0, 'pending': len(subscribers), 'success': 0,
+                    'done': Event(), 'invalid': []}
 
             def _deliver(subscriber, info, timeout, n, coro=None):
                 try:
@@ -2798,7 +2824,8 @@ class Channel(object):
             raise StopIteration(info['reply'])
         else:
             # remote channel
-            request = _NetRequest('deliver', kwargs={'channel':self._name, 'message':message, 'n':n},
+            request = _NetRequest('deliver', kwargs={'channel': self._name, 'message': message,
+                                                     'n': n},
                                   dst=self._location, timeout=timeout)
             request.reply = -1
             reply = yield Channel._asyncoro._sync_reply(request, alarm_value=0)
@@ -2816,7 +2843,7 @@ class Channel(object):
             Channel._asyncoro._lock.release()
 
     def __getstate__(self):
-        state = {'_name':self._name, '_location':self._location}
+        state = {'_name': self._name, '_location': self._location}
         return state
 
     def __setstate__(self, state):
@@ -2830,6 +2857,7 @@ class Channel(object):
             s = '%s@%s' % (s, self._location)
         return s
 
+
 class CategorizeMessages(object):
     """Splits messages to coroutine into categories so that they can
     be processed on priority basis, for example.
@@ -2839,7 +2867,7 @@ class CategorizeMessages(object):
         """Categorize messages to coroutine 'coro'.
         """
         self._coro = coro
-        self._categories = {None:collections.deque()}
+        self._categories = {None: collections.deque()}
         self._categorize = []
 
     def add(self, categorize):
@@ -2903,6 +2931,7 @@ class CategorizeMessages(object):
                 now = _time()
                 timeout -= now - start
                 start = now
+
 
 class AsynCoro(object, metaclass=MetaSingleton):
     """Coroutine scheduler.
@@ -3001,7 +3030,6 @@ class AsynCoro(object, metaclass=MetaSingleton):
             self._lock.release()
             logger.warning('invalid "set_daemon" - "%s" != "%s"' % (coro, AsynCoro.__cur_coro))
             return -1
-        cid = coro._id
         if coro._daemon != flag:
             coro._daemon = flag
             if flag:
@@ -3153,7 +3181,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
         else:
             coro._timeout = None
             # TODO: check that another HotSwapException is not pending?
-            if coro._state == None:
+            if coro._state is None:
                 # assert coro._id not in self._scheduled
                 # assert coro._id not in self._suspended
                 coro._generator = coro._new_generator
@@ -3252,7 +3280,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                     elif exc[0] == HotSwapException:
                         v = exc[1].args
                         if isinstance(v, tuple) and len(v) == 1 and inspect.isgenerator(v[0]) and \
-                               coro._hot_swappable and not coro._callers:
+                           coro._hot_swappable and not coro._callers:
                             try:
                                 coro._generator.close()
                             except:
@@ -3445,7 +3473,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
 
             if self._location:
                 def _close(self, peer, coro=None):
-                    req = _NetRequest('peer_closed', kwargs={'loc':self._location},
+                    req = _NetRequest('peer_closed', kwargs={'loc': self._location},
                                       dst=peer.location, timeout=2)
                     yield self._sync_reply(req)
                 for peer in list(_Peer.peers.values()):
@@ -3458,7 +3486,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
     def finish(self):
         """Wait until all non-daemon coroutines finish and then
         shutdown the scheduler.
-        
+
         Should be called from main program (or a thread, but _not_
         from coroutines).
         """
@@ -3493,6 +3521,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
 
     def __repr__(self):
         return ''
+
 
 class AsyncThreadPool(object):
     """Schedule synchronous tasks with threads to be executed
@@ -3565,6 +3594,7 @@ class AsyncThreadPool(object):
         for n in range(self._num_threads):
             self._task_queue.put(None)
         self._task_queue.join()
+
 
 class AsyncDBCursor(object):
     """Database cursor proxy for asynchronous processing of executions.
