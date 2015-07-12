@@ -74,17 +74,15 @@ class Scheduler(object):
             if self.status != Scheduler.NodeInitialized:
                 client.send(None)
                 raise StopIteration
-            node = self.scheduler._nodes.get(self.addr, None)
             where = None
             load = None
-            for proc in node.procs.values():
+            for proc in self.procs.values():
                 if proc.status != Scheduler.ProcInitialized:
                     continue
                 if load is None or len(proc.coros) < load:
                     where = proc
                     load = len(proc.coros)
             if where:
-                logger.debug('running on %s' % self.addr)
                 yield where.run(func, client)
             else:
                 client.send(None)
@@ -275,7 +273,7 @@ class Scheduler(object):
         if host:
             yield host.run(func, client)
         else:
-            yield None
+            client.send(None)
 
     @staticmethod
     def auth_code():
@@ -510,8 +508,9 @@ class Scheduler(object):
             raise StopIteration(0)
         proc.status = Scheduler.ProcIgnore
         if not proc.server:
-            proc.server = yield Coro.locate('discoro_proc', proc.location, timeout=2)
-            if not proc.server:
+            proc.server = yield Coro.locate('discoro_proc', proc.location,
+                                            timeout=computation.timeout)
+            if not isinstance(proc.server, Coro):
                 raise StopIteration(-1)
         proc.server.send({'req': 'setup', 'client': coro, 'computation': computation,
                           'pulse_coro': self.__timer_coro})
