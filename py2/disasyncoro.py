@@ -18,7 +18,6 @@ import hashlib
 import collections
 import copy
 import tempfile
-import weakref
 
 import asyncoro
 from asyncoro import *
@@ -67,6 +66,7 @@ class PeerStatus(object):
         self.location = location
         self.name = name
         self.status = status
+
 
 class _Peer(object):
     """Internal use only.
@@ -193,8 +193,11 @@ class _Peer(object):
             except:
                 # logger.debug(traceback.format_exc())
                 if self.conn:
-                    self.conn.shutdown(socket.SHUT_WR)
-                    self.conn.close()
+                    try:
+                        self.conn.shutdown(socket.SHUT_WR)
+                        self.conn.close()
+                    except:
+                        pass
                     self.conn = None
                 req.reply = None
             finally:
@@ -417,7 +420,7 @@ class AsynCoro(asyncoro.AsynCoro):
                 udp_port = 51350
             if not dest_path:
                 dest_path = os.path.join(os.sep, tempfile.gettempdir(), 'asyncoro')
-            self.__dest_path = os.path.abspath(dest_path)
+            self.__dest_path = os.path.abspath(os.path.normpath(dest_path))
             self.__dest_path_prefix = dest_path
             # TODO: avoid race condition (use locking to check/create atomically?)
             if not os.path.isdir(self.__dest_path):
@@ -485,12 +488,12 @@ class AsynCoro(asyncoro.AsynCoro):
 
     @dest_path.setter
     def dest_path(self, path):
-        path = os.path.abspath(path)
+        path = os.path.normpath(path)
         if path.startswith(self.__dest_path_prefix):
             self.__dest_path = path
         else:
-            logger.warning('dest_path not changed; path "%s" must start with "%s"' %
-                           (path, self.__dest_path_prefix))
+            self.__dest_path = os.path.join(self.__dest_path_prefix,
+                                            os.path.splitdrive(path)[1].lstrip(os.sep))
 
     def finish(self):
         """Wait until all non-daemon coroutines finish and then
