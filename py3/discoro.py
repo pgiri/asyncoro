@@ -57,6 +57,10 @@ class Scheduler(object):
 
     __metaclass__ = asyncoro.MetaSingleton
 
+    """This class is for use by Computation class (see below) only;
+    none of its methods are to be used by user.
+    """
+
     class _Node(object):
 
         def __init__(self, addr, scheduler):
@@ -141,13 +145,13 @@ class Scheduler(object):
             self.asyncoro.dest_path = self.__dest_path
         else:
             self.__dest_path = self.asyncoro.dest_path
-        self.__scheduler_coro = Coro(self.scheduler_proc)
-        self.__client_coro = Coro(self.client_proc)
-        self.__timer_coro = Coro(self.timer_proc)
-        self._status_coro = Coro(self.status_proc)
+        self.__scheduler_coro = Coro(self.__scheduler_proc)
+        self.__client_coro = Coro(self.__client_proc)
+        self.__timer_coro = Coro(self.__timer_proc)
+        self._status_coro = Coro(self.__status_proc)
         self.asyncoro.peer_status(self._status_coro)
 
-    def status_proc(self, coro=None):
+    def __status_proc(self, coro=None):
         coro.set_daemon()
         while True:
             msg = yield coro.receive()
@@ -217,7 +221,7 @@ class Scheduler(object):
             else:
                 logger.warning('invalid status message ignored')
 
-    def timer_proc(self, coro=None):
+    def __timer_proc(self, coro=None):
         coro.set_daemon()
         client_pulse = time.time()
         proc_check = time.time()
@@ -278,7 +282,7 @@ class Scheduler(object):
         # TODO: use uuid?
         return hashlib.sha1(bytes(''.join(hex(x)[2:] for x in os.urandom(10)), 'ascii')).hexdigest()
 
-    def scheduler_proc(self, coro=None):
+    def __scheduler_proc(self, coro=None):
         coro.set_daemon()
         while not self.__terminate:
             if self._cur_computation:
@@ -319,7 +323,7 @@ class Scheduler(object):
                 if self._cur_computation:
                     Coro(self.__setup_node, node, self._cur_computation)
 
-    def client_proc(self, coro=None):
+    def __client_proc(self, coro=None):
         coro.set_daemon()
         coro.register('discoro_scheduler')
         computations = {}
@@ -482,12 +486,12 @@ class Scheduler(object):
     def __setup_node(self, node, computation, coro=None):
         if node.status == Scheduler.NodeIgnore:
             raise StopIteration(0)
-        proc_setups = []
+        proc_setup_coros = []
         for proc in node.procs.values():
             if proc.status == Scheduler.ProcDiscovered:
-                proc_setups.append(Coro(self.__setup_proc, proc, computation))
-        for proc_setup in proc_setups:
-            yield proc_setup.finish()
+                proc_setup_coros.append(Coro(self.__setup_proc, proc, computation))
+        for proc_setup_coro in proc_setup_coros:
+            yield proc_setup_coro.finish()
         if node.status != Scheduler.NodeInitialized:
             for proc in node.procs.values():
                 if proc.status == Scheduler.ProcInitialized:
@@ -507,6 +511,8 @@ class Scheduler(object):
         proc.status = Scheduler.ProcIgnore
         if not proc.server:
             proc.server = yield Coro.locate('discoro_proc', proc.location, timeout=2)
+            if not proc.server:
+                raise StopIteration(-1)
         proc.server.send({'req': 'setup', 'client': coro, 'computation': computation,
                           'pulse_coro': self.__timer_coro})
         ret = yield coro.receive(timeout=computation.timeout)
