@@ -134,10 +134,13 @@ class Scheduler(object):
 
         kwargs['name'] = 'discoro_scheduler'
         self.asyncoro = asyncoro.AsynCoro.instance(**kwargs)
-        self.__dest_path = os.path.join(self.asyncoro.dest_path, 'discoro', 'scheduler')
-        if not os.path.isdir(self.__dest_path):
-            os.makedirs(self.__dest_path)
-        self.asyncoro.dest_path = self.__dest_path
+        if self.asyncoro.name == 'discoro_scheduler':
+            self.__dest_path = os.path.join(self.asyncoro.dest_path, 'discoro', 'scheduler')
+            if not os.path.isdir(self.__dest_path):
+                os.makedirs(self.__dest_path)
+            self.asyncoro.dest_path = self.__dest_path
+        else:
+            self.__dest_path = self.asyncoro.dest_path
         self.__scheduler_coro = Coro(self.scheduler_proc)
         self.__client_coro = Coro(self.client_proc)
         self.__timer_coro = Coro(self.timer_proc)
@@ -316,7 +319,6 @@ class Scheduler(object):
                 if self._cur_computation:
                     Coro(self.__setup_node, node, self._cur_computation)
 
-
     def client_proc(self, coro=None):
         coro.set_daemon()
         coro.register('discoro_scheduler')
@@ -410,7 +412,10 @@ class Scheduler(object):
                     logger.warning('ignoring invalid computation request')
                     client.send(None)
                     continue
-                computation._auth = Scheduler.auth_code()
+                while True:
+                    computation._auth = Scheduler.auth_code()
+                    if not os.path.exists(os.path.join(self.__dest_path, computation._auth)):
+                        break
                 try:
                     os.mkdir(os.path.join(self.__dest_path, computation._auth))
                 except:
@@ -427,7 +432,7 @@ class Scheduler(object):
                 if not computation:
                     client.send(None)
                     continue
-                if computation._pulse_coro.location != self.asyncoro.location:
+                if computation._pulse_coro.location.addr != self.asyncoro.location.addr:
                     computation._xfer_files = [os.path.join(self.__dest_path, computation._auth,
                                                             os.path.basename(xf))
                                                for xf in computation._xfer_files]
@@ -508,7 +513,7 @@ class Scheduler(object):
         if ret:
             logger.warning('setup of %s failed: %s' % (proc.server, ret))
             raise StopIteration(ret)
-        if computation._pulse_coro.location != proc.location:
+        if computation._pulse_coro.location.addr != proc.location.addr:
             for xf in computation._xfer_files:
                 reply = yield self.asyncoro.send_file(proc.location, xf,
                                                       timeout=computation.timeout)
@@ -764,8 +769,8 @@ class Computation(object):
             if not n:
                 raise StopIteration([])
             rcoros = [(yield coro.receive(timeout=self.timeout)) for i in range(n)]
-            # TODO: if failed, rcoro would be MonitorException; pass
-            # to user without filtering?
+            # TODO: if failed, rcoro would be either None or tuple;
+            # pass to user without filtering?
             rcoros = [rcoro for rcoro in rcoros if isinstance(rcoro, Coro)]
             raise StopIteration(rcoros)
 
