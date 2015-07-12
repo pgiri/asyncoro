@@ -24,8 +24,9 @@ import os
 import sys
 import traceback
 import time
+import shutil
 
-from asyncoro.discoro import MinPulseInterval, MaxPulseInterval
+from asyncoro.discoro import MinPulseInterval, MaxPulseInterval, _Function
 import asyncoro.disasyncoro as asyncoro
 from asyncoro import Coro
 
@@ -39,12 +40,12 @@ def discoro_proc(_discoro_name='discoro_proc'):
 
     _discoro_coro = asyncoro.AsynCoro.cur_coro()
     _discoro_coro.register(_discoro_name)
-    _discoro_dest_path = os.path.join(
-        asyncoro.AsynCoro.instance().dest_path, 'discoro',
-        'proc%s' % (_discoro_config['name'][_discoro_config['name'].rindex('-'):]))
-    if not os.path.isdir(_discoro_dest_path):
-        os.makedirs(_discoro_dest_path)
-    asyncoro.AsynCoro.instance().dest_path = _discoro_dest_path
+    asyncoro.AsynCoro.instance().dest_path = os.path.join(
+        'discoro', 'proc%s' % (_discoro_config['name'][_discoro_config['name'].rindex('-'):]))
+    _discoro_dest_path = asyncoro.AsynCoro.instance().dest_path
+    if os.path.isdir(_discoro_dest_path):
+        shutil.rmtree(_discoro_dest_path)
+    os.makedirs(_discoro_dest_path)
     os.chdir(_discoro_dest_path)
     asyncoro.logger.debug('discoro "%s" started at %s; computation files will be saved in "%s"' %
                           (_discoro_config['name'], _discoro_coro.location, _discoro_dest_path))
@@ -85,11 +86,11 @@ def discoro_proc(_discoro_name='discoro_proc'):
         while True:
             status = yield coro.receive()
             if isinstance(status, asyncoro.PeerStatus):
-                cur_computation = _discoro_computation
-                if cur_computation and cur_computation.scheduler.location == status.location:
+                if _discoro_computation and \
+                       _discoro_computation.scheduler.location == status.location:
                     asyncoro.logger.debug('scheduler at %s quit; closing computation %s' %
-                                          (status.location, cur_computation._auth))
-                    msg = {'req': 'close', 'auth': cur_computation._auth}
+                                          (status.location, _discoro_computation._auth))
+                    msg = {'req': 'close', 'auth': _discoro_computation._auth}
                     _discoro_coro.send(msg)
 
     def _discoro_monitor_proc(coro=None):
@@ -121,17 +122,19 @@ def discoro_proc(_discoro_name='discoro_proc'):
             if not isinstance(_discoro_client, Coro) or not _discoro_computation or \
                _discoro_auth != _discoro_computation._auth:
                 asyncoro.logger.warning('invalid run: %s' % (type(_discoro_func)))
+                if isinstance(_discoro_client, Coro):
+                    _discoro_client.send(None)
                 continue
             try:
-                # _discoro_func = asyncoro.unserialize(_discoro_func)
                 if _discoro_func.code:
                     exec(_discoro_func.code, globals())
                 job_coro = Coro(globals()[_discoro_func.name],
                                 *(_discoro_func.args), **(_discoro_func.kwargs))
-
             except:
                 asyncoro.logger.debug('invalid computation to run')
-                job_coro = traceback.format_exc()
+                # _discoro_func = _Function(_discoro_func.name, None,
+                #                           _discoro_func.args, _discoro_func.kwargs)
+                job_coro = (sys.exc_type, _discoro_func, traceback.format_exc())
             else:
                 asyncoro.logger.debug('job %s created' % job_coro)
                 _discoro_job_coros.add(job_coro)
@@ -139,8 +142,6 @@ def discoro_proc(_discoro_name='discoro_proc'):
                 _discoro_var = _discoro_msg.get('notify', None)
                 if isinstance(_discoro_var, Coro):
                     job_coro.notify(_discoro_var)
-                # if (yield _discoro_monitor_coro.monitor(job_coro)) != 0:
-                #     _discoro_job_coros.discard(job_coro)
             _discoro_client.send(job_coro)
             del job_coro
         elif _discoro_req == 'setup':
@@ -182,38 +183,13 @@ def discoro_proc(_discoro_name='discoro_proc'):
             _discoro_job_coros = set()
             for _discoro_var in list(globals()):
                 if _discoro_var not in _discoro_globals:
-                    asyncoro.logger.warning('Removing global variable "%s"' % _discoro_var)
+                    # asyncoro.logger.warning('Removing global variable "%s"' % _discoro_var)
                     globals().pop(_discoro_var, None)
             globals().update(_discoro_globals)
-            # for _discoro_var in list(locals()):
-            #     if _discoro_var not in _discoro_locals:
-            #         asyncoro.logger.warning('Removing local variable "%s"' % _discoro_var)
-            #         locals().pop(_discoro_var, None)
 
-            # TODO: remove only transferred files or all files and directories?
-            # for _discoro_var in _discoro_computation._xfer_files:
-            #     try:
-            #         os.remove(_discoro_var)
-            #     except:
-            #         asyncoro.logger.warning('Could not remove "%s"' % _discoro_var)
-            root = dirs = files = None
-            for root, dirs, files in os.walk(_discoro_dest_path, topdown=False):
-                for _discoro_var in files:
-                    _discoro_var = os.path.join(root, _discoro_var)
-                    asyncoro.logger.debug('Removing file "%s"' % _discoro_var)
-                    try:
-                        os.remove(_discoro_var)
-                    except:
-                        asyncoro.logger.warning('Could not remove "%s"' % _discoro_var)
-                for _discoro_var in dirs:
-                    _discoro_var = os.path.join(root, _discoro_var)
-                    asyncoro.logger.debug('Removing dir "%s"' % _discoro_var)
-                    try:
-                        os.rmdir(_discoro_var)
-                    except:
-                        asyncoro.logger.warning('Could not remove "%s"' % _discoro_var)
-            del root, dirs, files
             os.chdir(asyncoro.AsynCoro.instance().dest_path)
+            shutil.rmtree(_discoro_dest_path)
+            os.makedirs(_discoro_dest_path)
             _discoro_computation = _discoro_client = _discoro_pulse_coro = None
             _discoro_timer_coro.resume(MinPulseInterval)
             os.chdir(_discoro_dest_path)
@@ -246,7 +222,7 @@ def discoro_proc(_discoro_name='discoro_proc'):
             asyncoro.logger.debug('deleting computation "%s"' % _discoro_computation._auth)
             for _discoro_var in globals():
                 if _discoro_var not in _discoro_globals:
-                    asyncoro.logger.warning('Removing global variable "%s"' % _discoro_var)
+                    # asyncoro.logger.warning('Removing global variable "%s"' % _discoro_var)
                     globals().pop(_discoro_var, None)
             for _discoro_var in locals:
                 if _discoro_var not in _discoro_locals:
