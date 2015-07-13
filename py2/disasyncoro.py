@@ -60,7 +60,7 @@ class _NetRequest(object):
 class PeerStatus(object):
 
     Online = 1
-    Offline = 2
+    Offline = 0
 
     def __init__(self, location, name, status):
         self.location = location

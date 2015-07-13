@@ -37,7 +37,7 @@ MaxPulseInterval = 10 * MinPulseInterval
 # status about nodes / processes are sent with this structure
 StatusMessage = collections.namedtuple('StatusMessage', ['status', 'location'])
 
-# for internal use
+# for internal use only
 _Function = collections.namedtuple('_Function', ['name', 'code', 'args', 'kwargs'])
 
 
@@ -67,7 +67,7 @@ class Scheduler(object):
             self.addr = addr
             self.procs = {}
             self.ncoros = 0
-            self.status = Scheduler.NodeDiscovered
+            self.status = None
             self.scheduler = scheduler
 
         def run(self, func, client):
@@ -94,7 +94,7 @@ class Scheduler(object):
             self.location = location
             self.coros = {}
             self.done = {}
-            self.status = Scheduler.ProcDiscovered
+            self.status = None
             self.server = None
             self.xfer_files = []
             self.last_pulse = time.time()
@@ -105,7 +105,6 @@ class Scheduler(object):
                 raise StopIteration(None)
             node = self.scheduler._nodes.get(self.location.addr, None)
             computation = self.scheduler._cur_computation
-            assert isinstance(func, _Function)
             if not node or not computation:
                 raise StopIteration(None)
 
@@ -148,6 +147,13 @@ class Scheduler(object):
         self.__timer_coro = Coro(self.__timer_proc)
         self._status_coro = Coro(self.__status_proc)
         self.asyncoro.peer_status(self._status_coro)
+        atexit.register(self.__close)
+
+    def __close(self):
+        # TODO: wait for pending coroutines?
+        self.__timer_coro.terminate()
+        self.__client_coro.terminate()
+        self._status_coro.terminate()
 
     def __status_proc(self, coro=None):
         coro.set_daemon()
@@ -175,43 +181,44 @@ class Scheduler(object):
 
             elif isinstance(msg, asyncoro.PeerStatus):
                 computation = self._cur_computation
-                if msg.status:  # peer came online
+                if msg.status == asyncoro.PeerStatus.Online:
                     proc = Scheduler._Proc(msg.name, msg.location, self)
+                    if computation and computation.status_coro:
+                        status_msg = StatusMessage(Scheduler.ProcDiscovered, msg.location)
+                        computation.status_coro.send(status_msg)
                     node = self._nodes.get(msg.location.addr, None)
                     if node:
                         node.procs[str(msg.location)] = proc
-                        if computation:
-                            Coro(self.__setup_proc, proc, computation)
+                        Coro(self.__setup_proc, proc, computation)
                     else:
                         node = Scheduler._Node(msg.location.addr, self)
                         self._nodes[msg.location.addr] = node
                         node.procs[str(msg.location)] = proc
-                        if computation:
-                            if computation.status_coro:
-                                status_msg = StatusMessage(Scheduler.NodeDiscovered,
-                                                           msg.location.addr)
-                                computation.status_coro.send(status_msg)
-                            Coro(self.__setup_node, node, computation)
-                    if computation and computation.status_coro:
-                        status_msg = StatusMessage(Scheduler.ProcDiscovered, msg.location)
-                        computation.status_coro.send(status_msg)
-                else:  # peer terminated
+                        if computation and computation.status_coro:
+                            status_msg = StatusMessage(Scheduler.NodeDiscovered,
+                                                       msg.location.addr)
+                            computation.status_coro.send(status_msg)
+                        Coro(self.__setup_node, node, computation)
+                else:
+                    # msg.status == asyncoro.PeerStatus.Offline
                     node = self._nodes.get(msg.location.addr, None)
                     if node:
                         proc = node.procs.pop(str(msg.location), None)
                         if proc:
+                            if computation and computation.status_coro:
+                                status_msg = StatusMessage(Scheduler.ProcDisconnected,
+                                                           proc.location)
+                                computation.status_coro.send(status_msg)
                             # TODO: (re)start process elsewhere (fault-tolerant)?
-                            Coro(self.__close_proc, proc)
-                            if computation and computation.status_coro:
-                                status_msg = StatusMessage(Scheduler.ProcDiscovered, msg.location)
-                                computation.status_coro.send(status_msg)
-                        if not node.procs:
-                            Coro(self.__close_node, node)
-                            self._nodes.pop(msg.location.addr, None)
-                            if computation and computation.status_coro:
-                                status_msg = StatusMessage(Scheduler.NodeDisconnected,
-                                                           msg.location.addr)
-                                computation.status_coro.send(status_msg)
+                            if node.procs:
+                                Coro(self.__close_proc, proc)
+                            else:
+                                self._nodes.pop(proc.location.addr, None)
+                                if computation and computation.status_coro:
+                                    status_msg = StatusMessage(Scheduler.NodeDisconnected,
+                                                               proc.location.addr)
+                                    computation.status_coro.send(status_msg)
+                                Coro(self.__close_node, node)
                     elif computation and msg.location == computation._pulse_coro.location:
                         logger.warning('client %s terminated; closing computation %s' %
                                        (msg.location, self.__cur_client_auth))
@@ -287,6 +294,7 @@ class Scheduler(object):
                 self.__sched_event.clear()
                 yield self.__sched_event.wait()
                 continue
+
             self._cur_computation, client = yield coro.receive()
 
             logger.debug('Computation %s scheduled' % self._cur_computation._auth)
@@ -369,42 +377,39 @@ class Scheduler(object):
                     logger.warning('Ignoring invalid request to run computation')
                     where = None
                 if where == 'node':
-                    n = sum(1 for node in self._nodes.values()
-                            if node.status == Scheduler.NodeInitialized)
-                    # TODO: use short timeout in case computation's timeout is too big?
-                    if (yield client.deliver(n, self._cur_computation.timeout)) != 1:
+                    nodes =[node for node in self._nodes.values()
+                            if node.status == Scheduler.NodeInitialized]
+                    if (yield client.deliver(len(nodes), self._cur_computation.timeout)) != 1:
                         continue
-                    for node in self._nodes.values():
+                    for node in nodes:
                         Coro(node.run, func, client)
                 elif where == 'proc':
-                    n = sum(1 for node in self._nodes.values()
-                            if node.status == Scheduler.NodeInitialized
-                            for proc in node.procs.values()
-                            if proc.status == Scheduler.ProcInitialized)
-                    # TODO: use short timeout in case computation's timeout is too big?
-                    if (yield client.deliver(n, self._cur_computation.timeout)) != 1:
+                    procs = [proc for node in self._nodes.values()
+                             if node.status == Scheduler.NodeInitialized
+                             for proc in node.procs.values()
+                             if proc.status == Scheduler.ProcInitialized]
+                    if (yield client.deliver(len(procs), self._cur_computation.timeout)) != 1:
                         continue
-                    for node in self._nodes.values():
-                        for proc in node.procs.values():
-                            Coro(proc.run, func, client)
+                    for proc in procs:
+                        Coro(proc.run, func, client)
                 else:
                     # node_procs
                     node = self._nodes.get(where)
                     if node and node.status == Scheduler.NodeInitialized:
-                        n = sum(1 for proc in node.procs.values()
-                                if proc.status == Scheduler.ProcInitialized)
+                        procs = [proc for proc in node.procs.values()
+                                 if proc.status == Scheduler.ProcInitialized]
                     else:
-                        n = 0
-                    if (yield client.deliver(n, self._cur_computation.timeout)) != 1:
+                        procs = []
+                    if (yield client.deliver(len(procs), self._cur_computation.timeout)) != 1:
                         continue
-                    if n > 0:
-                        for proc in node.procs.values():
-                            Coro(proc.run, func, client)
+                    for proc in procs:
+                        Coro(proc.run, func, client)
 
             elif req == 'schedule':
                 try:
                     computation = asyncoro.unserialize(msg['computation'])
-                    assert isinstance(computation, Computation)
+                    assert isinstance(computation, Computation) or \
+                           computation.__class__.__name__ == 'Computation'
                     assert isinstance(computation._pulse_coro, Coro)
                     if computation._pulse_coro.location == self.asyncoro.location:
                         computation._pulse_coro._id = int(computation._pulse_coro._id)
@@ -486,15 +491,20 @@ class Scheduler(object):
             raise StopIteration(0)
         proc_setup_coros = []
         for proc in node.procs.values():
-            if proc.status == Scheduler.ProcDiscovered:
+            if proc.status in [Scheduler.ProcDiscovered, None]:
                 proc_setup_coros.append(Coro(self.__setup_proc, proc, computation))
         for proc_setup_coro in proc_setup_coros:
             yield proc_setup_coro.finish()
         if node.status != Scheduler.NodeInitialized:
             for proc in node.procs.values():
-                if proc.status == Scheduler.ProcInitialized:
+                if proc.status == Scheduler.ProcDiscovered:
+                    node.status = Scheduler.NodeDiscovered
+                    if computation and computation.status_coro:
+                        computation.status_coro.send(StatusMessage(Scheduler.NodeDiscovered,
+                                                                   proc.location.addr))
+                elif proc.status == Scheduler.ProcInitialized:
                     node.status = Scheduler.NodeInitialized
-                    if computation.status_coro:
+                    if computation and computation.status_coro:
                         computation.status_coro.send(StatusMessage(Scheduler.NodeInitialized,
                                                                    proc.location.addr))
                     break
@@ -508,10 +518,23 @@ class Scheduler(object):
             raise StopIteration(0)
         proc.status = Scheduler.ProcIgnore
         if not proc.server:
-            proc.server = yield Coro.locate('discoro_proc', proc.location,
-                                            timeout=computation.timeout)
+            if computation:
+                timeout = computation.timeout
+            else:
+                timeout = MsgTimeout
+            proc.server = yield Coro.locate('discoro_proc', proc.location, timeout=timeout)
             if not isinstance(proc.server, Coro):
+                logger.debug('server at %s is not valid' % (proc.location))
+                # TODO: asuume temporary issue instead of removing it?
+                node = self._nodes.get(proc.location.addr, None)
+                if node:
+                    node.procs.pop(str(proc.location), None)
                 raise StopIteration(-1)
+            if computation and computation.status_coro:
+                computation.status_coro.send(StatusMessage(Scheduler.ProcDiscovered, proc.location))
+        if not computation:
+            proc.status = Scheduler.ProcDiscovered
+            raise StopIteration(0)
         proc.server.send({'req': 'setup', 'client': coro, 'computation': computation,
                           'pulse_coro': self.__timer_coro})
         ret = yield coro.receive(timeout=computation.timeout)
@@ -527,6 +550,7 @@ class Scheduler(object):
                     Coro(self.__close_proc, proc)
                     raise StopIteration(-1)
         proc.status = Scheduler.ProcInitialized
+        proc.last_pulse = time.time()
         if computation.status_coro:
             computation.status_coro.send(StatusMessage(Scheduler.ProcInitialized, proc.location))
         raise StopIteration(0)
@@ -541,11 +565,11 @@ class Scheduler(object):
         node.ncoros = 0
         node.status = Scheduler.NodeClosed
         if computation and computation.status_coro:
-            computation.status_coro.send(StatusMessage(Scheduler.NodeClosed, proc.location.addr))
+            computation.status_coro.send(StatusMessage(Scheduler.NodeClosed, node.addr))
 
     def __close_proc(self, proc, coro=None):
         computation = self._cur_computation
-        if not computation:
+        if not computation or proc.status != Scheduler.ProcInitialized:
             logger.warning('Closing proc %s ignored' % proc.location)
             raise StopIteration(-1)
         if proc.coros:
@@ -562,9 +586,10 @@ class Scheduler(object):
     def __close_computation(self, coro=None):
         for node in self._nodes.values():
             yield self.__close_node(node)
-        computation_path = os.path.join(self.__dest_path, self.__cur_client_auth)
-        if os.path.isdir(computation_path):
-            shutil.rmtree(computation_path, ignore_errors=True)
+        if self.__cur_client_auth:
+            computation_path = os.path.join(self.__dest_path, self.__cur_client_auth)
+            if os.path.isdir(computation_path):
+                shutil.rmtree(computation_path, ignore_errors=True)
         self._cur_computation = None
         self.__cur_client_auth = None
         self.__sched_event.set()
@@ -572,18 +597,15 @@ class Scheduler(object):
 
 
 class Computation(object):
-    """Code fragments to distribute to remote asyncoro schedulers to
-    create (remote) coroutines.
+    """Packages components to distribute to remote asyncoro schedulers
+    to create (remote) coroutines.
     """
 
     def __init__(self, components, status_coro=None, timeout=MsgTimeout,
                  pulse_interval=MinPulseInterval):
-        """'computation' must be (generator) function, or list of
-        (generator) functions. 'depends' is a list of code fragments
-        that are needed by 'computation'; each element in this list
-        should be either a module, a function, path name of a file, a
-        Class or an object (in which case the code for its class is
-        sent).
+        """'components' is a list, each element of which should be
+        either a module, a function, path name of a file, a class or
+        an object (in which case the code for its class is sent).
         """
         if pulse_interval < MinPulseInterval or pulse_interval > MaxPulseInterval:
             raise Exception('"pulse_interval" must be at least %s and at most %s' %
@@ -730,8 +752,8 @@ class Computation(object):
             code = inspect.getsource(func).lstrip()
 
         def _run(self, coro=None):
-            msg = {'req': 'run', 'auth': self._auth, 'where': where,
-                   'func': _Function(name, code, args, kwargs), 'client': coro}
+            msg = {'req': 'run', 'auth': self._auth, 'where': where, 'client': coro,
+                   'func': asyncoro.serialize(_Function(name, code, args, kwargs))}
             if (yield self.scheduler.deliver(msg, timeout=self.timeout)) == 1:
                 rcoro = yield coro.receive(self.timeout)
             else:
@@ -765,8 +787,8 @@ class Computation(object):
             code = inspect.getsource(func).lstrip()
 
         def _run(self, coro=None):
-            msg = {'req': 'run_each', 'auth': self._auth, 'where': where,
-                   'func': _Function(name, code, args, kwargs), 'client': coro}
+            msg = {'req': 'run_each', 'auth': self._auth, 'where': where, 'client': coro,
+                   'func': asyncoro.serialize(_Function(name, code, args, kwargs))}
             n = yield self.scheduler.deliver(msg, timeout=self.timeout)
             if n != 1:
                 raise StopIteration([])
