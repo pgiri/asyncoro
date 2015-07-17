@@ -16,7 +16,26 @@ class C(object):
         self.n = None
 
     def __repr__(self):
-        return '%d: %.3f' % (self.i, self.n)
+        return '%d: %s' % (self.i, self.n)
+
+# status messages indicating nodes, processes as well as remote
+# coroutines finish status are sent to this coroutine ;see
+# MonitorStatus for more comprehensive use cases
+def status_proc(client, coro=None):
+    procs_ready = 0
+    coro.set_daemon()
+    while True:
+        msg = yield coro.receive()
+        if isinstance(msg, discoro.StatusMessage):
+            # print('Status: %s / %s' % (msg.location, msg.status))
+            if msg.status == discoro.Scheduler.ProcInitialized:
+                # wait until 2 processes ready
+                procs_ready += 1
+                if procs_ready == 2:
+                    client.send('processes ready')
+        elif isinstance(msg, asyncoro.MonitorException):
+            if msg.args[1][0] != StopIteration:
+                print('rcoro %s failed: %s / %s' % (msg.args[0], msg.args[1][0], msg.args[1][1]))
 
 # this generator function is sent to remote discoro servers to run
 # coroutines there
@@ -31,20 +50,6 @@ def compute(obj, client, coro=None):
     yield coro.sleep(obj.n)
     # send result back to client
     yield client.deliver(obj, timeout=5)
-
-def status_proc(client, coro=None):
-    # monitor status; see MonitorStatus for more comprehensive use cases
-    procs_ready = 0
-    coro.set_daemon()
-    while True:
-        msg = yield coro.receive()
-        # wait until 3 processes ready
-        if isinstance(msg, discoro.StatusMessage):
-            # print('Status: %s / %s' % (msg.location, msg.status))
-            if msg.status == discoro.Scheduler.ProcInitialized:
-                procs_ready += 1
-                if procs_ready == 3:
-                    client.send('run')
 
 def client_proc(computation, coro=None):
     # scheduler sends node / process status messages to status_coro
@@ -61,7 +66,7 @@ def client_proc(computation, coro=None):
     # wait until processes are initialized; alternately, create
     # coroutines from 'status_proc' itself
     msg = yield coro.receive()
-    assert msg == 'run'
+    assert msg == 'processes ready'
 
     rcoros = []
     # create remote coroutines
@@ -71,23 +76,23 @@ def client_proc(computation, coro=None):
         if isinstance(rcoro, asyncoro.Coro):
             rcoros.append(rcoro)
         else:
-            print('failed to create remote coroutine for %s' % c)
+            print('failed to create remote coroutine for %s: %s' % (c, rcoro))
 
+    # yield coro.sleep(10)
     # send data to remote coroutines (as messages)
     for rcoro in rcoros:
         rcoro.send(random.uniform(5, 20))
 
-    # remote coroutines send replies as messages to this 'coro'
+    # remote coroutines send replies as messages to this coro
     for rcoro in rcoros:
         reply = yield coro.receive()
         print('reply: %s' % (reply))
 
     yield computation.close()
-    yield coro.sleep(1)
 
 if __name__ == '__main__':
     asyncoro.logger.setLevel(logging.DEBUG)
-    # send generator function and class C (as the function uses
-    # objects of C); 'depends' can include files, functions, objets
-    computation = discoro.Computation([compute, C], timeout=5)
-    asyncoro.Coro(client_proc, computation)
+    # send generator function and class C (as the computation uses
+    # objects of C)
+    computation = discoro.Computation([compute, C])
+    asyncoro.Coro(client_proc, computation).value()

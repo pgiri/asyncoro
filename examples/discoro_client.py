@@ -71,4 +71,4 @@ if __name__ == '__main__':
     # send generator function and class C (as the function uses
     # objects of C); 'depends' can include files, functions, objets
     computation = discoro.Computation([compute, C], timeout=5)
-    asyncoro.Coro(client_proc, computation)
+    asyncoro.Coro(client_proc, computation).value()
