@@ -221,7 +221,7 @@ def discoro_proc(_discoro_name='discoro_proc'):
             if not _discoro_computation or _discoro_auth != _discoro_computation._auth:
                 continue
             asyncoro.logger.debug('deleting computation "%s"' % _discoro_computation._auth)
-            for _discoro_var in globals():
+            for _discoro_var in list(globals()):
                 if _discoro_var not in _discoro_globals:
                     # asyncoro.logger.warning('Removing global variable "%s"' % _discoro_var)
                     globals().pop(_discoro_var, None)
