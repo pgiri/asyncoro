@@ -653,6 +653,8 @@ class AsynCoro(asyncoro.AsynCoro):
         req = _NetRequest('send_file', kwargs=kwargs, dst=location, timeout=timeout)
         sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                            keyfile=self._keyfile, certfile=self._certfile)
+        if timeout:
+            sock.settimeout(timeout)
         try:
             yield sock.connect((location.addr, location.port))
             req.auth = peer.auth
