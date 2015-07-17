@@ -1571,16 +1571,13 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                 poll_timeout = timeout
             elif self._timeouts:
                 poll_timeout = self._timeouts[0][0] - _time()
-                if poll_timeout < 0.0001:
-                    poll_timeout = 0
-                elif timeout is not None:
+                if timeout is not None:
                     poll_timeout = min(timeout, poll_timeout)
+                poll_timeout *= self.timeout_multiplier
             elif timeout is None:
                 poll_timeout = _AsyncPoller._Block
             else:
-                poll_timeout = timeout
-            if poll_timeout and poll_timeout != _AsyncPoller._Block:
-                poll_timeout *= self.timeout_multiplier
+                poll_timeout = timeout * self.timeout_multiplier
 
             try:
                 events = self._poller.poll(poll_timeout)
@@ -1619,7 +1616,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
             except:
                 logger.debug(traceback.format_exc())
 
-            if timeout == 0:
+            if self._timeouts:
                 now = _time()
                 while self._timeouts and self._timeouts[0][0] <= now:
                     fd_timeout, fd = self._timeouts.pop(0)
@@ -3180,11 +3177,7 @@ class AsynCoro(object):
             self._lock.acquire()
             if not self._scheduled:
                 if self._timeouts:
-                    now = _time()
-                    timeout = self._timeouts[0][0]
-                    timeout -= now
-                    if timeout < 0.0001:
-                        timeout = 0
+                    timeout = self._timeouts[0][0] - _time()
                 else:
                     timeout = None
                 self._polling = True
