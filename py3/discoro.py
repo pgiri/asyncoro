@@ -41,7 +41,7 @@ StatusMessage = collections.namedtuple('StatusMessage', ['status', 'location'])
 _Function = collections.namedtuple('_Function', ['name', 'code', 'args', 'kwargs'])
 
 
-class Scheduler(object):
+class Scheduler(object, metaclass=asyncoro.MetaSingleton):
 
     # status indications ('status' attribute of StatusMessage)
     NodeDiscovered = 1
@@ -55,10 +55,9 @@ class Scheduler(object):
     ProcIgnore = 14
     ProcDisconnected = 15
 
-    __metaclass__ = asyncoro.MetaSingleton
-
-    """This class is for use by Computation class (see below) only;
-    none of its methods are to be used by user.
+    """This class is for use by Computation class (see below) only.
+    Other than the status messages above, none of its attributes are
+    to be accessed directly.
     """
 
     class _Node(object):
@@ -146,7 +145,6 @@ class Scheduler(object):
         self.__client_coro = Coro(self.__client_proc)
         self.__timer_coro = Coro(self.__timer_proc)
         self._status_coro = Coro(self.__status_proc)
-        self.asyncoro.peer_status(self._status_coro)
         atexit.register(self.__close)
 
     def __close(self):
@@ -157,6 +155,7 @@ class Scheduler(object):
 
     def __status_proc(self, coro=None):
         coro.set_daemon()
+        self.asyncoro.peer_status(coro)
         while True:
             msg = yield coro.receive()
             if isinstance(msg, asyncoro.MonitorException):
@@ -167,9 +166,7 @@ class Scheduler(object):
                     continue
                 proc = node.procs.get(str(rcoro.location), None)
                 if not proc:
-                    for proc in node.procs.values():
-                        logger.warning('proc "%s" is invalid: "%s"' %
-                                       (rcoro.location, proc.location))
+                    logger.warning('proc "%s" is invalid' % (rcoro.location))
                     continue
                 if proc.coros.pop(str(rcoro), None) is None:
                     logger.warning('rcoro "%s" is invalid at "%s"' % (rcoro, proc.location))
@@ -377,8 +374,8 @@ class Scheduler(object):
                     logger.warning('Ignoring invalid request to run computation')
                     where = None
                 if where == 'node':
-                    nodes =[node for node in self._nodes.values()
-                            if node.status == Scheduler.NodeInitialized]
+                    nodes = [node for node in self._nodes.values()
+                             if node.status == Scheduler.NodeInitialized]
                     if (yield client.deliver(len(nodes), self._cur_computation.timeout)) != 1:
                         continue
                     for node in nodes:
@@ -579,11 +576,16 @@ class Scheduler(object):
                                   timeout=computation.timeout)
         proc.status = Scheduler.ProcClosed
         proc.xfer_files = []
+        proc.coros = {}
+        proc.done = {}
         if computation and computation.status_coro:
             computation.status_coro.send(StatusMessage(Scheduler.ProcClosed, proc.location))
         raise StopIteration(0)
 
     def __close_computation(self, coro=None):
+        computation = self._cur_computation
+        if computation:
+            computation.status_coro = None
         for node in self._nodes.values():
             yield self.__close_node(node)
         if self.__cur_client_auth:
@@ -884,7 +886,7 @@ class Computation(object):
         if self._auth:
             yield Coro(_close, self).finish()
         if self._pulse_coro:
-            self._pulse_coro.send(None)
+            yield self._pulse_coro.send(None)
 
     def _pulse_proc(self, coro=None):
         """For internal use only.
