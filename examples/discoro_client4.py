@@ -80,7 +80,7 @@ def submit_jobs_proc(computation, njobs, coro=None):
     # if scheduler is shared (i.e., running as program), nothing needs
     # to be done (its location can optionally be given to 'schedule');
     # othrwise, start scheduler: discoro.Scheduler()
-    discoro.Scheduler()
+    # discoro.Scheduler()
     if (yield computation.schedule()):
         raise Exception('Failed to schedule computation')
     submitted = 0
@@ -91,7 +91,7 @@ def submit_jobs_proc(computation, njobs, coro=None):
             # a job is done
             rcoro = msg.args[0]
             done += 1
-            if done == njobs:
+            if done >= njobs and submitted == done:
                 break
             if submitted < njobs:
                 # submit another job
@@ -112,7 +112,7 @@ def submit_jobs_proc(computation, njobs, coro=None):
     yield computation.close()
 
 if __name__ == '__main__':
-    import logging, random, os
+    import logging, random, os, threading
     asyncoro.logger.setLevel(logging.DEBUG)
     # unlike in earlier examples, rcoro_proc is not sent with
     # computation; instead, it is sent each time a job is submitted,

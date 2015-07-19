@@ -54,6 +54,8 @@ def client_proc(computation, coro=None):
         rcoro = yield computation.run(compute, c, coro)
         if isinstance(rcoro, asyncoro.Coro):
             rcoros.append(rcoro)
+        else:
+            print('%s failed: %s' % (i, str(rcoro)))
 
     # send data to remote coroutines (as messages)
     for rcoro in rcoros:
@@ -71,4 +73,4 @@ if __name__ == '__main__':
     # send generator function and class C (as the function uses
     # objects of C); 'depends' can include files, functions, objets
     computation = discoro.Computation([compute, C], timeout=5)
-    asyncoro.Coro(client_proc, computation).value()
+    asyncoro.Coro(client_proc, computation)

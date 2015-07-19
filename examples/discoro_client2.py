@@ -7,6 +7,7 @@
 
 import sys, logging, random
 import asyncoro.discoro as discoro
+from asyncoro.discoro import StatusMessage
 import asyncoro.disasyncoro as asyncoro
 
 # objects of C are exchanged between client and servers
@@ -26,8 +27,8 @@ def status_proc(client, coro=None):
     coro.set_daemon()
     while True:
         msg = yield coro.receive()
-        if isinstance(msg, discoro.StatusMessage):
-            # print('Status: %s / %s' % (msg.location, msg.status))
+        if isinstance(msg, StatusMessage):
+            print('Status: %s / %s' % (msg.location, msg.status))
             if msg.status == discoro.Scheduler.ProcInitialized:
                 # wait until 2 processes ready
                 procs_ready += 1
@@ -57,8 +58,7 @@ def client_proc(computation, coro=None):
 
     # if no other clients use discoro, scheduler can be started in
     # client itself; alternately, scheduler can be run separately on a node
-    discoro.Scheduler()
-
+    # discoro.Scheduler()
     # distribute computation to server
     if (yield computation.schedule()):
         raise Exception('schedule failed')
@@ -91,6 +91,7 @@ def client_proc(computation, coro=None):
     yield computation.close()
 
 if __name__ == '__main__':
+    import os, threading
     asyncoro.logger.setLevel(logging.DEBUG)
     # send generator function and class C (as the computation uses
     # objects of C)

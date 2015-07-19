@@ -17,7 +17,7 @@ def client_proc(computation, njobs, coro=None):
     status = {'submitted': 0, 'done': 0}
 
     def submit_job(where, coro=None):
-        arg = random.uniform(5, 20)
+        arg = random.uniform(5, 10)
         rcoro = yield computation.run_at(where, rcoro_proc, arg)
         if isinstance(rcoro, asyncoro.Coro):
             print('%s processing %s' % (rcoro.location, arg))
@@ -44,7 +44,10 @@ def client_proc(computation, njobs, coro=None):
                 asyncoro.logger.warning('Remote coroutine %s terminated with "%s"' %
                                         (rcoro.location, str(msg.args[1])))
             status['done'] += 1
-            if status['done'] == njobs:
+            # because jobs are submitted with 'yield' with coroutines,
+            # and 'submitted' is incremented after 'yield', it is
+            # likely that more than 'njobs' are submitted
+            if status['done'] >= njobs and status['done'] == status['submitted']:
                 break
             if status['submitted'] < njobs:
                 # schedule another job at this process
@@ -60,7 +63,7 @@ def client_proc(computation, njobs, coro=None):
     yield computation.close()
 
 if __name__ == '__main__':
-    import logging, random
+    import logging, random, threading
     asyncoro.logger.setLevel(logging.DEBUG)
     computation = discoro.Computation([rcoro_proc])
     # run 10 jobs

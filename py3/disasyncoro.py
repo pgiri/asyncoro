@@ -145,8 +145,6 @@ class _Peer(object):
                         logger.warning('too many connection errors to %s; removing it' %
                                        self.location)
                         self.req_coro = None
-                        # TODO: remove from _stream_peers?
-                        # AsynCoro.instance()._stream_peers.pop((self.location.addr, self.location.port), None)
                         _Peer.remove(self.location)
                         break
                     continue
