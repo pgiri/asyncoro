@@ -87,7 +87,7 @@ def discoro_proc(_discoro_name='discoro_proc'):
             status = yield coro.receive()
             if isinstance(status, asyncoro.PeerStatus):
                 if _discoro_computation and \
-                       _discoro_computation.scheduler.location == status.location:
+                   _discoro_computation.scheduler.location == status.location:
                     asyncoro.logger.debug('scheduler at %s quit; closing computation %s' %
                                           (status.location, _discoro_computation._auth))
                     msg = {'req': 'close', 'auth': _discoro_computation._auth}
@@ -177,7 +177,8 @@ def discoro_proc(_discoro_name='discoro_proc'):
             _discoro_auth = _discoro_msg.get('auth', None)
             if not _discoro_computation or _discoro_auth != _discoro_computation._auth:
                 continue
-            asyncoro.logger.debug('deleting computation "%s"' % _discoro_computation._auth)
+            asyncoro.logger.debug('%s deleting computation "%s"' %
+                                  (_discoro_coro.location, _discoro_computation._auth))
             # TODO: is it better to quit this process and start another?
             for _discoro_var in _discoro_job_coros:
                 _discoro_var.terminate()
@@ -220,14 +221,15 @@ def discoro_proc(_discoro_name='discoro_proc'):
             _discoro_auth = _discoro_msg.get('auth', None)
             if not _discoro_computation or _discoro_auth != _discoro_computation._auth:
                 continue
-            asyncoro.logger.debug('deleting computation "%s"' % _discoro_computation._auth)
+            asyncoro.logger.debug('%s deleting computation "%s"' %
+                                  (_discoro_coro.location, _discoro_computation._auth))
             for _discoro_var in list(globals()):
                 if _discoro_var not in _discoro_globals:
                     # asyncoro.logger.warning('Removing global variable "%s"' % _discoro_var)
                     globals().pop(_discoro_var, None)
-            for _discoro_var in locals:
-                if _discoro_var not in _discoro_locals:
-                    locals().pop(_discoro_var, None)
+            # for _discoro_var in list(locals()):
+            #     if _discoro_var not in _discoro_locals:
+            #         locals().pop(_discoro_var, None)
             break
         else:
             asyncoro.logger.warning('invalid command "%s" ignored' % _discoro_req)
@@ -284,7 +286,7 @@ if __name__ == '__main__':
     parser.add_argument('-n', '--name', dest='name', default=None,
                         help='(symbolic) name given to AsynCoro schdulers on this node')
     parser.add_argument('--dest_path', dest='dest_path', default=None,
-                        help='path where files sent by peers are stored')
+                        help='path prefix to where files sent by peers are stored')
     parser.add_argument('--max_file_size', dest='max_file_size', default=None, type=int,
                         help='maximum file size of any file transferred')
     parser.add_argument('-s', '--secret', dest='secret', default='',
