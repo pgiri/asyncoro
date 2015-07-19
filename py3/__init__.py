@@ -380,6 +380,9 @@ class _AsyncSocket(object):
                         coro, self._read_coro = self._read_coro, None
                         coro._proceed_(buf)
                     else:
+                        if self._timeout:
+                            self._notifier._del_timeout(self)
+                            self._notifier._add_timeout(self)
                         self._read_task = functools.partial(_recvall, self, view, *args)
                 else:
                     view.release()
@@ -534,6 +537,9 @@ class _AsyncSocket(object):
                         self._write_task = self._write_result = None
                         coro, self._write_coro = self._write_coro, None
                         coro._proceed_(None)
+                    elif self._timeout:
+                        self._notifier._del_timeout(self)
+                        self._notifier._add_timeout(self)
 
         self._write_result = memoryview(data)
         self._write_task = functools.partial(_sendall, self, len(data))
@@ -2124,7 +2130,7 @@ class Coro(object):
     """
 
     __slots__ = ('_generator', '_name', '_id', '_state', '_value', '_exceptions', '_callers',
-                 '_timeout', '_daemon', '_complete', '_msgs', '_monitors', '_new_generator',
+                 '_timeout', '_daemon', '_complete', '_msgs', '_monitors', '_swap_generator',
                  '_hot_swappable', '_location')
 
     _asyncoro = None
@@ -2142,7 +2148,7 @@ class Coro(object):
         self._complete = None
         self._msgs = collections.deque()
         self._monitors = set()
-        self._new_generator = None
+        self._swap_generator = None
         self._hot_swappable = False
         if Coro._asyncoro is None:
             Coro._asyncoro = AsynCoro.instance()
@@ -2389,7 +2395,7 @@ class Coro(object):
         if Coro._asyncoro.cur_coro() == self:
             if flag:
                 self._hot_swappable = True
-                if self._new_generator:
+                if self._swap_generator:
                     return Coro._asyncoro._swap_generator(self)
             else:
                 self._hot_swappable = False
@@ -2412,7 +2418,7 @@ class Coro(object):
         except:
             logger.warning('%s is not a generator!' % target.__name__)
             return -1
-        self._new_generator = generator
+        self._swap_generator = generator
         return Coro._asyncoro._swap_generator(self)
 
     def monitor(self, observe):
@@ -3181,7 +3187,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
             if coro._state is None:
                 # assert coro._id not in self._scheduled
                 # assert coro._id not in self._suspended
-                coro._generator = coro._new_generator
+                coro._generator = coro._swap_generator
                 coro._value = None
                 if coro._complete == 0:
                     coro._complete = None
@@ -3191,13 +3197,13 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 coro._state = AsynCoro._Scheduled
                 coro._hot_swappable = False
             else:
-                coro._exceptions.append((HotSwapException, HotSwapException(coro._new_generator)))
+                coro._exceptions.append((HotSwapException, HotSwapException(coro._swap_generator)))
                 # assert coro._state != AsynCoro._AwaitIO_
                 if coro._state in (AsynCoro._Suspended, AsynCoro._AwaitMsg_):
                     self._suspended.discard(cid)
                     self._scheduled.add(cid)
                     coro._state = AsynCoro._Scheduled
-            coro._new_generator = None
+            coro._swap_generator = None
             if self._polling and len(self._scheduled) == 1:
                 self._notifier.interrupt()
         self._lock.release()
@@ -3298,10 +3304,10 @@ class AsynCoro(object, metaclass=MetaSingleton):
                         # return to caller
                         caller = coro._callers.pop(-1)
                         coro._generator = caller[0]
-                        if coro._new_generator and not coro._callers and coro._hot_swappable:
+                        if coro._swap_generator and not coro._callers and coro._hot_swappable:
                             coro._exceptions.append((HotSwapException,
-                                                     HotSwapException(coro._new_generator)))
-                            coro._new_generator = None
+                                                     HotSwapException(coro._swap_generator)))
+                            coro._swap_generator = None
                             coro._state = AsynCoro._Scheduled
                         elif coro._exceptions:
                             # exception in callee, restore saved value
@@ -3334,8 +3340,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                                 if coro._exceptions:
                                     exc = MonitorException(coro, coro._exceptions[0])
                                 else:
-                                    exc = MonitorException(coro, (StopIteration,
-                                                                  StopIteration(coro._value)))
+                                    exc = MonitorException(coro, (StopIteration, coro._value))
                                 if self._coros.get(monitor._id, None) == monitor:
                                     monitor.send(exc)
                                 else:
@@ -3359,8 +3364,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                                         serialize(exc)
                                     except pickle.PicklingError:
                                         exc = type(exc)
-                                    exc = MonitorException(coro, (StopIteration,
-                                                                  StopIteration(exc)))
+                                    exc = MonitorException(coro, (StopIteration, exc))
                                 monitor.send(exc)
                         if not coro._monitors or not coro._exceptions:
                             coro._msgs.clear()
