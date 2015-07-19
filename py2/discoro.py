@@ -114,10 +114,11 @@ class Scheduler(object):
                                   'client': coro, 'notify': self.scheduler._status_coro})
                 rcoro = yield coro.receive(timeout=computation.timeout)
                 if isinstance(rcoro, Coro):
-                    done = self.done.pop(str(rcoro), None)
+                    key = str(rcoro)
+                    done = self.done.pop(key, None)
                     if done is None:
                         # TODO: keep func too for fault-tolerance
-                        self.coros[str(rcoro)] = rcoro
+                        self.coros[key] = rcoro
                         node.ncoros += 1
                     else:
                         rcoro = done
@@ -171,8 +172,9 @@ class Scheduler(object):
                     logger.warning('proc "%s" is invalid' % (rcoro.location))
                     continue
                 if proc.coros.pop(str(rcoro), None) is None:
-                    logger.warning('rcoro "%s" is invalid at "%s"' % (rcoro, proc.location))
+                    # logger.warning('rcoro "%s" is invalid at "%s"' % (rcoro, proc.location))
                     proc.done[str(rcoro)] = msg
+                    # TODO: prune 'done'
                     continue
                 if self._cur_computation and self._cur_computation.status_coro:
                     self._cur_computation.status_coro.send(msg)
@@ -408,7 +410,7 @@ class Scheduler(object):
                 try:
                     computation = asyncoro.unserialize(msg['computation'])
                     assert isinstance(computation, Computation) or \
-                           computation.__class__.__name__ == 'Computation'
+                        computation.__class__.__name__ == 'Computation'
                     assert isinstance(computation._pulse_coro, Coro)
                     if computation._pulse_coro.location == self.asyncoro.location:
                         computation._pulse_coro._id = int(computation._pulse_coro._id)
@@ -614,8 +616,8 @@ class Computation(object):
         if pulse_interval < MinPulseInterval or pulse_interval > MaxPulseInterval:
             raise Exception('"pulse_interval" must be at least %s and at most %s' %
                             (MinPulseInterval, MaxPulseInterval))
-        if timeout < 1 or timeout > 120:
-            raise Exception('"timeout" must be at least 1 and at most 120')
+        if timeout < 1 or timeout > MaxPulseInterval:
+            raise Exception('"timeout" must be at least 1 and at most %s' % MaxPulseInterval)
         if status_coro is not None and not isinstance(status_coro, Coro):
             raise Exception('status_coro must be coroutine')
 
@@ -682,7 +684,9 @@ class Computation(object):
         """
 
         if self._auth is not None:
-            raise StopIteration(0)
+            raise StopIteration(-1)
+        if self.status_coro is not None and not isinstance(self.status_coro, Coro):
+            raise StopIteration(-1)
 
         if not self.scheduler:
             self.scheduler = yield Coro.locate('discoro_scheduler', location=location,
@@ -929,6 +933,8 @@ if __name__ == '__main__':
                         help='UDP port number to use')
     parser.add_argument('-n', '--name', dest='name', default=None,
                         help='(symbolic) name given to schduler')
+    parser.add_argument('--dest_path', dest='dest_path', default=None,
+                        help='path prefix to where files sent by peers are stored')
     parser.add_argument('--max_file_size', dest='max_file_size', default=None, type=int,
                         help='maximum file size of any file transferred')
     parser.add_argument('-s', '--secret', dest='secret', default='',
