@@ -893,7 +893,7 @@ class Computation(object):
         if self._auth:
             yield Coro(_close, self).finish()
         if self._pulse_coro:
-            yield self._pulse_coro.send(None)
+            yield self._pulse_coro.send('quit')
 
     def _pulse_proc(self, coro=None):
         """For internal use only.
@@ -903,6 +903,8 @@ class Computation(object):
             msg = yield coro.receive(timeout=(2 * self.pulse_interval))
             if msg == 'pulse':
                 last_pulse = time.time()
+            elif msg == 'quit':
+                break
             elif msg is None:
                 logger.debug('scheduler not reachable?')
                 if (time.time() - last_pulse) > (5 * self.pulse_interval):
