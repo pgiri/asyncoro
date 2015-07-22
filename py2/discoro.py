@@ -460,10 +460,16 @@ class Scheduler(object):
                     self.__sched_event.set()
 
             elif req == 'close_computation':
-                if self.__cur_client_auth != auth:
-                    logger.warning('Ignoring invalid request to close computation')
-                    continue
-                Coro(self.__close_computation)
+                if self.__cur_client_auth == auth:
+                    Coro(self.__close_computation)
+                else:
+                    computation = computations.pop(auth, None)
+                    if computation:
+                        computation_path = os.path.join(self.__dest_path, auth)
+                        if os.path.isdir(computation_path):
+                            shutil.rmtree(computation_path, ignore_errors=True)
+                    else:
+                        logger.warning('Ignoring invalid request to close computation')
 
             elif req == 'nodes_list':
                 # TODO: allowed to query anytime, even if current
@@ -694,7 +700,7 @@ class Computation(object):
         if not self.scheduler:
             self.scheduler = yield Coro.locate('discoro_scheduler', location=location,
                                                timeout=self.timeout)
-            if not isinstance(self.scheduler, asyncoro.Coro):
+            if not isinstance(self.scheduler, Coro):
                 raise StopIteration(-1)
 
         def _schedule(self, coro=None):
@@ -712,7 +718,7 @@ class Computation(object):
                 atexit.register(self.close)
                 if coro.location != self.scheduler.location:
                     for xf in self._xfer_files:
-                        if (yield asyncoro.AsynCoro.send_file(
+                        if (yield asyncoro.AsynCoro.instance().send_file(
                            self.scheduler.location, xf, dir=self._auth, timeout=self.timeout)) < 0:
                             logger.warning('Could not send file "%s" to scheduler' % xf)
                             yield self.close()
