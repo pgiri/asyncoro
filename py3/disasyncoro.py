@@ -125,6 +125,7 @@ class _Peer(object):
                     self.conn.settimeout(req.timeout)
                 try:
                     yield self.conn.connect((self.location.addr, self.location.port))
+                    logger.debug('new connection to %s' % self.location)
                 except GeneratorExit:
                     if self.conn:
                         self.conn.shutdown(socket.SHUT_WR)
@@ -542,70 +543,80 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             loc = req.reply
         raise StopIteration(loc)
 
-    def peer(self, node, udp_port=0, tcp_port=0, stream_send=False):
+    def peer(self, loc, udp_port=0, stream_send=False):
         """Must be used with 'yield', as
-        'status = yield scheduler.peer("node1")'.
+        'status = yield scheduler.peer("loc")'.
 
-        Add asyncoro running at node, udp_port as peer to
-        communicate. Peers on a local network can find each other
-        automatically, but if they are on different networks, 'peer'
-        can be used so they find each other.
-
-        If 'tcp_port' is set, asyncoro will contact peer at given port
-        (on 'node') using TCP, so UDP is not needed to discover node.
+        Add asyncoro running at 'loc' as peer to communicate. Peers on
+        a local network can find each other automatically, but if they
+        are on different networks, 'peer' can be used so they find
+        each other. 'loc' can be either an instance of Location or
+        host name or IP address. If 'loc' is Location instance and
+        'port' is 0, or 'loc' is host name or IP address, then all
+        asyncoros running at the host will have streaming mode set as
+        per 'stream_send'.
 
         If 'stream_send' is True, this asyncoro uses same connection
         again and again to send messages (i.e., as a stream) to peer
-        'node' (instead of one message per connection). If 'tcp_port'
-        is 0, then messages to all asyncoro instances on the given
-        node will be streamed. If 'tcp_port' is a port number, then
-        messages to only asyncoro running on that port will be
-        streamed.
+        'host' (instead of one message per connection).
         """
-        try:
-            node = socket.gethostbyname(node)
-        except:
-            logger.warning('invalid node: "%s"', str(node))
-            raise StopIteration(-1)
-        if not udp_port:
-            udp_port = 51350
-        stream_peers = [(addr, port, peer) for (addr, port), peer in _Peer.peers.items()
-                        if (addr == node and (tcp_port == 0 or tcp_port == port))]
+
+        if not isinstance(loc, Location):
+            try:
+                loc = socket.gethostbyname(loc)
+            except:
+                logger.warning('invalid node: "%s"', str(loc))
+                raise StopIteration(-1)
+            loc = Location(loc, 0)
+
+        if loc.port:
+            peer = _Peer.peers.get((loc.addr, loc.port), None)
+            if peer:
+                stream_peers = [(loc.addr, loc.port, peer)]
+            else:
+                stream_peers = []
+        else:
+            stream_peers = [(addr, port, peer) for (addr, port), peer in _Peer.peers.items()
+                            if (addr == loc.addr and (loc.port == 0 or loc.port == port))]
+
         if stream_send:
             for addr, port, peer in stream_peers:
                 peer.stream = True
-            self._stream_peers[(node, tcp_port)] = True
+            self._stream_peers[(loc.addr, loc.port)] = True
         else:
             for addr, port, peer in stream_peers:
                 self._stream_peers.pop((addr, port), None)
                 peer.stream = False
-            self._stream_peers.pop((node, tcp_port), None)
+            self._stream_peers.pop((loc.addr, loc.port), None)
 
-        if (node, tcp_port) in _Peer.peers:
-            req = _NetRequest('stream', kwargs={'send': stream_send},
-                              src=self._location, dst=Location(node, tcp_port))
-            raise StopIteration(_Peer.send_req(req))
+        if stream_peers:
+            for (ip_addr, port, peer) in stream_peers:
+                req = _NetRequest('stream', kwargs={'send': stream_send},
+                                  src=self._location, dst=peer.location)
+                _Peer.send_req(req)
+            raise StopIteration(0)
 
-        if tcp_port:
+        if loc.port:
             req = _NetRequest('ping', kwargs={'loc': self._location, 'signature': self._signature,
-                                              'name': self._name, 'version': __version__},
-                              dst=Location(node, tcp_port))
+                                              'name': self._name, 'version': __version__}, dst=loc)
             sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
             sock.settimeout(2)
             try:
-                yield sock.connect((node, tcp_port))
+                yield sock.connect((loc.addr, loc.port))
                 yield sock.send_msg(serialize(req))
             except:
                 pass
             sock.close()
         else:
+            if not udp_port:
+                udp_port = 51350
             ping_msg = {'location': self._location, 'signature': self._signature,
                         'version': __version__}
             ping_msg = b'ping:' + serialize(ping_msg)
             sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
             sock.settimeout(2)
             try:
-                yield sock.sendto(ping_msg, (node, udp_port))
+                yield sock.sendto(ping_msg, (loc.addr, udp_port))
             except:
                 pass
             sock.close()
