@@ -17,7 +17,7 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "3.3"
+__version__ = "3.4"
 
 __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
@@ -3429,7 +3429,7 @@ class AsynCoro(object):
 
             if self._location:
                 def _close(self, peer, coro=None):
-                    req = _NetRequest('peer_closed', kwargs={'loc': self._location},
+                    req = _NetRequest('peer_closed', kwargs={'location': self._location},
                                       dst=peer.location, timeout=2)
                     yield self._sync_reply(req)
                 for peer in _Peer.peers.values():

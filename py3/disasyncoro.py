@@ -58,6 +58,11 @@ class _NetRequest(object):
 
 
 class PeerStatus(object):
+    """'peer_status' method of AsynCoro can be used to be notified of
+    status of peers (other AsynCoro's to communicate for distributed
+    programming). The status notifications are sent as messages to the
+    regisered coroutine. Each message is an instance of this class.
+    """
 
     Online = 1
     Offline = 0
@@ -125,7 +130,6 @@ class _Peer(object):
                     self.conn.settimeout(req.timeout)
                 try:
                     yield self.conn.connect((self.location.addr, self.location.port))
-                    logger.debug('new connection to %s' % self.location)
                 except GeneratorExit:
                     if self.conn:
                         self.conn.shutdown(socket.SHUT_WR)
@@ -146,7 +150,6 @@ class _Peer(object):
                         logger.warning('too many connection errors to %s; removing it' %
                                        self.location)
                         self.req_coro = None
-                        _Peer.remove(self.location)
                         break
                     continue
                 else:
@@ -202,6 +205,9 @@ class _Peer(object):
             finally:
                 if req.event:
                     req.event.set()
+
+        _Peer.remove(self.location)
+        raise StopIteration
 
     @staticmethod
     def remove(location):
@@ -543,7 +549,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             loc = req.reply
         raise StopIteration(loc)
 
-    def peer(self, loc, udp_port=0, stream_send=False):
+    def peer(self, loc, udp_port=0, stream_send=False, broadcast=False):
         """Must be used with 'yield', as
         'status = yield scheduler.peer("loc")'.
 
@@ -559,6 +565,11 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
         If 'stream_send' is True, this asyncoro uses same connection
         again and again to send messages (i.e., as a stream) to peer
         'host' (instead of one message per connection).
+
+        If 'broadcast' is True, the client information is broadcast on
+        the network of peer. This can be used if client is on remote
+        network and needs to communicate with all asyncoro's available
+        on the network of peer (at 'loc').
         """
 
         if not isinstance(loc, Location):
@@ -597,8 +608,9 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             raise StopIteration(0)
 
         if loc.port:
-            req = _NetRequest('ping', kwargs={'loc': self._location, 'signature': self._signature,
-                                              'name': self._name, 'version': __version__}, dst=loc)
+            req = _NetRequest('ping',
+                              kwargs={'location': self._location, 'signature': self._signature,
+                                      'name': self._name, 'version': __version__}, dst=loc)
             sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
             sock.settimeout(2)
             try:
@@ -610,8 +622,11 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
         else:
             if not udp_port:
                 udp_port = 51350
+            # 'propagate' is used to inform other asyncoro's running
+            # on the same node of the client
             ping_msg = {'location': self._location, 'signature': self._signature,
-                        'version': __version__}
+                        'name': self._name, 'version': __version__, 'propagate': True,
+                        'broadcast': broadcast}
             ping_msg = b'ping:' + serialize(ping_msg)
             sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
             sock.settimeout(2)
@@ -624,6 +639,12 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
         raise StopIteration(0)
 
     def peer_status(self, coro):
+        """This method can be used to be notified of status of peers
+        (other AsynCoro's to communicate for distributed
+        programming). The status notifications are sent as messages to
+        the regisered coroutine. Each message is an instance of
+        PeerStatus.
+        """
         _Peer.peer_status(coro)
 
     def send_file(self, location, file, dir=None, overwrite=False, timeout=None):
@@ -724,7 +745,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
         ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         ping_sock.settimeout(2)
         ping_msg = {'location': self._location, 'signature': self._signature,
-                    'version': __version__}
+                    'name': self._name, 'version': __version__}
         ping_msg = b'ping:' + serialize(ping_msg)
         try:
             yield ping_sock.sendto(ping_msg, ('<broadcast>', self._udp_sock.getsockname()[1]))
@@ -738,15 +759,15 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 logger.warning('ignoring UDP message from %s:%s', addr[0], addr[1])
                 continue
             try:
-                info = unserialize(msg[len(b'ping:'):])
-                assert info['version'] == __version__
-                req_peer = info['location']
+                ping_info = unserialize(msg[len(b'ping:'):])
+                assert ping_info['version'] == __version__
+                req_peer = ping_info['location']
                 if self._secret is None:
                     auth_code = None
                 else:
-                    auth_code = hashlib.sha1(bytes(info['signature'] + self._secret,
+                    auth_code = hashlib.sha1(bytes(ping_info['signature'] + self._secret,
                                                    'ascii')).hexdigest()
-                if info['location'] == self._location:
+                if ping_info['location'] == self._location:
                     continue
                 peer = _Peer.peers.get((req_peer.addr, req_peer.port), None)
                 if peer and peer.auth == auth_code:
@@ -754,8 +775,9 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             except:
                 continue
 
-            req = _NetRequest('ping', kwargs={'loc': self._location, 'signature': self._signature,
-                                              'name': self._name, 'version': __version__},
+            req = _NetRequest('ping',
+                              kwargs={'location': self._location, 'signature': self._signature,
+                                      'name': self._name, 'version': __version__},
                               dst=req_peer, auth=auth_code)
             sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                                keyfile=self._keyfile, certfile=self._certfile)
@@ -766,6 +788,33 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             except:
                 pass
             sock.close()
+
+            if ping_info.pop('broadcast', None):
+                ping_sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+                ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                ping_sock.settimeout(2)
+                ping_info.pop('propagate', None)
+                ping_msg = b'ping:' + serialize(ping_info)
+                try:
+                    yield ping_sock.sendto(ping_msg,
+                                           ('<broadcast>', self._udp_sock.getsockname()[1]))
+                except:
+                    pass
+                ping_sock.close()
+            elif ping_info.pop('propagate', None):
+                for peer in [peer for peer in _Peer.peers.values()
+                             if peer.location.addr == self._location.addr and
+                             peer.location.port != self._location.port]:
+                    req = _NetRequest('ping', kwargs=ping_info, dst=peer.location, auth=peer.auth)
+                    sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                       keyfile=self._keyfile, certfile=self._certfile)
+                    sock.settimeout(2)
+                    try:
+                        yield sock.connect((peer.location.addr, peer.location.port))
+                        yield sock.send_msg(serialize(req))
+                    except:
+                        pass
+                    sock.close()
 
     def _tcp_proc(self, coro=None):
         """Internal use only.
@@ -965,10 +1014,13 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                     reply = 0
                 yield conn.send_msg(serialize(reply))
             elif req.name == 'ping':
+                peer_loc = req.kwargs.get('location', None)
+                if req.kwargs.get('version', None) != __version__:
+                    logger.warning('Invalid asyncoro version: %s / %s; ignoring %s' %
+                                   (req.kwargs.get('version', None), __version__, peer_loc))
+                    break
                 try:
-                    assert req.kwargs['version'] == __version__
                     assert req.kwargs['name']
-                    peer_loc = req.kwargs['loc']
                     if self._secret is None:
                         auth_code = None
                     else:
@@ -981,10 +1033,10 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                     break
                 peer = _Peer.peers.get((peer_loc.addr, peer_loc.port), None)
                 if peer and peer.auth == auth_code:
-                    logger.debug('%s: ignoring peer: %s' % (self._location, peer_loc))
+                    # logger.debug('%s: ignoring peer: %s' % (self._location, peer_loc))
                     break
                 pong = _NetRequest('pong',
-                                   kwargs={'loc': self._location, 'signature': self._signature,
+                                   kwargs={'location': self._location, 'signature': self._signature,
                                            'name': self._name, 'version': __version__},
                                    dst=peer_loc, auth=auth_code)
                 sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
@@ -1034,10 +1086,13 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                         pass
                     sock.close()
             elif req.name == 'pong':
+                peer_loc = req.kwargs.get('location', None)
+                if req.kwargs.get('version', None) != __version__:
+                    logger.warning('Invalid asyncoro version: %s / %s; ignoring %s' %
+                                   (req.kwargs.get('version', None), __version__, peer_loc))
+                    break
                 try:
-                    assert req.kwargs['version'] == __version__
                     assert req.kwargs['name']
-                    peer_loc = req.kwargs['loc']
                     if self._secret is None:
                         auth_code = None
                     else:
@@ -1046,7 +1101,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                     # assert peer_loc == req.src
                     peer = _Peer.peers.get((peer_loc.addr, peer_loc.port), None)
                     if peer and peer.auth == auth_code:
-                        logger.debug('%s: ignoring peer: %s' % (self._location, peer_loc))
+                        # logger.debug('%s: ignoring peer: %s' % (self._location, peer_loc))
                         yield conn.send_msg(b'nak')
                         break
                     yield conn.send_msg(b'ack')
@@ -1223,7 +1278,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             elif req.name == 'peer_closed':
                 # synchronous message
                 assert req.src is None
-                peer_loc = req.kwargs.get('loc', None)
+                peer_loc = req.kwargs.get('location', None)
                 if peer_loc:
                     logger.debug('peer %s terminated' % (peer_loc))
                     # TODO: remove from _stream_peers?
