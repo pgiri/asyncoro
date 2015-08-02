@@ -40,6 +40,10 @@ def discoro_proc():
     from asyncoro import Coro
     from asyncoro.discoro import MinPulseInterval, MaxPulseInterval
 
+    class Nonlocals(object):
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
     _discoro_coro = asyncoro.AsynCoro.cur_coro()
     _discoro_coro.register('discoro_proc')
     _discoro_name = asyncoro.AsynCoro.instance().name
@@ -70,6 +74,7 @@ def discoro_proc():
     _discoro_monitor_coro = _discoro_monitor_proc = None
     _discoro_computation = _discoro_func = _discoro_var = None
     _discoro_job_coros = set()
+    _discoro_nonlocals = Nonlocals(busy_time=time.time())
     _discoro_globals = {}
     _discoro_locals = {}
     _discoro_globals.update(globals())
@@ -88,6 +93,8 @@ def discoro_proc():
                 interval = reset
                 last_pulse = time.time()
                 continue
+            if not _discoro_pulse_coro:
+                continue
             msg = {'ncoros': len(_discoro_job_coros), 'location': coro.location}
             if _discoro_pulse_coro.send(msg) == 0:
                 last_pulse = time.time()
@@ -95,6 +102,12 @@ def discoro_proc():
                 asyncoro.logger.warning('scheduler is not reachable; closing computation "%s"' %
                                         _discoro_computation._auth)
                 _discoro_coro.send({'req': 'close', 'auth': _discoro_computation._auth})
+
+            if ((not _discoro_job_coros) and _discoro_computation.zombie_period and
+               ((time.time() - _discoro_nonlocals.busy_time) > _discoro_computation.zombie_period)):
+                asyncoro.logger.debug('%s: closing zombie computation "%s"' %
+                                      (coro.location, _discoro_computation._auth))
+                _discoro_pulse_coro.send({'status': 'ProcClosed', 'location': coro.location})
 
     def _discoro_peer_status(coro=None):
         coro.set_daemon()
@@ -113,6 +126,7 @@ def discoro_proc():
         while True:
             msg = yield coro.receive()
             if isinstance(msg, asyncoro.MonitorException):
+                _discoro_nonlocals.busy_time = time.time()
                 asyncoro.logger.debug('job %s done' % msg.args[0])
                 _discoro_job_coros.discard(msg.args[0])
             else:
@@ -158,6 +172,7 @@ def discoro_proc():
                 _discoro_var = _discoro_msg.get('notify', None)
                 if isinstance(_discoro_var, Coro):
                     job_coro.notify(_discoro_var)
+            _discoro_nonlocals.busy_time = time.time()
             _discoro_client.send(job_coro)
             del job_coro
         elif _discoro_req == 'setup':
@@ -185,6 +200,7 @@ def discoro_proc():
             else:
                 _discoro_computation.pulse_interval = MinPulseInterval
             _discoro_timer_coro.resume(_discoro_computation.pulse_interval)
+            _discoro_nonlocals.busy_time = time.time()
             asyncoro.logger.debug('computation "%s" from %s' %
                                   (_discoro_computation._auth, _discoro_msg['client'].location))
             _discoro_client.send(0)

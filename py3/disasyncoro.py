@@ -520,8 +520,8 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
         self._rchannels = {}
         self._rcis = {}
         self._requests = {}
-        if os.path.isdir(self.__dest_path) and len(os.listdir(self.__dest_path)) == 0:
-            os.rmdir(self.__dest_path)
+        # if os.path.isdir(self.__dest_path) and len(os.listdir(self.__dest_path)) == 0:
+        #     os.rmdir(self.__dest_path)
 
     def locate(self, name, timeout=None):
         """Must be used with 'yield' as

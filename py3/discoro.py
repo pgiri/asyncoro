@@ -3,12 +3,14 @@
 """This file is part of asyncoro; see http://asyncoro.sourceforge.net
 for details.
 
-This module provides API for distributing generator functions and
-their dependencies (files, Python functions, classes) to create remote
-coroutines for distributed communicating processes. This should be
-used with 'discoronode.py' program.
+This module provides API for creating distributed communicating
+processes. 'Computation' class should be used to package computation
+components (Python generator functions, Python functions, files,
+classes, modules) and then schedule runs that create remote coroutines
+at remote processes running 'discoronode.py'.
 
-See 'discoro_client.py' for an example.
+See 'discoro_client*.py' files in 'examples' directory for various use
+cases.
 """
 
 __author__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
@@ -28,7 +30,7 @@ import atexit
 import asyncoro.disasyncoro as asyncoro
 from asyncoro import Coro, logger
 
-__all__ = ['Scheduler', 'Computation']
+__all__ = ['Scheduler', 'Computation', 'StatusMessage']
 
 MsgTimeout = 10
 MinPulseInterval = MsgTimeout
@@ -49,11 +51,14 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
     NodeClosed = 3
     NodeIgnore = 4
     NodeDisconnected = 5
+
     ProcDiscovered = 11
     ProcInitialized = 12
     ProcClosed = 13
     ProcIgnore = 14
     ProcDisconnected = 15
+
+    ComputationClosed = 25
 
     """This class is for use by Computation class (see below) only.
     Other than the status indications above, none of its attributes
@@ -135,6 +140,8 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
 
         kwargs['name'] = 'discoro_scheduler'
         clean = kwargs.pop('clean', False)
+        self.__zombie_period = kwargs.pop('zombie_period', None)
+        nodes = kwargs.pop('nodes', [])
         self.asyncoro = asyncoro.AsynCoro.instance(**kwargs)
         if self.asyncoro.name == 'discoro_scheduler':
             self.__dest_path = os.path.join(self.asyncoro.dest_path, 'discoro', 'scheduler')
@@ -145,7 +152,7 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
             self.asyncoro.dest_path = self.__dest_path
         else:
             self.__dest_path = self.asyncoro.dest_path
-        self.__scheduler_coro = Coro(self.__scheduler_proc)
+        self.__scheduler_coro = Coro(self.__scheduler_proc, nodes)
         self.__client_coro = Coro(self.__client_proc)
         self.__timer_coro = Coro(self.__timer_proc)
         self._status_coro = Coro(self.__status_proc)
@@ -185,9 +192,6 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
                 computation = self._cur_computation
                 if msg.status == asyncoro.PeerStatus.Online:
                     proc = Scheduler._Proc(msg.name, msg.location, self)
-                    if computation and computation.status_coro:
-                        status_msg = StatusMessage(Scheduler.ProcDiscovered, msg.location)
-                        computation.status_coro.send(status_msg)
                     node = self._nodes.get(msg.location.addr, None)
                     if node:
                         node.procs[str(msg.location)] = proc
@@ -196,11 +200,7 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
                         node = Scheduler._Node(msg.location.addr, self)
                         self._nodes[msg.location.addr] = node
                         node.procs[str(msg.location)] = proc
-                        if computation and computation.status_coro:
-                            status_msg = StatusMessage(Scheduler.NodeDiscovered,
-                                                       msg.location.addr)
-                            computation.status_coro.send(status_msg)
-                        Coro(self.__setup_node, node, computation)
+                        self.__setup_node(node, computation)
                 else:
                     # msg.status == asyncoro.PeerStatus.Offline
                     node = self._nodes.get(msg.location.addr, None)
@@ -225,6 +225,7 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
                         logger.warning('client %s terminated; closing computation %s' %
                                        (msg.location, self.__cur_client_auth))
                         Coro(self.__close_computation)
+
             else:
                 logger.warning('invalid status message ignored')
 
@@ -249,6 +250,32 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
                                     logger.debug('process %s running %s coroutines, '
                                                  'scheduler running %s' %
                                                  (proc.location, ncoros, len(proc.coros)))
+
+                elif msg.get('status', None) == 'ProcClosed':
+                    location = msg.get('location', None)
+                    asyncoro.logger.debug('Process %s closed' % location)
+                    if isinstance(location, asyncoro.Location):
+                        node = self._nodes.get(location.addr, None)
+                        if node:
+                            proc = node.procs.get(str(location), None)
+                            if proc:
+                                yield self.__close_proc(proc)
+                                if all(p.status != Scheduler.ProcInitialized
+                                       for p in node.procs.values()):
+                                    node.status = Scheduler.NodeClosed
+                                    if self._cur_computation and \
+                                           self._cur_computation.status_coro:
+                                        self._cur_computation.status_coro.send(
+                                            StatusMessage(Scheduler.NodeClosed, node.addr))
+                                    if all(n.status != Scheduler.NodeInitialized
+                                           for n in self._nodes.values()):
+                                        if self._cur_computation and \
+                                               self._cur_computation.status_coro:
+                                            self._cur_computation.status_coro.send(
+                                                StatusMessage(Scheduler.ComputationClosed,
+                                                              coro.location))
+                                        Coro(self.__close_computation)
+
             if (now - client_pulse) > self.__pulse_interval and self._cur_computation:
                 if self._cur_computation._pulse_coro.send('pulse') == 0:
                     client_pulse = now
@@ -289,8 +316,10 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
         # TODO: use uuid?
         return hashlib.sha1(bytes(''.join(hex(x)[2:] for x in os.urandom(10)), 'ascii')).hexdigest()
 
-    def __scheduler_proc(self, coro=None):
+    def __scheduler_proc(self, nodes, coro=None):
         coro.set_daemon()
+        for node in nodes:
+            yield asyncoro.AsynCoro.instance().peer(node, broadcast=True)
         while not self.__terminate:
             if self._cur_computation:
                 self.__sched_event.clear()
@@ -316,20 +345,23 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
                 continue
 
             for node in self._nodes.values():
-                for i, proc in enumerate(node.procs.values()):
-                    if i == 0:
+                for proc in node.procs.values():
+                    if (proc.status == Scheduler.ProcClosed or
+                        proc.status == Scheduler.ProcIgnore):
+                        proc.status = Scheduler.ProcDiscovered
+                        if self._cur_computation.status_coro:
+                            status_msg = StatusMessage(proc.status, proc.location)
+                            self._cur_computation.status_coro.send(status_msg)
+                    if (node.status != Scheduler.NodeDiscovered and
+                        proc.status == Scheduler.ProcDiscovered):
                         node.status = Scheduler.NodeDiscovered
                         if self._cur_computation.status_coro:
-                            status_msg = StatusMessage(Scheduler.NodeDiscovered, proc.location.addr)
+                            status_msg = StatusMessage(node.status, node.addr)
                             self._cur_computation.status_coro.send(status_msg)
-                    proc.status = Scheduler.ProcDiscovered
-                    if self._cur_computation.status_coro:
-                        status_msg = StatusMessage(Scheduler.ProcDiscovered, proc.location)
-                        self._cur_computation.status_coro.send(status_msg)
             for node in self._nodes.values():
                 # TODO: check if node is allowed
                 if self._cur_computation:
-                    Coro(self.__setup_node, node, self._cur_computation)
+                    self.__setup_node(node, self._cur_computation)
 
     def __client_proc(self, coro=None):
         coro.set_daemon()
@@ -454,6 +486,8 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
                 if computation is None:
                     client.send(None)
                 else:
+                    # TODO: allow zombie_period to be set?
+                    computation.zombie_period = self.__zombie_period
                     self.__scheduler_coro.send((computation, client))
                     self.__sched_event.set()
 
@@ -496,27 +530,10 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
 
     def __setup_node(self, node, computation, coro=None):
         if node.status == Scheduler.NodeIgnore:
-            raise StopIteration(0)
-        proc_setup_coros = []
+            return
         for proc in node.procs.values():
-            if proc.status in [Scheduler.ProcDiscovered, None]:
-                proc_setup_coros.append(Coro(self.__setup_proc, proc, computation))
-        for proc_setup_coro in proc_setup_coros:
-            yield proc_setup_coro.finish()
-        if node.status != Scheduler.NodeInitialized:
-            for proc in node.procs.values():
-                if proc.status == Scheduler.ProcDiscovered:
-                    node.status = Scheduler.NodeDiscovered
-                    if computation and computation.status_coro:
-                        computation.status_coro.send(StatusMessage(Scheduler.NodeDiscovered,
-                                                                   proc.location.addr))
-                elif proc.status == Scheduler.ProcInitialized:
-                    node.status = Scheduler.NodeInitialized
-                    if computation and computation.status_coro:
-                        computation.status_coro.send(StatusMessage(Scheduler.NodeInitialized,
-                                                                   proc.location.addr))
-                    break
-        raise StopIteration(0)
+            if proc.status == Scheduler.ProcDiscovered or proc.status is None:
+                Coro(self.__setup_proc, proc, computation)
 
     def __setup_proc(self, proc, computation, coro=None):
         if proc.status == Scheduler.ProcIgnore:
@@ -549,18 +566,22 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
         if ret:
             logger.warning('setup of %s failed: %s' % (proc.server, ret))
             raise StopIteration(ret)
-        if computation._pulse_coro.location.addr != proc.location.addr:
-            for xf in computation._xfer_files:
-                reply = yield self.asyncoro.send_file(proc.location, xf,
-                                                      timeout=computation.timeout)
-                if reply < 0:
-                    logger.debug('failed to transfer file %s: %s' % (xf, reply))
-                    Coro(self.__close_proc, proc)
-                    raise StopIteration(-1)
+        for xf in computation._xfer_files:
+            reply = yield self.asyncoro.send_file(proc.location, xf,
+                                                  timeout=computation.timeout)
+            if reply < 0:
+                logger.debug('failed to transfer file %s: %s' % (xf, reply))
+                Coro(self.__close_proc, proc)
+                raise StopIteration(-1)
         proc.status = Scheduler.ProcInitialized
         proc.last_pulse = time.time()
+        node = self._nodes[proc.location.addr]
+        if node.status != Scheduler.NodeInitialized:
+            node.status = Scheduler.NodeInitialized
+            if computation.status_coro:
+                computation.status_coro.send(StatusMessage(node.status, node.addr))
         if computation.status_coro:
-            computation.status_coro.send(StatusMessage(Scheduler.ProcInitialized, proc.location))
+            computation.status_coro.send(StatusMessage(proc.status, proc.location))
         raise StopIteration(0)
 
     def __close_node(self, node, coro=None):
@@ -573,7 +594,7 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
         node.ncoros = 0
         node.status = Scheduler.NodeClosed
         if computation and computation.status_coro:
-            computation.status_coro.send(StatusMessage(Scheduler.NodeClosed, node.addr))
+            computation.status_coro.send(StatusMessage(node.status, node.addr))
 
     def __close_proc(self, proc, coro=None):
         computation = self._cur_computation
@@ -582,6 +603,7 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
             raise StopIteration(-1)
         if proc.coros:
             logger.warning('%s coros running at %s' % (len(proc.coros), proc.location))
+        asyncoro.logger.debug('Closing process %s' % proc.location)
         # TODO: check/indicate error?
         yield proc.server.deliver({'req': 'close', 'auth': computation._auth},
                                   timeout=computation.timeout)
@@ -590,7 +612,7 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
         proc.coros = {}
         proc.done = {}
         if computation and computation.status_coro:
-            computation.status_coro.send(StatusMessage(Scheduler.ProcClosed, proc.location))
+            computation.status_coro.send(StatusMessage(proc.status, proc.location))
         raise StopIteration(0)
 
     def __close_computation(self, coro=None):
@@ -616,9 +638,38 @@ class Computation(object):
 
     def __init__(self, components, status_coro=None, timeout=MsgTimeout,
                  pulse_interval=MinPulseInterval):
-        """'components' is a list, each element of which should be
-        either a module, a function, path name of a file, a class or
-        an object (in which case the code for its class is sent).
+        """'components' should be a list, each element of which is
+        either a module, a (generator or normal) function, path name
+        of a file, a class or an object (in which case the code for
+        its class is sent).
+
+        'status_coro', if not None, should be a coroutine. The
+        scheduler sends status messages indicating when a remote
+        process has been initialized (so it is ready to run jobs),
+        closed etc., and exit status of remote coroutines. See
+        'discoro_client*.py' files in examples directory.
+
+        'timeout' is maximum number of seconds to complete a
+        communication (transfer of messages). If client / scheduler /
+        remote processes couldn't send / receive a message within this
+        period, the operation is aborted. Bigger values may be used
+        when communicating over slower connections.
+
+        'pulse_interval' is interval (number of seconds) used for
+        heart beat messages to check if client / scheduler / process
+        is alive. If the other side doesn't reply to 5 heart beat
+        messages, it is treated as dead.
+
+        'zombie_period' is maximum number of seconds a server process
+        stays idle (i.e., no jobs running on that process) before the
+        computation is automatically closed (on that process). Once
+        closed, the computation can't use that process anymore. This
+        discards unused clients so other pending (queued) computations
+        can use compute resources. If 'zombie_period' is None, the
+        processes don't check for idle period and don't close
+        computation (until the user program explicitly closes
+        it). When scheduler is shared (run as separate program),
+        'zombie_period' is set to 10 * MaxPulseInterval.
         """
         if pulse_interval < MinPulseInterval or pulse_interval > MaxPulseInterval:
             raise Exception('"pulse_interval" must be at least %s and at most %s' %
@@ -627,6 +678,8 @@ class Computation(object):
             raise Exception('"timeout" must be at least 1 and at most %s' % MaxPulseInterval)
         if status_coro is not None and not isinstance(status_coro, Coro):
             raise Exception('status_coro must be coroutine')
+        if zombie_period and zombie_period < MaxPulseInterval:
+            raise Exception('zombie_period must be >= %s' % MaxPulseInterval)
 
         # TODO: add option to leave transferred files on the nodes
         # after computation is done (such as "cleanup" in dispy)?
@@ -644,6 +697,7 @@ class Computation(object):
         self._pulse_coro = None
         self.pulse_interval = pulse_interval
         self.timeout = timeout
+        self.zombie_period = zombie_period
         depends = set()
         for dep in components:
             if isinstance(dep, str) or inspect.ismodule(dep):
@@ -681,6 +735,12 @@ class Computation(object):
                 raise Exception('Invalid computation: %s' % dep)
         # check code can be compiled
         compile(self._code, '<string>', 'exec')
+        # Under Windows discoro server may send objects with '__mp_main__'
+        # scope, so make an alias to '__main__'.
+        # TODO: Make alias even if client is not Windows? It is possible the
+        # client is not Windows, but a node is.
+        if os.name == 'nt' and '__mp_main__' not in sys.modules:
+            sys.modules['__mp_main__'] = sys.modules['__main__']
 
     def schedule(self, location=None, timeout=None):
         """Schedule computation for execution. Must be used with
@@ -791,7 +851,7 @@ class Computation(object):
         if isinstance(func, str):
             name = func
         else:
-            name = func.func_name
+            name = func.__name__
 
         if name in self._xfer_funcs:
             code = None
@@ -953,12 +1013,19 @@ if __name__ == '__main__':
                         help='file containing SSL certificate')
     parser.add_argument('--keyfile', dest='keyfile', default=None,
                         help='file containing SSL key')
+    parser.add_argument('--node', action='append', dest='nodes', default=[],
+                        help='additional remote nodes (names or IP address) to use')
+    parser.add_argument('--zombie_period', dest='zombie_period', type=int, default=1800,
+                        help='maximum time in seconds computation is idle')
     parser.add_argument('-d', '--debug', action='store_true', dest='loglevel', default=False,
                         help='if given, debug messages are printed')
     parser.add_argument('--clean', action='store_true', dest='clean', default=False,
                         help='if given, files copied from or generated by clients will be removed')
     config = vars(parser.parse_args(sys.argv[1:]))
     del parser
+
+    if config['zombie_period'] and config['zombie_period'] < MaxPulseInterval:
+        raise Exception('zombie_period must be >= %s' % MaxPulseInterval)
 
     if not config['name']:
         config['name'] = 'discoro_scheduler'

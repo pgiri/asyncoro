@@ -51,11 +51,14 @@ class Scheduler(object):
     NodeClosed = 3
     NodeIgnore = 4
     NodeDisconnected = 5
+
     ProcDiscovered = 11
     ProcInitialized = 12
     ProcClosed = 13
     ProcIgnore = 14
     ProcDisconnected = 15
+
+    ComputationClosed = 25
 
     """This class is for use by Computation class (see below) only.
     Other than the status indications above, none of its attributes
@@ -139,6 +142,7 @@ class Scheduler(object):
 
         kwargs['name'] = 'discoro_scheduler'
         clean = kwargs.pop('clean', False)
+        self.__zombie_period = kwargs.pop('zombie_period', None)
         nodes = kwargs.pop('nodes', [])
         self.asyncoro = asyncoro.AsynCoro.instance(**kwargs)
         if self.asyncoro.name == 'discoro_scheduler':
@@ -190,9 +194,6 @@ class Scheduler(object):
                 computation = self._cur_computation
                 if msg.status == asyncoro.PeerStatus.Online:
                     proc = Scheduler._Proc(msg.name, msg.location, self)
-                    if computation and computation.status_coro:
-                        status_msg = StatusMessage(Scheduler.ProcDiscovered, msg.location)
-                        computation.status_coro.send(status_msg)
                     node = self._nodes.get(msg.location.addr, None)
                     if node:
                         node.procs[str(msg.location)] = proc
@@ -201,10 +202,6 @@ class Scheduler(object):
                         node = Scheduler._Node(msg.location.addr, self)
                         self._nodes[msg.location.addr] = node
                         node.procs[str(msg.location)] = proc
-                        if computation and computation.status_coro:
-                            status_msg = StatusMessage(Scheduler.NodeDiscovered,
-                                                       msg.location.addr)
-                            computation.status_coro.send(status_msg)
                         self.__setup_node(node, computation)
                 else:
                     # msg.status == asyncoro.PeerStatus.Offline
@@ -230,6 +227,7 @@ class Scheduler(object):
                         logger.warning('client %s terminated; closing computation %s' %
                                        (msg.location, self.__cur_client_auth))
                         Coro(self.__close_computation)
+
             else:
                 logger.warning('invalid status message ignored')
 
@@ -254,6 +252,32 @@ class Scheduler(object):
                                     logger.debug('process %s running %s coroutines, '
                                                  'scheduler running %s' %
                                                  (proc.location, ncoros, len(proc.coros)))
+
+                elif msg.get('status', None) == 'ProcClosed':
+                    location = msg.get('location', None)
+                    asyncoro.logger.debug('Process %s closed' % location)
+                    if isinstance(location, asyncoro.Location):
+                        node = self._nodes.get(location.addr, None)
+                        if node:
+                            proc = node.procs.get(str(location), None)
+                            if proc:
+                                yield self.__close_proc(proc)
+                                if all(p.status != Scheduler.ProcInitialized
+                                       for p in node.procs.itervalues()):
+                                    node.status = Scheduler.NodeClosed
+                                    if self._cur_computation and \
+                                           self._cur_computation.status_coro:
+                                        self._cur_computation.status_coro.send(
+                                            StatusMessage(Scheduler.NodeClosed, node.addr))
+                                    if all(n.status != Scheduler.NodeInitialized
+                                           for n in self._nodes.itervalues()):
+                                        if self._cur_computation and \
+                                               self._cur_computation.status_coro:
+                                            self._cur_computation.status_coro.send(
+                                                StatusMessage(Scheduler.ComputationClosed,
+                                                              coro.location))
+                                        Coro(self.__close_computation)
+
             if (now - client_pulse) > self.__pulse_interval and self._cur_computation:
                 if self._cur_computation._pulse_coro.send('pulse') == 0:
                     client_pulse = now
@@ -323,16 +347,20 @@ class Scheduler(object):
                 continue
 
             for node in self._nodes.itervalues():
-                for i, proc in enumerate(node.procs.itervalues()):
-                    if i == 0:
+                for proc in node.procs.itervalues():
+                    if (proc.status == Scheduler.ProcClosed or
+                       proc.status == Scheduler.ProcIgnore):
+                        proc.status = Scheduler.ProcDiscovered
+                        if self._cur_computation.status_coro:
+                            status_msg = StatusMessage(proc.status, proc.location)
+                            self._cur_computation.status_coro.send(status_msg)
+                    if (node.status != Scheduler.NodeDiscovered and
+                       proc.status == Scheduler.ProcDiscovered):
                         node.status = Scheduler.NodeDiscovered
                         if self._cur_computation.status_coro:
-                            status_msg = StatusMessage(Scheduler.NodeDiscovered, proc.location.addr)
+                            status_msg = StatusMessage(node.status, node.addr)
                             self._cur_computation.status_coro.send(status_msg)
-                    proc.status = Scheduler.ProcDiscovered
-                    if self._cur_computation.status_coro:
-                        status_msg = StatusMessage(Scheduler.ProcDiscovered, proc.location)
-                        self._cur_computation.status_coro.send(status_msg)
+
             for node in self._nodes.itervalues():
                 # TODO: check if node is allowed
                 if self._cur_computation:
@@ -461,6 +489,8 @@ class Scheduler(object):
                 if computation is None:
                     client.send(None)
                 else:
+                    # TODO: allow zombie_period to be set?
+                    computation.zombie_period = self.__zombie_period
                     self.__scheduler_coro.send((computation, client))
                     self.__sched_event.set()
 
@@ -567,7 +597,7 @@ class Scheduler(object):
         node.ncoros = 0
         node.status = Scheduler.NodeClosed
         if computation and computation.status_coro:
-            computation.status_coro.send(StatusMessage(Scheduler.NodeClosed, node.addr))
+            computation.status_coro.send(StatusMessage(node.status, node.addr))
 
     def __close_proc(self, proc, coro=None):
         computation = self._cur_computation
@@ -576,6 +606,7 @@ class Scheduler(object):
             raise StopIteration(-1)
         if proc.coros:
             logger.warning('%s coros running at %s' % (len(proc.coros), proc.location))
+        asyncoro.logger.debug('Closing process %s' % proc.location)
         # TODO: check/indicate error?
         yield proc.server.deliver({'req': 'close', 'auth': computation._auth},
                                   timeout=computation.timeout)
@@ -584,7 +615,7 @@ class Scheduler(object):
         proc.coros = {}
         proc.done = {}
         if computation and computation.status_coro:
-            computation.status_coro.send(StatusMessage(Scheduler.ProcClosed, proc.location))
+            computation.status_coro.send(StatusMessage(proc.status, proc.location))
         raise StopIteration(0)
 
     def __close_computation(self, coro=None):
@@ -609,11 +640,41 @@ class Computation(object):
     """
 
     def __init__(self, components, status_coro=None, timeout=MsgTimeout,
-                 pulse_interval=MinPulseInterval):
-        """'components' is a list, each element of which should be
-        either a module, a function, path name of a file, a class or
-        an object (in which case the code for its class is sent).
+                 pulse_interval=MinPulseInterval, zombie_period=None):
+        """'components' should be a list, each element of which is
+        either a module, a (generator or normal) function, path name
+        of a file, a class or an object (in which case the code for
+        its class is sent).
+
+        'status_coro', if not None, should be a coroutine. The
+        scheduler sends status messages indicating when a remote
+        process has been initialized (so it is ready to run jobs),
+        closed etc., and exit status of remote coroutines. See
+        'discoro_client*.py' files in examples directory.
+
+        'timeout' is maximum number of seconds to complete a
+        communication (transfer of messages). If client / scheduler /
+        remote processes couldn't send / receive a message within this
+        period, the operation is aborted. Bigger values may be used
+        when communicating over slower connections.
+
+        'pulse_interval' is interval (number of seconds) used for
+        heart beat messages to check if client / scheduler / process
+        is alive. If the other side doesn't reply to 5 heart beat
+        messages, it is treated as dead.
+
+        'zombie_period' is maximum number of seconds a server process
+        stays idle (i.e., no jobs running on that process) before the
+        computation is automatically closed (on that process). Once
+        closed, the computation can't use that process anymore. This
+        discards unused clients so other pending (queued) computations
+        can use compute resources. If 'zombie_period' is None, the
+        processes don't check for idle period and don't close
+        computation (until the user program explicitly closes
+        it). When scheduler is shared (run as separate program),
+        'zombie_period' is set to 10 * MaxPulseInterval.
         """
+
         if pulse_interval < MinPulseInterval or pulse_interval > MaxPulseInterval:
             raise Exception('"pulse_interval" must be at least %s and at most %s' %
                             (MinPulseInterval, MaxPulseInterval))
@@ -621,6 +682,8 @@ class Computation(object):
             raise Exception('"timeout" must be at least 1 and at most %s' % MaxPulseInterval)
         if status_coro is not None and not isinstance(status_coro, Coro):
             raise Exception('status_coro must be coroutine')
+        if zombie_period and zombie_period < MaxPulseInterval:
+            raise Exception('zombie_period must be >= %s' % MaxPulseInterval)
 
         # TODO: add option to leave transferred files on the nodes
         # after computation is done (such as "cleanup" in dispy)?
@@ -638,6 +701,7 @@ class Computation(object):
         self._pulse_coro = None
         self.pulse_interval = pulse_interval
         self.timeout = timeout
+        self.zombie_period = zombie_period
         depends = set()
         for dep in components:
             if isinstance(dep, str) or inspect.ismodule(dep):
@@ -949,12 +1013,17 @@ if __name__ == '__main__':
                         help='file containing SSL key')
     parser.add_argument('--node', action='append', dest='nodes', default=[],
                         help='additional remote nodes (names or IP address) to use')
+    parser.add_argument('--zombie_period', dest='zombie_period', type=int, default=1800,
+                        help='maximum time in seconds computation is idle')
     parser.add_argument('-d', '--debug', action='store_true', dest='loglevel', default=False,
                         help='if given, debug messages are printed')
     parser.add_argument('--clean', action='store_true', dest='clean', default=False,
                         help='if given, files copied from or generated by clients will be removed')
     config = vars(parser.parse_args(sys.argv[1:]))
     del parser
+
+    if config['zombie_period'] and config['zombie_period'] < MaxPulseInterval:
+        raise Exception('zombie_period must be >= %s' % MaxPulseInterval)
 
     if not config['name']:
         config['name'] = 'discoro_scheduler'
