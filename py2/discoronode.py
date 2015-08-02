@@ -26,29 +26,45 @@ import traceback
 import time
 import shutil
 
-from asyncoro.discoro import MinPulseInterval, MaxPulseInterval, Scheduler
 import asyncoro.disasyncoro as asyncoro
-from asyncoro import Coro
 
 __all__ = ['discoro_proc']
 
 
-def discoro_proc(_discoro_name='discoro_proc'):
+def discoro_proc():
     # coroutine
     """Server process receives computations and runs coroutines for it.
     """
 
+    import asyncoro.disasyncoro as asyncoro
+    from asyncoro import Coro
+    from asyncoro.discoro import MinPulseInterval, MaxPulseInterval
+
     _discoro_coro = asyncoro.AsynCoro.cur_coro()
-    _discoro_coro.register(_discoro_name)
+    _discoro_coro.register('discoro_proc')
+    _discoro_name = asyncoro.AsynCoro.instance().name
     asyncoro.AsynCoro.instance().dest_path = os.path.join(
-        'discoro', 'proc%s' % (_discoro_config['name'][_discoro_config['name'].rindex('-'):]))
+        'discoro', 'proc%s' % (_discoro_name[_discoro_name.rindex('-'):]))
     _discoro_dest_path = asyncoro.AsynCoro.instance().dest_path
+    _discoro_pid_path = os.path.join(_discoro_dest_path, '..', 'proc%s.pid' %
+                                     _discoro_name[_discoro_name.rindex('-'):])
+    _discoro_pid_path = os.path.normpath(_discoro_pid_path)
+    # TODO: is file locking necessary?
+    if os.path.exists(_discoro_pid_path):
+        pid = open(_discoro_pid_path, 'r').read()
+        print('\n   Another discoronode seems to be running;\n'
+              '   make sure process with ID %s quit and remove "%s"\n' % (pid, _discoro_pid_path))
+        import signal
+        os.kill(os.getpid(), signal.SIGTERM)
     if os.path.isdir(_discoro_dest_path):
         shutil.rmtree(_discoro_dest_path)
     os.makedirs(_discoro_dest_path)
     os.chdir(_discoro_dest_path)
-    asyncoro.logger.debug('discoro "%s" started at %s; computation files will be saved in "%s"' %
-                          (_discoro_config['name'], _discoro_coro.location, _discoro_dest_path))
+    with open(_discoro_pid_path, 'w') as _discoro_var:
+        _discoro_var.write('%s' % os.getpid())
+    asyncoro.logger.debug('discoro process "%s" started at %s; '
+                          'computation files will be saved in "%s"' %
+                          (_discoro_name, _discoro_coro.location, _discoro_dest_path))
     _discoro_req = _discoro_client = _discoro_auth = _discoro_msg = None
     _discoro_timer_coro = _discoro_pulse_coro = _discoro_timer_proc = _discoro_peer_status = None
     _discoro_monitor_coro = _discoro_monitor_proc = None
@@ -75,11 +91,10 @@ def discoro_proc(_discoro_name='discoro_proc'):
             msg = {'ncoros': len(_discoro_job_coros), 'location': coro.location}
             if _discoro_pulse_coro.send(msg) == 0:
                 last_pulse = time.time()
-            else:
-                if (time.time() - last_pulse) > (5 * interval):
-                    asyncoro.logger.warning('scheduler is not reachable; '
-                                            'closing computation "%s"' % _discoro_auth)
-                    _discoro_coro.send({'req': 'close', 'auth': _discoro_auth})
+            elif (time.time() - last_pulse) > (5 * interval) and _discoro_computation:
+                asyncoro.logger.warning('scheduler is not reachable; closing computation "%s"' %
+                                        _discoro_computation._auth)
+                _discoro_coro.send({'req': 'close', 'auth': _discoro_computation._auth})
 
     def _discoro_peer_status(coro=None):
         coro.set_daemon()
@@ -135,7 +150,7 @@ def discoro_proc(_discoro_name='discoro_proc'):
                 asyncoro.logger.debug('invalid computation to run')
                 # _discoro_func = Scheduler._Function(_discoro_func.name, None,
                 #                                     _discoro_func.args, _discoro_func.kwargs)
-                job_coro = (sys.exc_type, _discoro_func, traceback.format_exc())
+                job_coro = (sys.exc_info()[0], _discoro_func, traceback.format_exc())
             else:
                 asyncoro.logger.debug('job %s created' % job_coro)
                 _discoro_job_coros.add(job_coro)
@@ -170,8 +185,8 @@ def discoro_proc(_discoro_name='discoro_proc'):
             else:
                 _discoro_computation.pulse_interval = MinPulseInterval
             _discoro_timer_coro.resume(_discoro_computation.pulse_interval)
-            asyncoro.logger.debug('computation "%s" from "%s"' %
-                                  (_discoro_computation._auth, _discoro_msg['client']))
+            asyncoro.logger.debug('computation "%s" from %s' %
+                                  (_discoro_computation._auth, _discoro_msg['client'].location))
             _discoro_client.send(0)
         elif _discoro_req == 'close':
             _discoro_auth = _discoro_msg.get('auth', None)
@@ -188,13 +203,32 @@ def discoro_proc(_discoro_name='discoro_proc'):
                     # asyncoro.logger.warning('Removing global variable "%s"' % _discoro_var)
                     globals().pop(_discoro_var, None)
             globals().update(_discoro_globals)
-
-            os.chdir(asyncoro.AsynCoro.instance().dest_path)
-            shutil.rmtree(_discoro_dest_path)
-            os.makedirs(_discoro_dest_path)
+            for _discoro_var in os.listdir(_discoro_dest_path):
+                _discoro_var = os.path.join(_discoro_dest_path, _discoro_var)
+                if os.path.isdir(_discoro_var) and not os.path.islink(_discoro_var):
+                    shutil.rmtree(_discoro_var, ignore_errors=True)
+                else:
+                    os.remove(_discoro_var)
+            if not os.path.isdir(_discoro_dest_path):
+                try:
+                    os.remove(_discoro_dest_path)
+                except:
+                    pass
+                os.makedirs(_discoro_dest_path)
+            if not os.path.isfile(_discoro_pid_path):
+                try:
+                    if os.path.islink(_discoro_pid_path):
+                        os.remove(_discoro_pid_path)
+                    else:
+                        shutil.rmtree(_discoro_pid_path)
+                    with open(_discoro_pid_path, 'w') as _discoro_var:
+                        _discoro_var.write('%s' % os.getpid())
+                except:
+                    asyncoro.logger.warning('PID file "%s" is invalid' % _discoro_pid_path)
+            os.chdir(_discoro_dest_path)
+            asyncoro.AsynCoro.instance().dest_path = _discoro_dest_path
             _discoro_computation = _discoro_client = _discoro_pulse_coro = None
             _discoro_timer_coro.resume(MinPulseInterval)
-            os.chdir(_discoro_dest_path)
         elif _discoro_req == 'quit':
             break
         else:
@@ -237,14 +271,15 @@ def discoro_proc(_discoro_name='discoro_proc'):
             if not isinstance(_discoro_client, Coro):
                 continue
             _discoro_client.send(-1)
-    os.chdir(asyncoro.AsynCoro.instance().dest_path)
+    if os.path.isfile(_discoro_pid_path):
+        os.remove(_discoro_pid_path)
+    os.chdir(_discoro_dest_path)
     # shutil.rmtree(_discoro_dest_path, ignore_errors=True)
 
 
 def _discoro_process(_discoro_config, _discoro_queue):
     _discoro_scheduler = asyncoro.AsynCoro(**_discoro_config)
-    _discoro_coro = Coro(discoro_proc)
-    _discoro_queue.put(asyncoro.serialize(_discoro_coro))
+    _discoro_queue.put(asyncoro.serialize(asyncoro.Coro(discoro_proc)))
     _discoro_scheduler.finish()
 
 
@@ -325,16 +360,16 @@ if __name__ == '__main__':
 
     _discoro_queue = multiprocessing.Queue()
     _discoro_processes = []
-    for _discoro_proc_id in range(2, _discoro_cpus + 1):
+    for _discoro_proc_id in range(1, _discoro_cpus):
         _discoro_config['name'] = _discoro_name + '-%s' % _discoro_proc_id
         _discoro_processes.append(multiprocessing.Process(target=_discoro_process,
                                                           args=(_discoro_config, _discoro_queue)))
         _discoro_processes[-1].start()
         time.sleep(0.05)
-    _discoro_proc_id = 1
+    _discoro_proc_id = _discoro_cpus
     _discoro_config['name'] = _discoro_name + '-%s' % _discoro_proc_id
     _discoro_scheduler = asyncoro.AsynCoro(**_discoro_config)
-    _discoro_coro = Coro(discoro_proc)
+    _discoro_coro = asyncoro.Coro(discoro_proc)
 
     while True:
         try:
@@ -352,9 +387,9 @@ if __name__ == '__main__':
                 asyncoro.unserialize(_discoro_queue.get()).send({'req': 'quit'})
             _discoro_coro.send({'req': 'quit'})
 
-            for _i, _discoro_proc in enumerate(_discoro_processes, start=1):
+            for _discoro_proc_id, _discoro_proc in enumerate(_discoro_processes, start=1):
                 if _discoro_proc.is_alive():
-                    asyncoro.logger.info('  -- waiting for process %s to finish' % _i)
+                    asyncoro.logger.info('  -- waiting for process %s to finish' % _discoro_proc_id)
                     _discoro_proc.join()
             break
         except KeyboardInterrupt:
