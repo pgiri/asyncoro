@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
 """This file is part of asyncoro; see http://asyncoro.sourceforge.net
 for details.
@@ -56,8 +56,8 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
     ProcDisconnected = 15
 
     """This class is for use by Computation class (see below) only.
-    Other than the status messages above, none of its attributes are
-    to be accessed directly.
+    Other than the status indications above, none of its attributes
+    are to be accessed directly.
     """
 
     class _Node(object):

@@ -3,12 +3,14 @@
 """This file is part of asyncoro; see http://asyncoro.sourceforge.net
 for details.
 
-This module provides API for distributing generator functions and
-their dependencies (files, Python functions, classes) to create remote
-coroutines for distributed communicating processes. This should be
-used with 'discoronode.py' program.
+This module provides API for creating distributed communicating
+processes. 'Computation' class should be used to package computation
+components (Python generator functions, Python functions, files,
+classes, modules) and then schedule runs that create remote coroutines
+at remote processes running 'discoronode.py'.
 
-See 'discoro_client.py' for an example.
+See 'discoro_client*.py' files in 'examples' directory for various use
+cases.
 """
 
 __author__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
@@ -28,7 +30,7 @@ import atexit
 import asyncoro.disasyncoro as asyncoro
 from asyncoro import Coro, logger
 
-__all__ = ['Scheduler', 'Computation']
+__all__ = ['Scheduler', 'Computation', 'StatusMessage']
 
 MsgTimeout = 10
 MinPulseInterval = MsgTimeout
@@ -56,8 +58,8 @@ class Scheduler(object):
     ProcDisconnected = 15
 
     """This class is for use by Computation class (see below) only.
-    Other than the status messages above, none of its attributes are
-    to be accessed directly.
+    Other than the status indications above, none of its attributes
+    are to be accessed directly.
     """
 
     __metaclass__ = asyncoro.MetaSingleton
@@ -137,6 +139,7 @@ class Scheduler(object):
 
         kwargs['name'] = 'discoro_scheduler'
         clean = kwargs.pop('clean', False)
+        nodes = kwargs.pop('nodes', [])
         self.asyncoro = asyncoro.AsynCoro.instance(**kwargs)
         if self.asyncoro.name == 'discoro_scheduler':
             self.__dest_path = os.path.join(self.asyncoro.dest_path, 'discoro', 'scheduler')
@@ -147,7 +150,7 @@ class Scheduler(object):
             self.asyncoro.dest_path = self.__dest_path
         else:
             self.__dest_path = self.asyncoro.dest_path
-        self.__scheduler_coro = Coro(self.__scheduler_proc)
+        self.__scheduler_coro = Coro(self.__scheduler_proc, nodes)
         self.__client_coro = Coro(self.__client_proc)
         self.__timer_coro = Coro(self.__timer_proc)
         self._status_coro = Coro(self.__status_proc)
@@ -202,7 +205,7 @@ class Scheduler(object):
                             status_msg = StatusMessage(Scheduler.NodeDiscovered,
                                                        msg.location.addr)
                             computation.status_coro.send(status_msg)
-                        Coro(self.__setup_node, node, computation)
+                        self.__setup_node(node, computation)
                 else:
                     # msg.status == asyncoro.PeerStatus.Offline
                     node = self._nodes.get(msg.location.addr, None)
@@ -291,8 +294,10 @@ class Scheduler(object):
         # TODO: use uuid?
         return hashlib.sha1(os.urandom(10).encode('hex')).hexdigest()
 
-    def __scheduler_proc(self, coro=None):
+    def __scheduler_proc(self, nodes, coro=None):
         coro.set_daemon()
+        for node in nodes:
+            yield asyncoro.AsynCoro.instance().peer(node, broadcast=True)
         while not self.__terminate:
             if self._cur_computation:
                 self.__sched_event.clear()
@@ -331,7 +336,7 @@ class Scheduler(object):
             for node in self._nodes.itervalues():
                 # TODO: check if node is allowed
                 if self._cur_computation:
-                    Coro(self.__setup_node, node, self._cur_computation)
+                    self.__setup_node(node, self._cur_computation)
 
     def __client_proc(self, coro=None):
         coro.set_daemon()
@@ -498,27 +503,10 @@ class Scheduler(object):
 
     def __setup_node(self, node, computation, coro=None):
         if node.status == Scheduler.NodeIgnore:
-            raise StopIteration(0)
-        proc_setup_coros = []
+            return
         for proc in node.procs.itervalues():
-            if proc.status in [Scheduler.ProcDiscovered, None]:
-                proc_setup_coros.append(Coro(self.__setup_proc, proc, computation))
-        for proc_setup_coro in proc_setup_coros:
-            yield proc_setup_coro.finish()
-        if node.status != Scheduler.NodeInitialized:
-            for proc in node.procs.itervalues():
-                if proc.status == Scheduler.ProcDiscovered:
-                    node.status = Scheduler.NodeDiscovered
-                    if computation and computation.status_coro:
-                        computation.status_coro.send(StatusMessage(Scheduler.NodeDiscovered,
-                                                                   proc.location.addr))
-                elif proc.status == Scheduler.ProcInitialized:
-                    node.status = Scheduler.NodeInitialized
-                    if computation and computation.status_coro:
-                        computation.status_coro.send(StatusMessage(Scheduler.NodeInitialized,
-                                                                   proc.location.addr))
-                    break
-        raise StopIteration(0)
+            if proc.status == Scheduler.ProcDiscovered or proc.status is None:
+                Coro(self.__setup_proc, proc, computation)
 
     def __setup_proc(self, proc, computation, coro=None):
         if proc.status == Scheduler.ProcIgnore:
@@ -551,18 +539,22 @@ class Scheduler(object):
         if ret:
             logger.warning('setup of %s failed: %s' % (proc.server, ret))
             raise StopIteration(ret)
-        if computation._pulse_coro.location.addr != proc.location.addr:
-            for xf in computation._xfer_files:
-                reply = yield self.asyncoro.send_file(proc.location, xf,
-                                                      timeout=computation.timeout)
-                if reply < 0:
-                    logger.debug('failed to transfer file %s: %s' % (xf, reply))
-                    Coro(self.__close_proc, proc)
-                    raise StopIteration(-1)
+        for xf in computation._xfer_files:
+            reply = yield self.asyncoro.send_file(proc.location, xf,
+                                                  timeout=computation.timeout)
+            if reply < 0:
+                logger.debug('failed to transfer file %s: %s' % (xf, reply))
+                Coro(self.__close_proc, proc)
+                raise StopIteration(-1)
         proc.status = Scheduler.ProcInitialized
         proc.last_pulse = time.time()
+        node = self._nodes[proc.location.addr]
+        if node.status != Scheduler.NodeInitialized:
+            node.status = Scheduler.NodeInitialized
+            if computation.status_coro:
+                computation.status_coro.send(StatusMessage(node.status, node.addr))
         if computation.status_coro:
-            computation.status_coro.send(StatusMessage(Scheduler.ProcInitialized, proc.location))
+            computation.status_coro.send(StatusMessage(proc.status, proc.location))
         raise StopIteration(0)
 
     def __close_node(self, node, coro=None):
@@ -955,6 +947,8 @@ if __name__ == '__main__':
                         help='file containing SSL certificate')
     parser.add_argument('--keyfile', dest='keyfile', default=None,
                         help='file containing SSL key')
+    parser.add_argument('--node', action='append', dest='nodes', default=[],
+                        help='additional remote nodes (names or IP address) to use')
     parser.add_argument('-d', '--debug', action='store_true', dest='loglevel', default=False,
                         help='if given, debug messages are printed')
     parser.add_argument('--clean', action='store_true', dest='clean', default=False,
