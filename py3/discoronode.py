@@ -12,7 +12,7 @@ computations are to be run on systems with multiple processors, then
 this program should be run with multiple instances (see below for '-c'
 option to this program).
 
-See 'discoro_client.py' for an example.
+See 'discoro_client*.py' files for example use cases.
 """
 
 __author__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
@@ -108,13 +108,13 @@ def discoro_proc():
         coro.set_daemon()
         while True:
             status = yield coro.receive()
-            if isinstance(status, asyncoro.PeerStatus):
-                if _discoro_computation and \
-                   _discoro_computation.scheduler.location == status.location:
-                    asyncoro.logger.debug('scheduler at %s quit; closing computation %s' %
-                                          (status.location, _discoro_computation._auth))
-                    msg = {'req': 'close', 'auth': _discoro_computation._auth}
-                    _discoro_coro.send(msg)
+            if isinstance(status, asyncoro.PeerStatus) and \
+               status.status == asyncoro.PeerStatus.Offline and \
+               _discoro_pulse_coro and _discoro_pulse_coro.location == status.location:
+                asyncoro.logger.debug('scheduler at %s quit; closing computation %s' %
+                                      (status.location, _discoro_computation._auth))
+                msg = {'req': 'close', 'auth': _discoro_computation._auth}
+                _discoro_coro.send(msg)
 
     def _discoro_monitor_proc(coro=None):
         nonlocal _discoro_busy_time
