@@ -41,7 +41,6 @@ def rcoro_save_proc(coro=None):
 # This process runs locally. It sends (random) data to remote coroutines.
 def client_proc(count, rcoro_avg, rcoro_save, coro=None):
     import random
-    print('avg: %s, save: %s' % (rcoro_avg, rcoro_save))
     # if data is sent frequently (say, many times a second), enable
     # streaming data to remote peer; this is more efficient as
     # connections are kept open (so the cost of opening and closing
@@ -85,10 +84,8 @@ def status_proc(computation, coro=None):
             if msg.args[1][0] == StopIteration:
                 if str(rcoro) == str(rcoro_avg):
                     rcoro_avg = None
-                    asyncoro.logger.debug('avg done')
                 elif str(rcoro) == str(rcoro_save):
                     rcoro_save = None
-                    asyncoro.logger.debug('save done')
                 if rcoro_avg is None and rcoro_save is None:
                     break
             else:
@@ -102,7 +99,7 @@ def status_proc(computation, coro=None):
                     rcoro_avg = yield computation.run_at(msg.location, rcoro_avg_proc, 100)
                 elif rcoro_save is None:
                     rcoro_save = yield computation.run_at(msg.location, rcoro_save_proc)
-                    client_coro = asyncoro.Coro(client_proc, 10, rcoro_avg, rcoro_save)
+                    client_coro = asyncoro.Coro(client_proc, 1000, rcoro_avg, rcoro_save)
         else:
             asyncoro.logger.debug('Ignoring status message %s' % str(msg))
 

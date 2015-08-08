@@ -43,6 +43,358 @@ StatusMessage = collections.namedtuple('StatusMessage', ['status', 'location'])
 _Function = collections.namedtuple('_Function', ['name', 'code', 'args', 'kwargs'])
 
 
+class Computation(object):
+    """Packages components to distribute to remote asyncoro schedulers
+    to create (remote) coroutines.
+    """
+
+    def __init__(self, components, status_coro=None, timeout=MsgTimeout,
+                 pulse_interval=MinPulseInterval, zombie_period=None):
+        """'components' should be a list, each element of which is
+        either a module, a (generator or normal) function, path name
+        of a file, a class or an object (in which case the code for
+        its class is sent).
+
+        'status_coro', if not None, should be a coroutine. The
+        scheduler sends status messages indicating when a remote
+        process has been initialized (so it is ready to run jobs),
+        closed etc., and exit status of remote coroutines. See
+        'discoro_client*.py' files in examples directory.
+
+        'timeout' is maximum number of seconds to complete a
+        communication (transfer of messages). If client / scheduler /
+        remote processes couldn't send / receive a message within this
+        period, the operation is aborted. Bigger values may be used
+        when communicating over slower connections.
+
+        'pulse_interval' is interval (number of seconds) used for
+        heart beat messages to check if client / scheduler / process
+        is alive. If the other side doesn't reply to 5 heart beat
+        messages, it is treated as dead.
+
+        'zombie_period' is maximum number of seconds a server process
+        stays idle (i.e., no jobs running on that process) before the
+        computation is automatically closed (on that process). Once
+        closed, the computation can't use that process anymore. This
+        discards unused clients so other pending (queued) computations
+        can use compute resources. If 'zombie_period' is None, the
+        processes don't check for idle period and don't close
+        computation (until the user program explicitly closes
+        it). When scheduler is shared (run as separate program),
+        'zombie_period' is set to 10 * MaxPulseInterval.
+        """
+        if pulse_interval < MinPulseInterval or pulse_interval > MaxPulseInterval:
+            raise Exception('"pulse_interval" must be at least %s and at most %s' %
+                            (MinPulseInterval, MaxPulseInterval))
+        if timeout < 1 or timeout > MaxPulseInterval:
+            raise Exception('"timeout" must be at least 1 and at most %s' % MaxPulseInterval)
+        if status_coro is not None and not isinstance(status_coro, Coro):
+            raise Exception('status_coro must be coroutine')
+        if zombie_period and zombie_period < MaxPulseInterval:
+            raise Exception('zombie_period must be >= %s' % MaxPulseInterval)
+
+        # TODO: add option to leave transferred files on the nodes
+        # after computation is done (such as "cleanup" in dispy)?
+
+        if not isinstance(components, list):
+            components = [components]
+
+        self._code = ''
+        self._xfer_funcs = set()
+        self._xfer_files = []
+        self._node_xfers = []
+        self.status_coro = status_coro
+        self._auth = None
+        self.scheduler = None
+        self._pulse_coro = None
+        self.pulse_interval = pulse_interval
+        self.timeout = timeout
+        self.zombie_period = zombie_period
+        depends = set()
+        for dep in components:
+            if isinstance(dep, str) or inspect.ismodule(dep):
+                if inspect.ismodule(dep):
+                    dep = dep.__file__
+                    if dep.endswith('.pyc'):
+                        dep = dep[:-1]
+                    dep = os.path.abspath(dep)
+                    if not (dep.endswith('.py') and os.path.isfile(dep)):
+                        raise Exception('Invalid module "%s" - must be python source.' % dep)
+                if dep in depends:
+                    continue
+                try:
+                    fd = open(dep, 'rb')
+                    fd.close()
+                except:
+                    raise Exception('File "%s" is not valid' % dep)
+                depends.add(dep)
+                self._xfer_files.append(dep)
+            elif inspect.isgeneratorfunction(dep) or inspect.isfunction(dep) or \
+               inspect.isclass(dep) or hasattr(dep, '__class__'):
+                if inspect.isgeneratorfunction(dep) or inspect.isfunction(dep):
+                    name = dep.__name__
+                elif inspect.isclass(dep):
+                    name = dep.__name__
+                elif hasattr(dep, '__class__') and inspect.isclass(dep.__class__):
+                    dep = dep.__class__
+                    name = dep.__name__
+                if name in depends:
+                    continue
+                depends.add(name)
+                self._xfer_funcs.add(name)
+                self._code += '\n' + inspect.getsource(dep).lstrip()
+            else:
+                raise Exception('Invalid computation: %s' % dep)
+        # check code can be compiled
+        compile(self._code, '<string>', 'exec')
+        # Under Windows discoro server may send objects with '__mp_main__'
+        # scope, so make an alias to '__main__'.
+        # TODO: Make alias even if client is not Windows? It is possible the
+        # client is not Windows, but a node is.
+        if os.name == 'nt' and '__mp_main__' not in sys.modules:
+            sys.modules['__mp_main__'] = sys.modules['__main__']
+
+    def schedule(self, location=None, timeout=None):
+        """Schedule computation for execution. Must be used with
+        'yield' as 'result = yield compute.schedule()'. If scheduler
+        is executing other computations, this will block until
+        scheduler processes them (computations are processed in the
+        order submitted).
+        """
+
+        if self._auth is not None:
+            raise StopIteration(-1)
+        if self.status_coro is not None and not isinstance(self.status_coro, Coro):
+            raise StopIteration(-1)
+
+        if not self.scheduler:
+            self.scheduler = yield Coro.locate('discoro_scheduler', location=location,
+                                               timeout=self.timeout)
+            if not isinstance(self.scheduler, Coro):
+                raise StopIteration(-1)
+
+        def _schedule(self, coro=None):
+            self._pulse_coro = Coro(self._pulse_proc)
+            msg = {'req': 'schedule', 'computation': asyncoro.serialize(self), 'client': coro}
+            if (yield self.scheduler.deliver(msg, timeout=self.timeout)) != 1:
+                logger.debug('schedule failed')
+                yield self.close()
+                raise StopIteration(None)
+            self._auth = yield coro.receive(timeout=self.timeout)
+            if not isinstance(self._auth, str):
+                yield self.close()
+                raise StopIteration(-1)
+            if isinstance(self._auth, str):
+                atexit.register(self.close)
+                if coro.location != self.scheduler.location:
+                    for xf in self._xfer_files:
+                        if (yield asyncoro.AsynCoro.instance().send_file(
+                           self.scheduler.location, xf, dir=self._auth, timeout=self.timeout)) < 0:
+                            logger.warning('Could not send file "%s" to scheduler' % xf)
+                            yield self.close()
+                            raise StopIteration(-1)
+            msg = {'req': 'await', 'auth': self._auth, 'client': coro}
+            if (yield self.scheduler.deliver(msg, timeout=self.timeout)) != 1:
+                yield self.close()
+                raise StopIteration(-1)
+            while True:
+                resp = yield coro.receive(timeout=timeout)
+                if isinstance(resp, dict) and resp.get('auth') == self._auth and \
+                   resp.get('resp') == 'scheduled':
+                    raise StopIteration(0)
+                else:
+                    logger.warning('invalid message ignored - waiting for scheduled')
+
+        yield Coro(_schedule, self).finish()
+
+    # TODO: add a way to send 'depends' to run methods?
+
+    def run_at(self, where, func, *args, **kwargs):
+        """Run given generator function 'func' with arguments 'args'
+        and 'kwargs' at 'where'. Must be used with 'yield' as 'rcoro =
+        yield compute.run_at(loc, genf, ...)'. If the request is
+        successful, 'rcoro' will be a (remote) coroutine.
+
+        If 'where' is a string, it is assumed to be IP address of a
+        node, in which case the function is scheduled at that node on
+        a process with least load (i.e., process with least number of
+        pending coroutines). If 'where' is a Location instance, it is
+        assumed to be process location in which case the function is
+        scheduled at that process.
+
+        'func' must be generator function, as it is used to run
+        coroutine at remote location.
+        """
+        if isinstance(func, str):
+            name = func
+        else:
+            name = func.__name__
+
+        if name in self._xfer_funcs:
+            code = None
+        else:
+            # if not inspect.isgeneratorfunction(func):
+            #     logger.warning('"%s" is not a valid generator function' % name)
+            #     raise StopIteration(None)
+            code = inspect.getsource(func).lstrip()
+
+        def _run(self, coro=None):
+            msg = {'req': 'run', 'auth': self._auth, 'where': where, 'client': coro,
+                   'func': asyncoro.serialize(_Function(name, code, args, kwargs))}
+            if (yield self.scheduler.deliver(msg, timeout=self.timeout)) == 1:
+                rcoro = yield coro.receive(self.timeout)
+            else:
+                rcoro = None
+            raise StopIteration(rcoro)
+
+        yield Coro(_run, self).finish()
+
+    def run_each(self, where, func, *args, **kwargs):
+        """Run given generator function 'func' with arguments 'args'
+        and 'kwargs' at each node or process. Must be used with
+        'yield' as 'rcoros = yield compute.run_each(loc, genf,
+        ...)'. 'rcoros' will be list of (remote) coroutines.
+
+        'where' is same as in the case of 'run_at'; if it is string,
+        the function is scheduled at every node and if it is a
+        Location instance, the function is scheduled at every process
+        (on every node).
+        """
+        if isinstance(func, str):
+            name = func
+        else:
+            name = func.__name__
+
+        if name in self._xfer_funcs:
+            code = None
+        else:
+            # if not inspect.isgeneratorfunction(func):
+            #     logger.warning('"%s" is not a valid generator function' % name)
+            #     raise StopIteration([])
+            code = inspect.getsource(func).lstrip()
+
+        def _run(self, coro=None):
+            msg = {'req': 'run_each', 'auth': self._auth, 'where': where, 'client': coro,
+                   'func': asyncoro.serialize(_Function(name, code, args, kwargs))}
+            n = yield self.scheduler.deliver(msg, timeout=self.timeout)
+            if n != 1:
+                raise StopIteration([])
+            n = yield coro.receive(timeout=self.timeout)
+            if not n:
+                raise StopIteration([])
+            rcoros = [(yield coro.receive(timeout=self.timeout)) for i in range(n)]
+            # TODO: if failed, rcoro would be either None or tuple;
+            # pass to user without filtering?
+            rcoros = [rcoro for rcoro in rcoros if isinstance(rcoro, Coro)]
+            raise StopIteration(rcoros)
+
+        yield Coro(_run, self).finish()
+
+    def run(self, func, *args, **kwargs):
+        """Run given generator function 'func' with arguments 'args'
+        and 'kwargs' at a process with least load at a node with least
+        load. Must be used with 'yield' as 'rcoro = yield
+        compute.run(genf, ...)'. If the request is successful, 'rcoro'
+        will be a (remote) coroutine.
+        """
+        yield self.run_at(None, func, *args, **kwargs)
+
+    def run_nodes(self, func, *args, **kwargs):
+        """Run given generator function 'func' with arguments 'args'
+        and 'kwargs' at a process with least load at every node. Must
+        be used with 'yield' as 'rcoros = yield
+        compute.run_nodes(genf, ...)'. 'rcoros' will be a list of
+        (remote) coroutines.
+        """
+        yield self.run_each('node', func, *args, **kwargs)
+
+    def run_procs(self, func, *args, **kwargs):
+        """Run given generator function 'func' with arguments 'args'
+        and 'kwargs' at every process (at every node). Must be used
+        with 'yield' as 'rcoros = yield compute.run_procs(genf,
+        ...)'. 'rcoros' will be a list of (remote) coroutines.
+        """
+        yield self.run_each('proc', func, *args, **kwargs)
+
+    def run_node_procs(self, addr, func, *args, **kwargs):
+        """Run given generator function 'func' with arguments 'args'
+        and 'kwargs' at every process at given node at 'addr'. Must be
+        used with 'yield' as 'rcoros = yield
+        compute.run_node_procs(addr, genf, ...)'. 'rcoros' will be a
+        list of (remote) coroutines at that node.
+        """
+        yield self.run_each(addr, func, *args, **kwargs)
+
+    # TODO: add 'map' methods to run with arguments as iterators
+    # (e.g., list of tuples)
+
+    def nodes(self):
+        """Get list of addresses of nodes initialized for this
+        computation. Must be used with 'yield' as 'yield
+        compute.nodes()'.
+        """
+
+        def _nodes_list(self, coro=None):
+            msg = {'req': 'nodes_list', 'auth': self._auth, 'client': coro}
+            if (yield self.scheduler.deliver(msg, timeout=self.timeout)) == 1:
+                yield coro.receive(self.timeout)
+            else:
+                raise StopIteration([])
+
+        yield Coro(_nodes_list, self).finish()
+
+    def procs(self):
+        """Get list of Location instances of processes initialized for
+        this computation. Must be used with 'yield' as 'yield
+        compute.procs()'.
+        """
+
+        def _procs_list(self, coro=None):
+            msg = {'req': 'procs_list', 'auth': self._auth, 'client': coro}
+            if (yield self.scheduler.deliver(msg, timeout=self.timeout)) == 1:
+                yield coro.receive(self.timeout)
+            else:
+                raise StopIteration([])
+
+        yield Coro(_procs_list, self).finish()
+
+    def close(self):
+        """Close computation. Must be used with 'yield' as 'yield
+        compute.close()'.
+        """
+
+        def _close(self, coro=None):
+            msg = {'req': 'close_computation', 'auth': self._auth, 'client': coro}
+            yield self.scheduler.deliver(msg, timeout=self.timeout)
+            self._auth = None
+
+        if self._auth:
+            yield Coro(_close, self).finish()
+        if self._pulse_coro:
+            yield self._pulse_coro.send('quit')
+
+    def _pulse_proc(self, coro=None):
+        """For internal use only.
+        """
+        last_pulse = time.time()
+        while True:
+            msg = yield coro.receive(timeout=(2 * self.pulse_interval))
+            if msg == 'pulse':
+                last_pulse = time.time()
+            elif msg == 'quit':
+                break
+            elif msg is None:
+                logger.debug('scheduler not reachable?')
+                if (time.time() - last_pulse) > (5 * self.pulse_interval):
+                    logger.warning('scheduler is zombie!')
+                    if self._auth:
+                        self._pulse_coro = None
+                        yield self.close()
+                    break
+            else:
+                logger.debug('ignoring invalid pulse message')
+
+
 class Scheduler(object, metaclass=asyncoro.MetaSingleton):
 
     # status indications ('status' attribute of StatusMessage)
@@ -629,358 +981,6 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
         self.__cur_client_auth = None
         self.__sched_event.set()
         raise StopIteration(0)
-
-
-class Computation(object):
-    """Packages components to distribute to remote asyncoro schedulers
-    to create (remote) coroutines.
-    """
-
-    def __init__(self, components, status_coro=None, timeout=MsgTimeout,
-                 pulse_interval=MinPulseInterval):
-        """'components' should be a list, each element of which is
-        either a module, a (generator or normal) function, path name
-        of a file, a class or an object (in which case the code for
-        its class is sent).
-
-        'status_coro', if not None, should be a coroutine. The
-        scheduler sends status messages indicating when a remote
-        process has been initialized (so it is ready to run jobs),
-        closed etc., and exit status of remote coroutines. See
-        'discoro_client*.py' files in examples directory.
-
-        'timeout' is maximum number of seconds to complete a
-        communication (transfer of messages). If client / scheduler /
-        remote processes couldn't send / receive a message within this
-        period, the operation is aborted. Bigger values may be used
-        when communicating over slower connections.
-
-        'pulse_interval' is interval (number of seconds) used for
-        heart beat messages to check if client / scheduler / process
-        is alive. If the other side doesn't reply to 5 heart beat
-        messages, it is treated as dead.
-
-        'zombie_period' is maximum number of seconds a server process
-        stays idle (i.e., no jobs running on that process) before the
-        computation is automatically closed (on that process). Once
-        closed, the computation can't use that process anymore. This
-        discards unused clients so other pending (queued) computations
-        can use compute resources. If 'zombie_period' is None, the
-        processes don't check for idle period and don't close
-        computation (until the user program explicitly closes
-        it). When scheduler is shared (run as separate program),
-        'zombie_period' is set to 10 * MaxPulseInterval.
-        """
-        if pulse_interval < MinPulseInterval or pulse_interval > MaxPulseInterval:
-            raise Exception('"pulse_interval" must be at least %s and at most %s' %
-                            (MinPulseInterval, MaxPulseInterval))
-        if timeout < 1 or timeout > MaxPulseInterval:
-            raise Exception('"timeout" must be at least 1 and at most %s' % MaxPulseInterval)
-        if status_coro is not None and not isinstance(status_coro, Coro):
-            raise Exception('status_coro must be coroutine')
-        if zombie_period and zombie_period < MaxPulseInterval:
-            raise Exception('zombie_period must be >= %s' % MaxPulseInterval)
-
-        # TODO: add option to leave transferred files on the nodes
-        # after computation is done (such as "cleanup" in dispy)?
-
-        if not isinstance(components, list):
-            components = [components]
-
-        self._code = ''
-        self._xfer_funcs = set()
-        self._xfer_files = []
-        self._node_xfers = []
-        self.status_coro = status_coro
-        self._auth = None
-        self.scheduler = None
-        self._pulse_coro = None
-        self.pulse_interval = pulse_interval
-        self.timeout = timeout
-        self.zombie_period = zombie_period
-        depends = set()
-        for dep in components:
-            if isinstance(dep, str) or inspect.ismodule(dep):
-                if inspect.ismodule(dep):
-                    dep = dep.__file__
-                    if dep.endswith('.pyc'):
-                        dep = dep[:-1]
-                    dep = os.path.abspath(dep)
-                    if not (dep.endswith('.py') and os.path.isfile(dep)):
-                        raise Exception('Invalid module "%s" - must be python source.' % dep)
-                if dep in depends:
-                    continue
-                try:
-                    fd = open(dep, 'rb')
-                    fd.close()
-                except:
-                    raise Exception('File "%s" is not valid' % dep)
-                depends.add(dep)
-                self._xfer_files.append(dep)
-            elif inspect.isgeneratorfunction(dep) or inspect.isfunction(dep) or \
-               inspect.isclass(dep) or hasattr(dep, '__class__'):
-                if inspect.isgeneratorfunction(dep) or inspect.isfunction(dep):
-                    name = dep.__name__
-                elif inspect.isclass(dep):
-                    name = dep.__name__
-                elif hasattr(dep, '__class__') and inspect.isclass(dep.__class__):
-                    dep = dep.__class__
-                    name = dep.__name__
-                if name in depends:
-                    continue
-                depends.add(name)
-                self._xfer_funcs.add(name)
-                self._code += '\n' + inspect.getsource(dep).lstrip()
-            else:
-                raise Exception('Invalid computation: %s' % dep)
-        # check code can be compiled
-        compile(self._code, '<string>', 'exec')
-        # Under Windows discoro server may send objects with '__mp_main__'
-        # scope, so make an alias to '__main__'.
-        # TODO: Make alias even if client is not Windows? It is possible the
-        # client is not Windows, but a node is.
-        if os.name == 'nt' and '__mp_main__' not in sys.modules:
-            sys.modules['__mp_main__'] = sys.modules['__main__']
-
-    def schedule(self, location=None, timeout=None):
-        """Schedule computation for execution. Must be used with
-        'yield' as 'result = yield compute.schedule()'. If scheduler
-        is executing other computations, this will block until
-        scheduler processes them (computations are processed in the
-        order submitted).
-        """
-
-        if self._auth is not None:
-            raise StopIteration(-1)
-        if self.status_coro is not None and not isinstance(self.status_coro, Coro):
-            raise StopIteration(-1)
-
-        if not self.scheduler:
-            self.scheduler = yield Coro.locate('discoro_scheduler', location=location,
-                                               timeout=self.timeout)
-            if not isinstance(self.scheduler, Coro):
-                raise StopIteration(-1)
-
-        def _schedule(self, coro=None):
-            self._pulse_coro = Coro(self._pulse_proc)
-            msg = {'req': 'schedule', 'computation': asyncoro.serialize(self), 'client': coro}
-            if (yield self.scheduler.deliver(msg, timeout=self.timeout)) != 1:
-                logger.debug('schedule failed')
-                yield self.close()
-                raise StopIteration(None)
-            self._auth = yield coro.receive(timeout=self.timeout)
-            if not isinstance(self._auth, str):
-                yield self.close()
-                raise StopIteration(-1)
-            if isinstance(self._auth, str):
-                atexit.register(self.close)
-                if coro.location != self.scheduler.location:
-                    for xf in self._xfer_files:
-                        if (yield asyncoro.AsynCoro.instance().send_file(
-                           self.scheduler.location, xf, dir=self._auth, timeout=self.timeout)) < 0:
-                            logger.warning('Could not send file "%s" to scheduler' % xf)
-                            yield self.close()
-                            raise StopIteration(-1)
-            msg = {'req': 'await', 'auth': self._auth, 'client': coro}
-            if (yield self.scheduler.deliver(msg, timeout=self.timeout)) != 1:
-                yield self.close()
-                raise StopIteration(-1)
-            while True:
-                resp = yield coro.receive(timeout=timeout)
-                if isinstance(resp, dict) and resp.get('auth') == self._auth and \
-                   resp.get('resp') == 'scheduled':
-                    raise StopIteration(0)
-                else:
-                    logger.warning('invalid message ignored - waiting for scheduled')
-
-        yield Coro(_schedule, self).finish()
-
-    # TODO: add a way to send 'depends' to run methods?
-
-    def run_at(self, where, func, *args, **kwargs):
-        """Run given generator function 'func' with arguments 'args'
-        and 'kwargs' at 'where'. Must be used with 'yield' as 'rcoro =
-        yield compute.run_at(loc, genf, ...)'. If the request is
-        successful, 'rcoro' will be a (remote) coroutine.
-
-        If 'where' is a string, it is assumed to be IP address of a
-        node, in which case the function is scheduled at that node on
-        a process with least load (i.e., process with least number of
-        pending coroutines). If 'where' is a Location instance, it is
-        assumed to be process location in which case the function is
-        scheduled at that process.
-
-        'func' must be generator function, as it is used to run
-        coroutine at remote location.
-        """
-        if isinstance(func, str):
-            name = func
-        else:
-            name = func.__name__
-
-        if name in self._xfer_funcs:
-            code = None
-        else:
-            # if not inspect.isgeneratorfunction(func):
-            #     logger.warning('"%s" is not a valid generator function' % name)
-            #     raise StopIteration(None)
-            code = inspect.getsource(func).lstrip()
-
-        def _run(self, coro=None):
-            msg = {'req': 'run', 'auth': self._auth, 'where': where, 'client': coro,
-                   'func': asyncoro.serialize(_Function(name, code, args, kwargs))}
-            if (yield self.scheduler.deliver(msg, timeout=self.timeout)) == 1:
-                rcoro = yield coro.receive(self.timeout)
-            else:
-                rcoro = None
-            raise StopIteration(rcoro)
-
-        yield Coro(_run, self).finish()
-
-    def run_each(self, where, func, *args, **kwargs):
-        """Run given generator function 'func' with arguments 'args'
-        and 'kwargs' at each node or process. Must be used with
-        'yield' as 'rcoros = yield compute.run_each(loc, genf,
-        ...)'. 'rcoros' will be list of (remote) coroutines.
-
-        'where' is same as in the case of 'run_at'; if it is string,
-        the function is scheduled at every node and if it is a
-        Location instance, the function is scheduled at every process
-        (on every node).
-        """
-        if isinstance(func, str):
-            name = func
-        else:
-            name = func.__name__
-
-        if name in self._xfer_funcs:
-            code = None
-        else:
-            # if not inspect.isgeneratorfunction(func):
-            #     logger.warning('"%s" is not a valid generator function' % name)
-            #     raise StopIteration([])
-            code = inspect.getsource(func).lstrip()
-
-        def _run(self, coro=None):
-            msg = {'req': 'run_each', 'auth': self._auth, 'where': where, 'client': coro,
-                   'func': asyncoro.serialize(_Function(name, code, args, kwargs))}
-            n = yield self.scheduler.deliver(msg, timeout=self.timeout)
-            if n != 1:
-                raise StopIteration([])
-            n = yield coro.receive(timeout=self.timeout)
-            if not n:
-                raise StopIteration([])
-            rcoros = [(yield coro.receive(timeout=self.timeout)) for i in range(n)]
-            # TODO: if failed, rcoro would be either None or tuple;
-            # pass to user without filtering?
-            rcoros = [rcoro for rcoro in rcoros if isinstance(rcoro, Coro)]
-            raise StopIteration(rcoros)
-
-        yield Coro(_run, self).finish()
-
-    def run(self, func, *args, **kwargs):
-        """Run given generator function 'func' with arguments 'args'
-        and 'kwargs' at a process with least load at a node with least
-        load. Must be used with 'yield' as 'rcoro = yield
-        compute.run(genf, ...)'. If the request is successful, 'rcoro'
-        will be a (remote) coroutine.
-        """
-        yield self.run_at(None, func, *args, **kwargs)
-
-    def run_nodes(self, func, *args, **kwargs):
-        """Run given generator function 'func' with arguments 'args'
-        and 'kwargs' at a process with least load at every node. Must
-        be used with 'yield' as 'rcoros = yield
-        compute.run_nodes(genf, ...)'. 'rcoros' will be a list of
-        (remote) coroutines.
-        """
-        yield self.run_each('node', func, *args, **kwargs)
-
-    def run_procs(self, func, *args, **kwargs):
-        """Run given generator function 'func' with arguments 'args'
-        and 'kwargs' at every process (at every node). Must be used
-        with 'yield' as 'rcoros = yield compute.run_procs(genf,
-        ...)'. 'rcoros' will be a list of (remote) coroutines.
-        """
-        yield self.run_each('proc', func, *args, **kwargs)
-
-    def run_node_procs(self, addr, func, *args, **kwargs):
-        """Run given generator function 'func' with arguments 'args'
-        and 'kwargs' at every process at given node at 'addr'. Must be
-        used with 'yield' as 'rcoros = yield
-        compute.run_node_procs(addr, genf, ...)'. 'rcoros' will be a
-        list of (remote) coroutines at that node.
-        """
-        yield self.run_each(addr, func, *args, **kwargs)
-
-    # TODO: add 'map' methods to run with arguments as iterators
-    # (e.g., list of tuples)
-
-    def nodes(self):
-        """Get list of addresses of nodes initialized for this
-        computation. Must be used with 'yield' as 'yield
-        compute.nodes()'.
-        """
-
-        def _nodes_list(self, coro=None):
-            msg = {'req': 'nodes_list', 'auth': self._auth, 'client': coro}
-            if (yield self.scheduler.deliver(msg, timeout=self.timeout)) == 1:
-                yield coro.receive(self.timeout)
-            else:
-                raise StopIteration([])
-
-        yield Coro(_nodes_list, self).finish()
-
-    def procs(self):
-        """Get list of Location instances of processes initialized for
-        this computation. Must be used with 'yield' as 'yield
-        compute.procs()'.
-        """
-
-        def _procs_list(self, coro=None):
-            msg = {'req': 'procs_list', 'auth': self._auth, 'client': coro}
-            if (yield self.scheduler.deliver(msg, timeout=self.timeout)) == 1:
-                yield coro.receive(self.timeout)
-            else:
-                raise StopIteration([])
-
-        yield Coro(_procs_list, self).finish()
-
-    def close(self):
-        """Close computation. Must be used with 'yield' as 'yield
-        compute.close()'.
-        """
-
-        def _close(self, coro=None):
-            msg = {'req': 'close_computation', 'auth': self._auth, 'client': coro}
-            yield self.scheduler.deliver(msg, timeout=self.timeout)
-            self._auth = None
-
-        if self._auth:
-            yield Coro(_close, self).finish()
-        if self._pulse_coro:
-            yield self._pulse_coro.send('quit')
-
-    def _pulse_proc(self, coro=None):
-        """For internal use only.
-        """
-        last_pulse = time.time()
-        while True:
-            msg = yield coro.receive(timeout=(2 * self.pulse_interval))
-            if msg == 'pulse':
-                last_pulse = time.time()
-            elif msg == 'quit':
-                break
-            elif msg is None:
-                logger.debug('scheduler not reachable?')
-                if (time.time() - last_pulse) > (5 * self.pulse_interval):
-                    logger.warning('scheduler is zombie!')
-                    if self._auth:
-                        self._pulse_coro = None
-                        yield self.close()
-                    break
-            else:
-                logger.debug('ignoring invalid pulse message')
 
 
 if __name__ == '__main__':
