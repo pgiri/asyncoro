@@ -1032,7 +1032,6 @@ class AsynCoro(asyncoro.AsynCoro):
                     break
                 peer = _Peer.peers.get((peer_loc.addr, peer_loc.port), None)
                 if peer and peer.auth == auth_code:
-                    # logger.debug('%s: ignoring peer: %s' % (self._location, peer_loc))
                     break
                 pong = _NetRequest('pong',
                                    kwargs={'location': self._location, 'signature': self._signature,
@@ -1052,10 +1051,11 @@ class AsynCoro(asyncoro.AsynCoro):
                 finally:
                     sock.close()
 
+                peer = _Peer.peers.get((peer_loc.addr, peer_loc.port), None)
+                if peer and peer.auth == auth_code:
+                    break
                 logger.debug('%s: found asyncoro "%s" at %s' % (self._location, req.kwargs['name'],
                                                                 peer_loc))
-                if (peer_loc.addr, peer_loc.port) in _Peer.peers:
-                    break
                 peer = _Peer(req.kwargs['name'], peer_loc, auth_code, self._keyfile, self._certfile)
                 if (peer_loc.addr, peer_loc.port) in self._stream_peers or \
                    (peer_loc.addr, 0) in self._stream_peers:
@@ -1108,10 +1108,11 @@ class AsynCoro(asyncoro.AsynCoro):
                     # logger.debug(traceback.format_exc())
                     break
 
+                peer = _Peer.peers.get((peer_loc.addr, peer_loc.port), None)
+                if peer and peer.auth == auth_code:
+                    break
                 logger.debug('%s: found asyncoro "%s" at %s' % (self._location, req.kwargs['name'],
                                                                 peer_loc))
-                if (peer_loc.addr, peer_loc.port) in _Peer.peers:
-                    break
                 peer = _Peer(req.kwargs['name'], peer_loc, auth_code, self._keyfile, self._certfile)
                 if (peer_loc.addr, peer_loc.port) in self._stream_peers or \
                    (peer_loc.addr, 0) in self._stream_peers:
