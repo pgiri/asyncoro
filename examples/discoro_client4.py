@@ -77,10 +77,6 @@ def rcoro_proc(coro=None):
 
 def submit_jobs_proc(computation, njobs, coro=None):
     computation.status_coro = coro
-    # if scheduler is shared (i.e., running as program), nothing needs
-    # to be done (its location can optionally be given to 'schedule');
-    # othrwise, start scheduler: discoro.Scheduler()
-    # discoro.Scheduler()
     if (yield computation.schedule()):
         raise Exception('Failed to schedule computation')
     submitted = 0
@@ -100,10 +96,10 @@ def submit_jobs_proc(computation, njobs, coro=None):
                     asyncoro.Coro(client_proc, submitted, rcoro)
                 submitted += 1
         elif isinstance(msg, StatusMessage):
-            # asyncoro.logger.debug('Node/Process status: %s, %s' % (msg.status, msg.location))
+            # asyncoro.logger.debug('Node/Process status: %s, %s' % (msg.status, msg.info))
             if msg.status == discoro.Scheduler.ProcInitialized and submitted < njobs:
                 # a new process found; submit a job
-                rcoro = yield computation.run_at(msg.location, rcoro_proc)
+                rcoro = yield computation.run_at(msg.info, rcoro_proc)
                 if isinstance(rcoro, asyncoro.Coro):
                     asyncoro.Coro(client_proc, submitted, rcoro)
                 submitted += 1
@@ -114,8 +110,12 @@ def submit_jobs_proc(computation, njobs, coro=None):
 if __name__ == '__main__':
     import logging, random, os, threading
     asyncoro.logger.setLevel(logging.DEBUG)
+    # if scheduler is not already running (on a node as a program),
+    # start it (private scheduler):
+    discoro.Scheduler()
     # unlike in earlier examples, rcoro_proc is not sent with
-    # computation; instead, it is sent each time a job is submitted,
+    # computation (as it is not included in 'components';
+    # instead, it is sent each time a job is submitted,
     # which is a bit inefficient
     computation = discoro.Computation([C])
     # run 10 jobs

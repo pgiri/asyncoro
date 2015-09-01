@@ -24,75 +24,67 @@ class C(object):
 def compute(obj, client, coro=None):
     # obj is an instance of C
     import math
-    # this coroutine and client can use message passing; client sends
-    # data to this coro as a message
-    n = yield coro.receive()
-    print('process at %s received: %s' % (coro.location, n))
-    obj.n = math.sqrt(n)
     yield coro.sleep(obj.n)
-    # send result back to client
-    yield client.deliver(obj, timeout=5)
 
 # status messages indicating nodes, processes as well as remote
 # coroutines finish status are sent to this coroutine
-def status_proc(client, coro=None):
-    procs_ready = 0
+def status_proc(coro=None):
     coro.set_daemon()
     while True:
         msg = yield coro.receive()
+        http_server.status_coro.send(msg)
         if isinstance(msg, asyncoro.MonitorException):
             if msg.args[1][0] != StopIteration:
                 print('rcoro %s failed: %s / %s' % (msg.args[0], msg.args[1][0], msg.args[1][1]))
         elif isinstance(msg, StatusMessage):
-            print('Status: %s / %s' % (msg.info, msg.status))
-            if msg.status == discoro.Scheduler.ProcInitialized:
-                # wait until 2 processes ready
-                procs_ready += 1
-                if procs_ready == 2:
-                    client.send('processes ready')
+            if msg.status == discoro.Scheduler.CoroCreated:
+                print('rcoro %s started' % msg.info.coro)
+            else:
+                print('Status: %s / %s' % (msg.status, msg.info))
+
+        else:
+            print('status msg ignored: %s' % type(msg))
 
 def client_proc(computation, coro=None):
     # scheduler sends node / process status messages to status_coro
-    computation.status_coro = asyncoro.Coro(status_proc, coro)
+    computation.status_coro = asyncoro.Coro(status_proc)
 
     # distribute computation to server
     if (yield computation.schedule()):
         raise Exception('schedule failed')
 
-    # wait until processes are initialized; alternately, create
-    # coroutines from 'status_proc' itself
-    msg = yield coro.receive()
-    assert msg == 'processes ready'
-
-    rcoros = []
-    # create remote coroutines
-    for i in range(3):
+    i = 0
+    while True:
+        if (yield coro.receive()) is None:
+            break
+        i += 1
         c = C(i)
+        c.n = random.uniform(50, 90)
         rcoro = yield computation.run(compute, c, coro)
         if isinstance(rcoro, asyncoro.Coro):
-            rcoros.append(rcoro)
+            pass
         else:
             print('failed to create remote coroutine for %s: %s' % (c, rcoro))
-
-    # yield coro.sleep(10)
-    # send data to remote coroutines (as messages)
-    for rcoro in rcoros:
-        rcoro.send(random.uniform(5, 20))
-
-    # remote coroutines send replies as messages to this coro
-    for rcoro in rcoros:
-        reply = yield coro.receive()
-        print('reply: %s' % (reply))
 
     yield computation.close()
 
 if __name__ == '__main__':
-    import os, threading
+    import os, threading, httpd
     asyncoro.logger.setLevel(logging.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start it (private scheduler):
     discoro.Scheduler()
     # send generator function and class C (as the computation uses
     # objects of C)
+    http_server = httpd.HTTPServer()
     computation = discoro.Computation([compute, C])
-    asyncoro.Coro(client_proc, computation).value()
+    coro = asyncoro.Coro(client_proc, computation)
+    # each time anything other than 'quit' or 'exit' is entered, new
+    # coroutine is scheduled
+    while True:
+        cmd = sys.stdin.readline().strip().lower()
+        if cmd == 'quit' or cmd == 'exit':
+            coro.send(None)
+            break
+        else:
+            coro.send('new')

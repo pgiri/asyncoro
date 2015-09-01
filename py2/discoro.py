@@ -37,7 +37,8 @@ MinPulseInterval = MsgTimeout
 MaxPulseInterval = 10 * MinPulseInterval
 
 # status about nodes / processes are sent with this structure
-StatusMessage = collections.namedtuple('StatusMessage', ['status', 'location'])
+StatusMessage = collections.namedtuple('StatusMessage', ['status', 'info'])
+CoroInfo = collections.namedtuple('CoroInfo', ['coro', 'args', 'kwargs', 'start_time'])
 
 # for internal use only
 _Function = collections.namedtuple('_Function', ['name', 'code', 'args', 'kwargs'])
@@ -238,6 +239,9 @@ class Computation(object):
                    'func': asyncoro.serialize(_Function(name, code, args, kwargs))}
             if (yield self.scheduler.deliver(msg, timeout=self.timeout)) == 1:
                 rcoro = yield coro.receive(self.timeout)
+                if self.status_coro and isinstance(rcoro, Coro):
+                    msg = CoroInfo(rcoro, args, kwargs, time.time())
+                    self.status_coro.send(StatusMessage(Scheduler.CoroCreated, msg))
             else:
                 rcoro = None
             raise StopIteration(rcoro)
@@ -281,6 +285,10 @@ class Computation(object):
             # TODO: if failed, rcoro would be either None or tuple;
             # pass to user without filtering?
             rcoros = [rcoro for rcoro in rcoros if isinstance(rcoro, Coro)]
+            if self.status_coro:
+                for rcoro in rcoros:
+                    msg = CoroInfo(rcoro, args, kwargs, time.time())
+                    self.status_coro.send(StatusMessage(Scheduler.CoroCreated, msg))
             raise StopIteration(rcoros)
 
         yield Coro(_run, self).finish()
@@ -405,6 +413,7 @@ class Scheduler(object):
     ProcIgnore = 14
     ProcDisconnected = 15
 
+    CoroCreated = 20
     ComputationClosed = 25
 
     """This class is for use by Computation class (see below) only.

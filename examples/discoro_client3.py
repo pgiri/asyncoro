@@ -26,10 +26,6 @@ def client_proc(computation, njobs, coro=None):
         status['submitted'] += 1
 
     computation.status_coro = coro
-    # if scheduler is shared (i.e., running as program), nothing needs
-    # to be done (its location can optionally be given to 'schedule');
-    # othrwise, start scheduler:
-    # discoro.Scheduler()
     if (yield computation.schedule()):
         raise Exception('Failed to schedule computation')
     # job submitter assumes that one process can run one coroutine at a time
@@ -53,11 +49,11 @@ def client_proc(computation, njobs, coro=None):
                 # schedule another job at this process
                 asyncoro.Coro(submit_job, rcoro.location)
         elif isinstance(msg, StatusMessage):
-            asyncoro.logger.debug('Node/Process status: %s, %s' % (msg.status, msg.location))
+            asyncoro.logger.debug('Node/Process status: %s, %s' % (msg.status, msg.info))
             if msg.status == discoro.Scheduler.ProcInitialized:
                 # a new process is ready (if special initialization is
                 # required for preparing process, schedule it)
-                asyncoro.Coro(submit_job, msg.location)
+                asyncoro.Coro(submit_job, msg.info)
         else:
             asyncoro.logger.debug('Ignoring status message %s' % str(msg))
     yield computation.close()
@@ -65,6 +61,9 @@ def client_proc(computation, njobs, coro=None):
 if __name__ == '__main__':
     import logging, random, threading
     asyncoro.logger.setLevel(logging.DEBUG)
+    # if scheduler is not already running (on a node as a program),
+    # start it (private scheduler):
+    discoro.Scheduler()
     computation = discoro.Computation([rcoro_proc])
     # run 10 jobs
     asyncoro.Coro(client_proc, computation, 10).value()

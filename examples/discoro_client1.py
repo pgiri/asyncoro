@@ -33,15 +33,12 @@ def compute(obj, client, coro=None):
     yield client.deliver(obj, timeout=5)
 
 def client_proc(computation, coro=None):
-    # if no other clients use discoro, scheduler can be started in
-    # client itself; alternately, scheduler can be run as a program
-    discoro.Scheduler()
-
-    # wait a bit for scheduler to detect processes; use MonitorStatus
-    # to be notified of node / process state instead
+    # wait a bit for scheduler to detect processes; alternately status
+    # messages can be used (see other discoro_client*.py for examples)
     yield coro.sleep(1)
 
-    # distribute computation to server
+    # schedule computation (if scheduler is shared, this waits until
+    # prior computations are finished)
     if (yield computation.schedule()):
         raise Exception('schedule failed')
 
@@ -70,7 +67,10 @@ def client_proc(computation, coro=None):
 
 if __name__ == '__main__':
     asyncoro.logger.setLevel(logging.DEBUG)
+    # if scheduler is not already running (on a node as a program),
+    # start it (private scheduler):
+    discoro.Scheduler()
     # send generator function and class C (as the function uses
     # objects of C); 'depends' can include files, functions, objets
     computation = discoro.Computation([compute, C], timeout=5)
-    asyncoro.Coro(client_proc, computation)
+    asyncoro.Coro(client_proc, computation).value()

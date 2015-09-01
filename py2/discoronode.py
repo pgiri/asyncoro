@@ -164,7 +164,8 @@ def discoro_proc():
                 asyncoro.logger.debug('invalid computation to run')
                 # _discoro_func = Scheduler._Function(_discoro_func.name, None,
                 #                                     _discoro_func.args, _discoro_func.kwargs)
-                job_coro = (sys.exc_info()[0], _discoro_func, traceback.format_exc())
+                job_coro = (sys.exc_info()[0], getattr(_discoro_func, 'name', _discoro_func),
+                            traceback.format_exc())
             else:
                 asyncoro.logger.debug('job %s created' % job_coro)
                 _discoro_job_coros.add(job_coro)

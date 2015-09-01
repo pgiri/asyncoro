@@ -1,0 +1,216 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <link type="text/css" rel="stylesheet" href="asyncoro.css" />
+
+    <script type="text/javascript" src="jquery.js"></script>
+    <script type="text/javascript" src="asyncoro.js"></script>
+
+    <script type="text/javascript">
+    //<![CDATA[
+
+     jQuery.ajaxSettings.traditional = true;
+
+      var coros = {submitted: 0, done: 0};
+      var nodes = {};
+      var timer = null;
+      var timeout = 1000 * %(TIMEOUT)s;
+      var sort_key = 'ip_addr';
+      var sorted_keys = [];
+
+      function show_cluster() {
+        $('#coros-submitted').text(coros.submitted);
+        $('#coros-done').text(coros.done);
+        $('#coros-running').text(coros.submitted - coros.done);
+
+        if (sorted_keys.length == 0) {
+          var key_ids = $.map(nodes, function(node) {
+            return {key:node[sort_key], id:node.ip_addr};
+          });
+          sorted_keys =
+            $.map(key_ids.sort(function(a, b) {
+              return a.key < b.key ? 1 : (a.key > b.key ? -1 : 0); }),
+                  function(key_id) { return key_id.id; }
+                 );
+        }
+        var rows = '';
+        $.each(sorted_keys, function(i, key) {
+          var node = nodes[key];
+          rows += '<tr><td>' + (i + 1) + '</td>' +
+            '<td><a href="node.html?host=' + node.ip_addr + '" ' + 'title="View processes on ' +
+            node.ip_addr + '">' + node.ip_addr + '</a></td><td>' + node.name + '</td><td>' +
+            node.procs + '</td><td>' + (node.coros_submitted - node.coros_done) + '</td><td>' +
+            node.last_update.toLocaleTimeString() + '</td></tr>';
+        });
+        $('#nodes').html(rows);
+      }
+
+      function cluster_status(request) {
+        $.ajax({
+          url: request,
+          method: 'GET',
+          dataType: 'json',
+          timeout: Math.min(5000, timeout)
+        })
+          .done(function(status_data) {
+            $.each(status_data, function(i, node) {
+              var cur_node = nodes[node.ip_addr];
+              if (cur_node) {
+                  coros.submitted -= cur_node.coros_submitted;
+                  coros.done -= cur_node.coros_done;
+              }
+              nodes[node.ip_addr] = node;
+              coros.submitted += node.coros_submitted;
+              coros.done += node.coros_done;
+              node.last_update = new Date(1000 * node.update_time);
+            });
+
+            if (status_data.length > 0) {
+              if (sort_key == 'ip_addr') {
+                var keys = $.map(nodes, function(node) {
+                  return node.ip_addr;
+                });
+                sorted_keys = merge_sorted_uniq(sorted_keys, keys.sort(desc_cmp), desc_cmp);
+              } else {
+                sorted_keys = [];
+              }
+
+              show_cluster();
+            }
+
+            $('#messages').html('<li>Status updated at ' +
+                                (new Date()).toLocaleTimeString() + '</li>');
+            if (timeout >= 1000) {
+              timer = setTimeout(function() { cluster_status('cluster_updates') }, timeout);
+            }
+          })
+
+          .fail(function(jqXHR, textStatus, errorThrown) {
+            $('#messages').append('<li>Could not get status; ' +
+              'reload this page when computation is scheduled</li>');
+            $('#timeout-div').hide();
+            if (timer != null) {
+              clearTimeout(timer);
+              timer = null;
+            }
+          })
+      }
+
+      $(document).ready(function() {
+
+        cluster_status('cluster_status');
+
+        $('select[name="sort-key"]').val(sort_key);
+
+        $('#timeout-update').click(function() {
+          var update_sec = $('#timeout-value').val();
+          if (!$.isNumeric(update_sec)) {
+            $('#messages').append('<li>Invalid timeout value ignored.</li>');
+            $('#timeout-value').val(timeout / 1000);
+            return false;
+          }
+          update_sec = parseInt(update_sec);
+          if (timer != null) {
+            clearTimeout(timer);
+            timer = null;
+          }
+          if (update_sec < 1) {
+            update_sec = 0;
+            $('#messages').append('<li>Timed updates disabled.</li>');
+          }
+
+          if (timeout != (1000 * update_sec)) {
+            $.ajax({
+              url: '/set_poll_sec',
+              method: 'POST',
+              data: {timeout: update_sec},
+              timeout: 1000
+            });
+          }
+
+          $('#timeout-value').val(update_sec);
+          timeout = 1000 * update_sec;
+          cluster_status('cluster_updates');
+        });
+
+        $('select[name="sort-key"]').change(function() {
+          sort_key = $(this).val();
+          sorted_keys = [];
+          show_cluster();
+        });
+
+      });
+    //]]>
+    </script>
+
+  <title>discoro: Status</title>
+  </head>
+  <body>
+    <div id="page">
+      <nav style="margin:0 auto;" id="navigation" role="navigation">
+        <ul>
+          <li class="active"><a href="cluster.html">Cluster</a></li>
+          <li><a href="node.html">Node</a></li>
+          <li><a href="process.html">Process</a></li>
+        </ul>
+      </nav>
+
+      <h1><span class="title">discoro: Status</span></h1>
+
+      <table class="border"
+        style="background:transparent;margin:10px auto;font-weight:bold;text-align:right;">
+        <tr>
+           <td>Coros Submitted : </td><td id="coros-submitted">0</td>
+        </tr>
+        <tr><td style="border-top: 1px solid #bcd;">Coros Done : </td>
+          <td style="border-top: 1px solid #bcd;" id="coros-done">0</td>
+        </tr>
+        <tr>
+          <td style="border-top: 1px solid #bcd;">Coros Running : </td>
+          <td style="border-top: 1px solid #bcd;" id="coros-running">0</td>
+        </tr>
+      </table>
+      <table class="fancy shadow" style="text-align:right;margin:10px auto;">
+        <thead>
+          <tr>
+            <th></th><th>IP Address</th><th>Name</th><th>Processes</th><th>Coros</th><th>Last Update</th>
+          </tr>
+        </thead>
+        <tbody id="nodes">
+        </tbody>
+      </table>
+
+      <hr style="margin:10px;" />
+
+      <div id="timeout-div" style="margin:10px auto;">
+        <span class="border" style="padding:10px;display:inline-block;">
+          <strong>Update Interval Seconds:</strong>
+          <input style="width:3em;" maxlength="6" type="text" id="timeout-value"
+            value="%(TIMEOUT)s" />
+          <button type="button" id="timeout-update" style="margin-left:5px;">Update</button>
+        </span>
+      </div>
+
+      <div style="margin:10px auto;">
+        <span class="border" style="padding:10px;display:inline-block;">
+          <strong>Sort Nodes by : </strong>
+          <select name="sort-key" style="margin-left:5px;">
+            <option value="ip_addr">IP Address</option>
+            <option value="name">Name</option>
+            <option value="done">Coros Done</option>
+            <option value="last_update">Last Update</option>
+          </select>
+        </span>
+      </div>
+
+      <hr style="margin:10px;" />
+      <div>
+        <ul id="messages" style="margin:1em auto;display:inline-block;"></ul>
+      </div>
+
+    </div>
+  </body>
+</html>
