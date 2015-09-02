@@ -42,7 +42,8 @@
           rows += '<tr><td>' + (i + 1) + '</td>' +
             '<td><a href="node.html?host=' + node.ip_addr + '" ' + 'title="View processes on ' +
             node.ip_addr + '">' + node.ip_addr + '</a></td><td>' + node.name + '</td><td>' +
-            node.procs + '</td><td>' + (node.coros_submitted - node.coros_done) + '</td><td>' +
+            node.procs + '</td><td>' + node.coros_submitted + '</td><td>' +
+            node.coros_done + '</td><td>' + (node.coros_submitted - node.coros_done) + '</td><td>' +
             node.last_update.toLocaleTimeString() + '</td></tr>';
         });
         $('#nodes').html(rows);
@@ -146,7 +147,7 @@
     //]]>
     </script>
 
-  <title>discoro: Status</title>
+  <title>discoro: Cluster Status</title>
   </head>
   <body>
     <div id="page">
@@ -158,7 +159,7 @@
         </ul>
       </nav>
 
-      <h1><span class="title">discoro: Status</span></h1>
+      <h1><span class="title">discoro: Cluster Status</span></h1>
 
       <table class="border"
         style="background:transparent;margin:10px auto;font-weight:bold;text-align:right;">
@@ -176,7 +177,8 @@
       <table class="fancy shadow" style="text-align:right;margin:10px auto;">
         <thead>
           <tr>
-            <th></th><th>IP Address</th><th>Name</th><th>Processes</th><th>Coros</th><th>Last Update</th>
+            <th></th><th>IP Address</th><th>Name</th><th>Processes</th>
+            <th>Coros Submitted</th><th>Coros Done</th><th>Coros Running</th><th>Last Update</th>
           </tr>
         </thead>
         <tbody id="nodes">

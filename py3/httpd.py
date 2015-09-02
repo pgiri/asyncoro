@@ -22,13 +22,11 @@ import time
 import socket
 import ssl
 import re
-import functools
-import copy
 import traceback
 
 import asyncoro.disasyncoro as asyncoro
 import asyncoro.discoro as discoro
-from discoro import StatusMessage
+from asyncoro.discoro import StatusMessage
 
 if sys.version_info.major > 2:
     import http.server as BaseHTTPServer
@@ -53,15 +51,17 @@ class HTTPServer(object):
                 name = ip_addr
             self.ip_addr = ip_addr
             self.name = name
+            self.status = None
             self.procs = {}
             self.update_time = time.time()
 
     class _Proc(object):
         def __init__(self, location):
             self.location = location
+            self.status = None
             self.coros = {}
             self.coros_submitted = 0
-            self.coros_done  = 0
+            self.coros_done = 0
 
     class _HTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         def __init__(self, ctx, DocumentRoot, *args):
@@ -71,8 +71,8 @@ class HTTPServer(object):
             BaseHTTPServer.BaseHTTPRequestHandler.__init__(self, *args)
 
         def log_message(self, fmt, *args):
-            # return # uncomment 'return' statement to disable messages from HTTP server
-            asyncoro.logger.debug('HTTP client %s: %s' % (self.client_address[0], fmt % args))
+            # asyncoro.logger.debug('HTTP client %s: %s' % (self.client_address[0], fmt % args))
+            return
 
         def do_GET(self):
             if self.path == '/cluster_updates':
@@ -262,7 +262,7 @@ class HTTPServer(object):
                 self.end_headers()
                 self.wfile.write(json.dumps(terminated).encode())
                 return
-                
+
             elif self.path == '/set_poll_sec':
                 for item in form.list:
                     if item.name != 'timeout':
@@ -321,9 +321,9 @@ class HTTPServer(object):
                     if proc:
                         if proc.coros.pop(str(rcoro), None) is not None:
                             proc.coros_done += 1
-                            self.updates[node.ip_addr] = node
                             node.update_time = time.time()
-            elif isinstance(msg, discoro.StatusMessage):
+                            self.updates[node.ip_addr] = node
+            elif isinstance(msg, StatusMessage):
                 if msg.status == discoro.Scheduler.CoroCreated:
                     rcoro = msg.info
                     node = self.nodes.get(rcoro.coro.location.addr)
@@ -332,28 +332,37 @@ class HTTPServer(object):
                         if proc:
                             proc.coros[str(rcoro.coro)] = rcoro
                             proc.coros_submitted += 1
-                            self.updates[node.ip_addr] = node
                             node.update_time = time.time()
-                else:
-                    asyncoro.logger.debug('Node/Process status: %s, %s' % (msg.status, msg.info))
-                    if msg.status == discoro.Scheduler.ProcInitialized:
-                        node = self.nodes.get(msg.info.addr)
-                        if not node:
-                            node = HTTPServer._Node(msg.info.addr)
-                            self.nodes[msg.info.addr] = node
-                        node.procs[str(msg.info)] = HTTPServer._Proc(msg.info)
-                        self.updates[node.ip_addr] = node
+                            self.updates[node.ip_addr] = node
+                elif msg.status == discoro.Scheduler.ProcInitialized:
+                    node = self.nodes.get(msg.info.addr)
+                    if not node:
+                        node = HTTPServer._Node(msg.info.addr)
+                        node.status = discoro.Scheduler.NodeInitialized
+                        self.nodes[msg.info.addr] = node
+                    proc = HTTPServer._Proc(msg.info)
+                    proc.status = msg.status
+                    node.procs[str(msg.info)] = proc
+                    node.update_time = time.time()
+                    self.updates[node.ip_addr] = node
+                elif msg.status in (discoro.Scheduler.ProcClosed, discoro.Scheduler.ProcIgnore,
+                                    discoro.Scheduler.ProcDisconnected):
+                    node = self.nodes.get(msg.info.addr)
+                    if node:
+                        node.procs.pop(str(msg.info))
+                        if not node.procs:
+                            self.nodes.pop(msg.info.addr)
                         node.update_time = time.time()
-                    elif msg.status == discoro.Scheduler.ProcClosed:
-                        node = self.nodes.get(msg.info.addr)
-                        if node:
-                            node.procs.pop(str(msg.info))
-                            if not node.procs:
-                                self.nodes.pop(msg.info.addr)
-                            self.updates[node.ip_addr] = node
-                            node.update_time = time.time()
+                        self.updates[node.ip_addr] = node
+                elif msg.status in (discoro.Scheduler.NodeInitialized,
+                                    discoro.Scheduler.NodeClosed, discoro.Scheduler.NodeIgnore,
+                                    discoro.Scheduler.NodeDisconnected):
+                    node = self.nodes.get(msg.info)
+                    if node:
+                        node.status = msg.status
+                        node.update_time = time.time()
             else:
-                asyncoro.logger.warning('     ****** msg ignored: %s' % type(msg))
+                asyncoro.logger.warning('Status message ignored: %s' % type(msg))
 
     def shutdown(self, wait=True):
         """This method should be called by user program to close the

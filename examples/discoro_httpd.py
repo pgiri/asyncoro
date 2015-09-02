@@ -61,22 +61,20 @@ def client_proc(computation, coro=None):
         c = C(i)
         c.n = random.uniform(50, 90)
         rcoro = yield computation.run(compute, c, coro)
-        if isinstance(rcoro, asyncoro.Coro):
-            pass
-        else:
+        if not isinstance(rcoro, asyncoro.Coro):
             print('failed to create remote coroutine for %s: %s' % (c, rcoro))
 
     yield computation.close()
 
 if __name__ == '__main__':
-    import os, threading, httpd
+    import os, threading, asyncoro.httpd
     asyncoro.logger.setLevel(logging.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start it (private scheduler):
     discoro.Scheduler()
     # send generator function and class C (as the computation uses
     # objects of C)
-    http_server = httpd.HTTPServer()
+    http_server = asyncoro.httpd.HTTPServer()
     computation = discoro.Computation([compute, C])
     coro = asyncoro.Coro(client_proc, computation)
     # each time anything other than 'quit' or 'exit' is entered, new
@@ -88,3 +86,4 @@ if __name__ == '__main__':
             break
         else:
             coro.send('new')
+    http_server.shutdown()
