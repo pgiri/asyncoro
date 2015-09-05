@@ -45,7 +45,7 @@ def status_proc(client, coro=None):
                 print('rcoro %s failed: %s / %s' % (msg.args[0], msg.args[1][0], msg.args[1][1]))
         elif isinstance(msg, StatusMessage):
             print('Status: %s / %s' % (msg.info, msg.status))
-            if msg.status == discoro.Scheduler.ProcInitialized:
+            if msg.status == discoro.Scheduler.ServerInitialized:
                 # wait until 2 processes ready
                 procs_ready += 1
                 if procs_ready == 2:

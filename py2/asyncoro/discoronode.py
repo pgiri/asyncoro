@@ -4,10 +4,10 @@
 for details.
 
 This program can be used to start discoro server processes so discoro
-scheduler (see 'discoro.py') can send computations to these processes
-for executing distributed communicating proceses (coroutines). All
-coroutines in a process execute in the same thread in a process, so
-multiple CPUs are not used by one process. If CPU intensive
+scheduler (see 'discoro.py') can send computations to these server
+processes for executing distributed communicating proceses
+(coroutines). All coroutines in a server execute in the same thread,
+so multiple CPUs are not used by one server. If CPU intensive
 computations are to be run on systems with multiple processors, then
 this program should be run with multiple instances (see below for '-c'
 option to this program).
@@ -45,19 +45,19 @@ def discoro_proc():
             self.__dict__.update(kwargs)
 
     _discoro_coro = asyncoro.AsynCoro.cur_coro()
-    _discoro_coro.register('discoro_proc')
+    _discoro_coro.register('discoro_server')
     _discoro_name = asyncoro.AsynCoro.instance().name
     asyncoro.AsynCoro.instance().dest_path = os.path.join(
-        'discoro', 'proc%s' % (_discoro_name[_discoro_name.rindex('-'):]))
+        'discoro', 'server%s' % (_discoro_name[_discoro_name.rindex('-'):]))
     _discoro_dest_path = asyncoro.AsynCoro.instance().dest_path
-    _discoro_pid_path = os.path.join(_discoro_dest_path, '..', 'proc%s.pid' %
+    _discoro_pid_path = os.path.join(_discoro_dest_path, '..', 'server%s.pid' %
                                      _discoro_name[_discoro_name.rindex('-'):])
     _discoro_pid_path = os.path.normpath(_discoro_pid_path)
     # TODO: is file locking necessary?
     if os.path.exists(_discoro_pid_path):
         pid = open(_discoro_pid_path, 'r').read()
         print('\n   Another discoronode seems to be running;\n'
-              '   make sure process with ID %s quit and remove "%s"\n' % (pid, _discoro_pid_path))
+              '   make sure server with ID %s quit and remove "%s"\n' % (pid, _discoro_pid_path))
         import signal
         os.kill(os.getpid(), signal.SIGTERM)
     if os.path.isdir(_discoro_dest_path):
@@ -66,7 +66,7 @@ def discoro_proc():
     os.chdir(_discoro_dest_path)
     with open(_discoro_pid_path, 'w') as _discoro_var:
         _discoro_var.write('%s' % os.getpid())
-    asyncoro.logger.debug('discoro process "%s" started at %s; '
+    asyncoro.logger.debug('discoro server "%s" started at %s; '
                           'computation files will be saved in "%s"' %
                           (_discoro_name, _discoro_coro.location, _discoro_dest_path))
     _discoro_req = _discoro_client = _discoro_auth = _discoro_msg = None
@@ -107,7 +107,7 @@ def discoro_proc():
                ((time.time() - _discoro_nonlocals.busy_time) > _discoro_computation.zombie_period)):
                 asyncoro.logger.debug('%s: closing zombie computation "%s"' %
                                       (coro.location, _discoro_computation._auth))
-                _discoro_pulse_coro.send({'status': 'ProcClosed', 'location': coro.location})
+                _discoro_pulse_coro.send({'status': 'ServerClosed', 'location': coro.location})
 
     def _discoro_peer_status(coro=None):
         coro.set_daemon()
@@ -211,7 +211,7 @@ def discoro_proc():
                 continue
             asyncoro.logger.debug('%s deleting computation "%s"' %
                                   (_discoro_coro.location, _discoro_computation._auth))
-            # TODO: is it better to quit this process and start another?
+            # TODO: is it better to quit this server and start another?
             for _discoro_var in _discoro_job_coros:
                 _discoro_var.terminate()
             _discoro_job_coros = set()
@@ -373,18 +373,18 @@ if __name__ == '__main__':
     if not _discoro_name:
         _discoro_name = socket.gethostname()
         if not _discoro_name:
-            _discoro_name = 'discoro_proc'
+            _discoro_name = 'discoro_server'
 
     _discoro_queue = multiprocessing.Queue()
-    _discoro_processes = []
-    for _discoro_proc_id in range(1, _discoro_cpus):
-        _discoro_config['name'] = _discoro_name + '-%s' % _discoro_proc_id
-        _discoro_processes.append(multiprocessing.Process(target=_discoro_process,
-                                                          args=(_discoro_config, _discoro_queue)))
-        _discoro_processes[-1].start()
+    _discoro_servers = []
+    for _discoro_server_id in range(1, _discoro_cpus):
+        _discoro_config['name'] = _discoro_name + '-%s' % _discoro_server_id
+        _discoro_servers.append(multiprocessing.Process(target=_discoro_process,
+                                                        args=(_discoro_config, _discoro_queue)))
+        _discoro_servers[-1].start()
         time.sleep(0.05)
-    _discoro_proc_id = _discoro_cpus
-    _discoro_config['name'] = _discoro_name + '-%s' % _discoro_proc_id
+    _discoro_server_id = _discoro_cpus
+    _discoro_config['name'] = _discoro_name + '-%s' % _discoro_server_id
     _discoro_scheduler = asyncoro.AsynCoro(**_discoro_config)
     _discoro_coro = asyncoro.Coro(discoro_proc)
 
@@ -395,20 +395,20 @@ if __name__ == '__main__':
         except KeyboardInterrupt:
             break
 
-    asyncoro.logger.debug('terminating processes')
-    # make sure all processes quit; otherwise, multiple keyboard
-    # interrupts can leave processes hanging, with unpredictable behavior
+    asyncoro.logger.debug('terminating servers')
+    # make sure all servers quit; otherwise, multiple keyboard
+    # interrupts can leave servers hanging, with unpredictable behavior
     while True:
         try:
             while not _discoro_queue.empty():
                 asyncoro.unserialize(_discoro_queue.get()).send({'req': 'quit'})
             _discoro_coro.send({'req': 'quit'})
 
-            for _discoro_proc_id, _discoro_proc in enumerate(_discoro_processes, start=1):
-                if _discoro_proc.is_alive():
-                    asyncoro.logger.info('  -- waiting for process %s to finish' % _discoro_proc_id)
-                    _discoro_proc.join()
+            for _discoro_server_id, _discoro_server in enumerate(_discoro_servers, start=1):
+                if _discoro_server.is_alive():
+                    asyncoro.logger.info('  -- waiting for server %s to finish' % _discoro_server_id)
+                    _discoro_server.join()
             break
         except KeyboardInterrupt:
-            print('waiting for processes to quit')
+            print('waiting for servers to quit')
             continue

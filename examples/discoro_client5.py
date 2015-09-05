@@ -98,8 +98,8 @@ def client_proc(computation, data_file, njobs, coro=None):
                 # schedule another job at this process
                 submit_job_coro.send(rcoro.location)
         elif isinstance(msg, StatusMessage):
-            asyncoro.logger.debug('Node/Process status: %s, %s' % (msg.status, msg.info))
-            if msg.status == discoro.Scheduler.ProcInitialized:
+            asyncoro.logger.debug('Node/Server status: %s, %s' % (msg.status, msg.info))
+            if msg.status == discoro.Scheduler.ServerInitialized:
                 # a new process is available; initialize it
                 asyncoro.Coro(init_proc, msg.info)
         else:

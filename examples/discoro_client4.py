@@ -96,8 +96,8 @@ def submit_jobs_proc(computation, njobs, coro=None):
                     asyncoro.Coro(client_proc, submitted, rcoro)
                 submitted += 1
         elif isinstance(msg, StatusMessage):
-            # asyncoro.logger.debug('Node/Process status: %s, %s' % (msg.status, msg.info))
-            if msg.status == discoro.Scheduler.ProcInitialized and submitted < njobs:
+            # asyncoro.logger.debug('Node/Server status: %s, %s' % (msg.status, msg.info))
+            if msg.status == discoro.Scheduler.ServerInitialized and submitted < njobs:
                 # a new process found; submit a job
                 rcoro = yield computation.run_at(msg.info, rcoro_proc)
                 if isinstance(rcoro, asyncoro.Coro):

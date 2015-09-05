@@ -38,36 +38,34 @@
             if (node.hasOwnProperty('ip_addr')) {
               node_ip_addr = node.ip_addr;
               $('#node_ip_addr').text(node.ip_addr);
-              $('#node_name').text(node.name);
-              $('#node_procs').text(node.procs.length);
+              $('#node_servers').text(node.servers.length);
               $('#node_coros_submitted').text(node.coros_submitted);
               $('#node_coros_done').text(node.coros_done);
               $('#node_coros_running').text(node.coros_submitted - node.coros_done);
               $('#node_update').text((new Date(1000 * node.update_time)).toLocaleTimeString());
               if ($('#node').is(':hidden')) {
                 $('#node').show();
-                $('#timeout-div').show();
               }
 
               var rows = '';
-              $.each(node.procs, function(i, proc) {
+              $.each(node.servers, function(i, server) {
                 rows += '<tr><td>' + (i + 1) + '</td>' +
-                  '<td><a href="process.html?location=' + proc.location + '" ' + 'title="View coros on ' +
-                  proc.location + '">' + proc.location + '</a></td><td>' +
-                  proc.coros_submitted + '</td><td>' + proc.coros_done + '</td><td>' +
-                  (proc.coros_submitted - proc.coros_done) + '</td><td>' +
-                  (new Date(1000 * proc.update_time)).toLocaleTimeString() + '</td></tr>';
+                  '<td><a href="server.html?location=' + server.location + '" ' + 'title="View coros on ' +
+                  server.location + '">' + server.location + '</a></td><td>' +
+                  server.coros_submitted + '</td><td>' + server.coros_done + '</td><td>' +
+                  (server.coros_submitted - server.coros_done) + '</td><td>' +
+                  (new Date(1000 * server.update_time)).toLocaleTimeString() + '</td></tr>';
 
               });
-              if (node.procs.length > 0) {
-                if ($('#procs').is(':hidden')) {
-                  $('#procs').show();
+              if (node.servers.length > 0) {
+                if ($('#servers').is(':hidden')) {
+                  $('#servers').show();
                 }
-                $('#procs-table tbody').html(rows);
+                $('#servers-table tbody').html(rows);
               } else {
-                $('#procs').hide();
+                $('#servers').hide();
                 $('#messages').append('<li style="margin:10px 0;"><span class="border">' +
-                                      'No processes running on this node.</span></li>');
+                                      'No servers running on this node.</span></li>');
               }
 
               var now = new Date();
@@ -78,8 +76,7 @@
             } else {
               $('#messages').append('<li>Failed to get information about "' + host + '"</li>');
               $('#node').hide();
-              $('#timeout-div').hide();
-              $('#procs').hide();
+              $('#servers').hide();
             }
 
           })
@@ -96,52 +93,53 @@
 
         if (!host) {
           $('#node').hide();
-          $('#timeout-div').hide();
-          $('#procs').hide();
+          $('#servers').hide();
         } else {
           show_node(host);
         }
 	
-        $('#node-update').click(function() {
-          host = $('#host').val().trim();
-          // $(this).prop('disabled', true);
-          if (timer != null) {
-            clearTimeout(timer);
-            timer = null;
-          }
-          show_node(host);
-        });
+        $('#input-update').click(function() {
+          var changed = false;
+          var inp = $('#timeout').val().trim();
+          if ($.isNumeric(inp)) {
+            inp = parseInt(inp);
+            if (inp < 1) {
+              inp = 0;
+              $('#messages').append('<li>Timed updates disabled.</li>');
+            }
 
-        $('#timeout-update').click(function() {
-          var update_sec = $('#timeout-value').val();
-          if (!$.isNumeric(update_sec)) {
+            if (timeout != (1000 * inp)) {
+              changed = true;
+              $.ajax({
+                url: '/set_poll_sec',
+                method: 'POST',
+                data: {timeout: inp},
+                timeout: 1000
+              });
+              $('#timeout').val(inp);
+              timeout = 1000 * inp;
+            }
+          } else {
             $('#messages').append('<li>Invalid timeout value ignored.</li>');
-            $('#timeout-value').val(timeout / 1000);
-            return false;
-          }
-          update_sec = parseInt(update_sec);
-          if (timer != null) {
-            clearTimeout(timer);
-            timer = null;
+            $('#timeout').val(timeout / 1000);
           }
 
-          if (update_sec < 1) {
-            update_sec = 0;
-            $('#messages').append('<li>Timed updates disabled.</li>');
+          inp = $('#host').val().trim();
+          if (inp.length == 0) {
+            $('#messages').append('<li>Invalid host ignored.</li>');
+            $('#host').val(host);
+          } else if (inp != host) {
+            changed = true;
+            host = inp;
           }
 
-          if (timeout != (1000 * update_sec)) {
-            $.ajax({
-              url: '/set_poll_sec',
-              method: 'POST',
-              data: {timeout: update_sec},
-              timeout: 1000
-            });
+          if (changed) {
+            if (timer != null) {
+              clearTimeout(timer);
+              timer = null;
+            }
+            show_node(host);
           }
-
-          $('#timeout-value').val(update_sec);
-          timeout = 1000 * update_sec;
-          show_node(node_ip_addr);
         });
 
       });
@@ -158,7 +156,7 @@
         <ul>
           <li><a href="cluster.html">Cluster</a></li>
           <li class="active"><a href="node.html">Node</a></li>
-          <li><a href="process.html">Process</a></li>
+          <li><a href="server.html">Server</a></li>
         </ul>
       </nav>
 
@@ -170,10 +168,7 @@
             <td>IP Address</td><td id="node_ip_addr"></td>
           </tr>
           <tr>
-            <td>Name</td><td id="node_name"></td>
-          </tr>
-          <tr>
-            <td>Processes</td><td id="node_procs"></td>
+            <td>Servers</td><td id="node_servers"></td>
           </tr>
           <tr>
             <td>Coros Submitted</td><td id="node_coros_submitted"></td>
@@ -190,12 +185,12 @@
         </tbody>
       </table>
 
-      <div id="procs">
+      <div id="servers">
 
-        <table class="fancy shadow" style="margin:20px auto;" id="procs-table">
-          <caption><span class="border" style="display:inline-block;">Processes</span></caption>
+        <table class="fancy shadow" style="margin:20px auto;" id="servers-table">
+          <caption><span class="border" style="display:inline-block;">Servers</span></caption>
           <thead>
-            <tr><th></th><th>Process</th><th>Coros Submitted</th><th>Coros Done</th>
+            <tr><th></th><th>Server</th><th>Coros Submitted</th><th>Coros Done</th>
               <th>Coros Running</th><th>Last Update</th></tr>
           </thead>
           <tbody>
@@ -206,20 +201,18 @@
 
       <hr style="margin:10px;" />
 
-      <div id="timeout-div" style="margin:10px auto;">
-        <span class="border" style="padding:10px;display:inline-block;">
-          <strong>Update Interval Seconds:</strong>
-          <input style="width:3em;" maxlength="6" type="text" id="timeout-value" value="%(TIMEOUT)s" />
-          <button type="button" id="timeout-update" style="margin-left:5px;">Update</button>
-        </span>
-      </div>
-
-      <div style="margin:10px auto;">
-        <span class="border" style="padding:10px;display:inline-block;">
-          <strong>Name or IP of Node to Show : </strong>
-          <input style="width:10em;" maxlength="32" type="text" id="host" value="" />
-          <button type="button" id="node-update" style="margin-left:5px;">Update</button>
-        </span>
+      <table id="inputs" style="margin:10px auto;text-align:left;">
+        <tr>
+          <td><strong>Update Interval Seconds:</strong></td>
+          <td><input style="width:3em;padding-right:3px;" maxlength="6" type="text" id="timeout" value="%(TIMEOUT)s" /></td>
+        </tr>
+        <tr>
+          <td><strong>Name or IP of Node to Show : </strong></td>
+          <td><input style="width:10em;padding-right:3px;" maxlength="32" type="text" id="host" value="" /></td>
+        </tr>
+      </table>
+      <div style="text-align:center;">
+        <button type="button" id="input-update" style="margin-left:5px;">Update</button>
       </div>
 
       <hr style="margin:10px;" />

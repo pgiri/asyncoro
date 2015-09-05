@@ -77,7 +77,7 @@ def status_proc(computation, coro=None):
             monitored.monitor_coro.send(msg)
         elif isinstance(msg, StatusMessage):
             # print('Status: %s / %s' % (msg.info, msg.status))
-            if msg.status == discoro.Scheduler.ProcInitialized and procs_used < 2:
+            if msg.status == discoro.Scheduler.ServerInitialized and procs_used < 2:
                 asyncoro.Coro(client_proc, msg.info, coro)
                 procs_used += 1
             elif msg.status == discoro.Scheduler.ComputationClosed:

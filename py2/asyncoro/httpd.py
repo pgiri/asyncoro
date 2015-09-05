@@ -38,13 +38,6 @@ else:
 
 class HTTPServer(object):
 
-    class _ClusterInfo(object):
-        def __init__(self, compute):
-            self.nodes = {}
-            # TODO: maintain updates for each client separately, so
-            # multiple clients can view the status?
-            self.updates = {}
-
     class _Node(object):
         def __init__(self, ip_addr, name=None):
             if not name:
@@ -52,10 +45,10 @@ class HTTPServer(object):
             self.ip_addr = ip_addr
             self.name = name
             self.status = None
-            self.procs = {}
+            self.servers = {}
             self.update_time = time.time()
 
-    class _Proc(object):
+    class _Server(object):
         def __init__(self, location):
             self.location = location
             self.status = None
@@ -78,13 +71,13 @@ class HTTPServer(object):
             if self.path == '/cluster_updates':
                 self._ctx._lock.acquire()
                 updates = [
-                    {'ip_addr': node.ip_addr, 'name': node.name, 'procs': len(node.procs),
+                    {'ip_addr': node.ip_addr, 'name': node.name, 'servers': len(node.servers),
                      'update_time': node.update_time,
-                     'coros_submitted': sum(proc.coros_submitted for proc in node.procs.values()),
-                     'coros_done': sum(proc.coros_done for proc in node.procs.values())}
-                    for node in self._ctx.updates.values()
+                     'coros_submitted': sum(server.coros_submitted for server in node.servers.values()),
+                     'coros_done': sum(server.coros_done for server in node.servers.values())}
+                    for node in self._ctx._updates.values()
                     ]
-                self._ctx.updates = {}
+                self._ctx._updates = {}
                 self._ctx._lock.release()
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
@@ -94,11 +87,11 @@ class HTTPServer(object):
             elif self.path == '/cluster_status':
                 self._ctx._lock.acquire()
                 status = [
-                    {'ip_addr': node.ip_addr, 'name': node.name, 'procs': len(node.procs),
+                    {'ip_addr': node.ip_addr, 'name': node.name, 'servers': len(node.servers),
                      'update_time': node.update_time,
-                     'coros_submitted': sum(proc.coros_submitted for proc in node.procs.values()),
-                     'coros_done': sum(proc.coros_done for proc in node.procs.values())}
-                    for node in self._ctx.nodes.values()
+                     'coros_submitted': sum(server.coros_submitted for server in node.servers.values()),
+                     'coros_done': sum(server.coros_done for server in node.servers.values())}
+                    for node in self._ctx._nodes.values()
                     ]
                 self._ctx._lock.release()
                 self.send_response(200)
@@ -147,43 +140,43 @@ class HTTPServer(object):
         def do_POST(self):
             form = cgi.FieldStorage(fp=self.rfile, headers=self.headers,
                                     environ={'REQUEST_METHOD': 'POST'})
-            if self.path == '/proc_info':
-                proc = None
+            if self.path == '/server_info':
+                server = None
                 max_coros = 0
                 for item in form.list:
                     if item.name == 'location':
                         m = re.match('^(\d+[\.\d]+):(\d+)$', item.value)
                         if m:
-                            node = self._ctx.nodes.get(m.group(1))
+                            node = self._ctx._nodes.get(m.group(1))
                             if node:
-                                proc = node.procs.get('%s:%s' % (m.group(1), m.group(2)))
+                                server = node.servers.get('%s:%s' % (m.group(1), m.group(2)))
                     elif item.name == 'limit':
                         try:
                             max_coros = int(item.value)
                         except:
                             pass
-                if proc:
-                    if 0 < max_coros < len(proc.coros):
+                if server:
+                    if 0 < max_coros < len(server.coros):
                         if sys.version_info.major == 2:
-                            iterrcoros = proc.coros.itervalues()
+                            iterrcoros = server.coros.itervalues()
                         else:
-                            iterrcoros = proc.coros.values()
+                            iterrcoros = server.coros.values()
                         rcoros = []
                         for i, rcoro in enumerate(iterrcoros):
                             if i >= max_coros:
                                 break
                             rcoros.append(rcoro)
                     else:
-                        rcoros = proc.coros.values()
+                        rcoros = server.coros.values()
                     rcoros = [{'coro': str(rcoro.coro), 'name': rcoro.coro.name,
                                'args': ', '.join(str(arg) for arg in rcoro.args),
                                'kwargs': ', '.join('%s=%s' % (key, val)
                                                    for key, val in rcoro.kwargs.items()),
                                'start_time': rcoro.start_time}
                               for rcoro in rcoros]
-                    info = {'location': str(proc.location),
-                            'coros_submitted': proc.coros_submitted,
-                            'coros_done': proc.coros_done,
+                    info = {'location': str(server.location),
+                            'coros_submitted': server.coros_submitted,
+                            'coros_done': server.coros_done,
                             'coros': rcoros, 'update_time': node.update_time}
                 else:
                     info = {}
@@ -204,21 +197,21 @@ class HTTPServer(object):
                             except:
                                 ip_addr = item.value
                         break
-                node = self._ctx.nodes.get(ip_addr)
+                node = self._ctx._nodes.get(ip_addr)
                 if node:
                     info = {'ip_addr': node.ip_addr, 'name': node.name,
                             'update_time': node.update_time,
-                            'coros_submitted': sum(proc.coros_submitted
-                                                   for proc in node.procs.values()),
-                            'coros_done': sum(proc.coros_done
-                                              for proc in node.procs.values()),
-                            'procs': [
-                                {'location': str(proc.location),
-                                 'coros_submitted': proc.coros_submitted,
-                                 'coros_done': proc.coros_done,
-                                 'coros_running': len(proc.coros),
+                            'coros_submitted': sum(server.coros_submitted
+                                                   for server in node.servers.values()),
+                            'coros_done': sum(server.coros_done
+                                              for server in node.servers.values()),
+                            'servers': [
+                                {'location': str(server.location),
+                                 'coros_submitted': server.coros_submitted,
+                                 'coros_done': server.coros_done,
+                                 'coros_running': len(server.coros),
                                  'update_time': node.update_time}
-                                for proc in node.procs.values()
+                                for server in node.servers.values()
                                 ]
                             }
                 else:
@@ -247,13 +240,13 @@ class HTTPServer(object):
                     s = location.split(':')
                     if len(s) != 2:
                         continue
-                    node = self._ctx.nodes.get(s[0])
+                    node = self._ctx._nodes.get(s[0])
                     if not node:
                         continue
-                    proc = node.procs.get(location)
-                    if not proc:
+                    server = node.servers.get(location)
+                    if not server:
                         continue
-                    rcoro = proc.coros.get(coro)
+                    rcoro = server.coros.get(coro)
                     if rcoro and rcoro.coro.terminate() == 0:
                         terminated.append(coro)
                 self._ctx._lock.release()
@@ -290,8 +283,8 @@ class HTTPServer(object):
         self._lock = threading.Lock()
         if not DocumentRoot:
             DocumentRoot = os.path.join(os.path.dirname(__file__), 'data')
-        self.nodes = {}
-        self.updates = {}
+        self._nodes = {}
+        self._updates = {}
         if poll_sec < 1:
             asyncoro.logger.warning('invalid poll_sec value %s; it must be at least 1' % poll_sec)
             poll_sec = 1
@@ -315,49 +308,49 @@ class HTTPServer(object):
             msg = yield coro.receive()
             if isinstance(msg, asyncoro.MonitorException):
                 rcoro = msg.args[0]
-                node = self.nodes.get(rcoro.location.addr)
+                node = self._nodes.get(rcoro.location.addr)
                 if node:
-                    proc = node.procs.get(str(rcoro.location))
-                    if proc:
-                        if proc.coros.pop(str(rcoro), None) is not None:
-                            proc.coros_done += 1
+                    server = node.servers.get(str(rcoro.location))
+                    if server:
+                        if server.coros.pop(str(rcoro), None) is not None:
+                            server.coros_done += 1
                             node.update_time = time.time()
-                            self.updates[node.ip_addr] = node
+                            self._updates[node.ip_addr] = node
             elif isinstance(msg, StatusMessage):
                 if msg.status == discoro.Scheduler.CoroCreated:
                     rcoro = msg.info
-                    node = self.nodes.get(rcoro.coro.location.addr)
+                    node = self._nodes.get(rcoro.coro.location.addr)
                     if node:
-                        proc = node.procs.get(str(rcoro.coro.location))
-                        if proc:
-                            proc.coros[str(rcoro.coro)] = rcoro
-                            proc.coros_submitted += 1
+                        server = node.servers.get(str(rcoro.coro.location))
+                        if server:
+                            server.coros[str(rcoro.coro)] = rcoro
+                            server.coros_submitted += 1
                             node.update_time = time.time()
-                            self.updates[node.ip_addr] = node
-                elif msg.status == discoro.Scheduler.ProcInitialized:
-                    node = self.nodes.get(msg.info.addr)
+                            self._updates[node.ip_addr] = node
+                elif msg.status == discoro.Scheduler.ServerInitialized:
+                    node = self._nodes.get(msg.info.addr)
                     if not node:
                         node = HTTPServer._Node(msg.info.addr)
                         node.status = discoro.Scheduler.NodeInitialized
-                        self.nodes[msg.info.addr] = node
-                    proc = HTTPServer._Proc(msg.info)
-                    proc.status = msg.status
-                    node.procs[str(msg.info)] = proc
+                        self._nodes[msg.info.addr] = node
+                    server = HTTPServer._Server(msg.info)
+                    server.status = msg.status
+                    node.servers[str(msg.info)] = server
                     node.update_time = time.time()
-                    self.updates[node.ip_addr] = node
-                elif msg.status in (discoro.Scheduler.ProcClosed, discoro.Scheduler.ProcIgnore,
-                                    discoro.Scheduler.ProcDisconnected):
-                    node = self.nodes.get(msg.info.addr)
+                    self._updates[node.ip_addr] = node
+                elif msg.status in (discoro.Scheduler.ServerClosed, discoro.Scheduler.ServerIgnore,
+                                    discoro.Scheduler.ServerDisconnected):
+                    node = self._nodes.get(msg.info.addr)
                     if node:
-                        node.procs.pop(str(msg.info))
-                        if not node.procs:
-                            self.nodes.pop(msg.info.addr)
+                        node.servers.pop(str(msg.info), None)
+                        if not node.servers:
+                            self._nodes.pop(msg.info.addr)
                         node.update_time = time.time()
-                        self.updates[node.ip_addr] = node
+                        self._updates[node.ip_addr] = node
                 elif msg.status in (discoro.Scheduler.NodeInitialized,
                                     discoro.Scheduler.NodeClosed, discoro.Scheduler.NodeIgnore,
                                     discoro.Scheduler.NodeDisconnected):
-                    node = self.nodes.get(msg.info)
+                    node = self._nodes.get(msg.info)
                     if node:
                         node.status = msg.status
                         node.update_time = time.time()

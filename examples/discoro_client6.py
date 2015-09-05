@@ -108,8 +108,8 @@ def status_proc(computation, coro=None):
                 asyncoro.logger.warning('%s terminated with "%s"' %
                                         (rcoro.location, str(msg.args[1])))
         elif isinstance(msg, StatusMessage):
-            asyncoro.logger.debug('Node/Process status: %s, %s' % (msg.status, msg.info))
-            if msg.status == discoro.Scheduler.ProcInitialized:
+            asyncoro.logger.debug('Node/Server status: %s, %s' % (msg.status, msg.info))
+            if msg.status == discoro.Scheduler.ServerInitialized:
                 # a new process is available
                 if rcoro_avg is None:
                     # run average process with threshold 0.4, window size 10
