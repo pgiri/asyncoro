@@ -26,7 +26,7 @@ import traceback
 
 import asyncoro.disasyncoro as asyncoro
 import asyncoro.discoro as discoro
-from asyncoro.discoro import StatusMessage
+from asyncoro.discoro import DiscoroStatus
 
 if sys.version_info.major > 2:
     import http.server as BaseHTTPServer
@@ -59,7 +59,6 @@ class HTTPServer(object):
     class _HTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         def __init__(self, ctx, DocumentRoot, *args):
             self._ctx = ctx
-            self._ctx._http_handler = self
             self.DocumentRoot = DocumentRoot
             BaseHTTPServer.BaseHTTPRequestHandler.__init__(self, *args)
 
@@ -73,7 +72,8 @@ class HTTPServer(object):
                 updates = [
                     {'ip_addr': node.ip_addr, 'name': node.name, 'servers': len(node.servers),
                      'update_time': node.update_time,
-                     'coros_submitted': sum(server.coros_submitted for server in node.servers.values()),
+                     'coros_submitted': sum(server.coros_submitted
+                                            for server in node.servers.values()),
                      'coros_done': sum(server.coros_done for server in node.servers.values())}
                     for node in self._ctx._updates.values()
                     ]
@@ -89,7 +89,8 @@ class HTTPServer(object):
                 status = [
                     {'ip_addr': node.ip_addr, 'name': node.name, 'servers': len(node.servers),
                      'update_time': node.update_time,
-                     'coros_submitted': sum(server.coros_submitted for server in node.servers.values()),
+                     'coros_submitted': sum(server.coros_submitted
+                                            for server in node.servers.values()),
                      'coros_done': sum(server.coros_done for server in node.servers.values())}
                     for node in self._ctx._nodes.values()
                     ]
@@ -289,7 +290,6 @@ class HTTPServer(object):
             asyncoro.logger.warning('invalid poll_sec value %s; it must be at least 1' % poll_sec)
             poll_sec = 1
         self._poll_sec = poll_sec
-        self._http_handler = None
         self._server = BaseHTTPServer.HTTPServer((host, port), lambda *args:
                                   self.__class__._HTTPRequestHandler(self, DocumentRoot, *args))
         if certfile:
@@ -316,7 +316,7 @@ class HTTPServer(object):
                             server.coros_done += 1
                             node.update_time = time.time()
                             self._updates[node.ip_addr] = node
-            elif isinstance(msg, StatusMessage):
+            elif isinstance(msg, DiscoroStatus):
                 if msg.status == discoro.Scheduler.CoroCreated:
                     rcoro = msg.info
                     node = self._nodes.get(rcoro.coro.location.addr)
@@ -362,7 +362,7 @@ class HTTPServer(object):
         http server.
         """
         if wait:
-            asyncoro.logger.debug(
+            asyncoro.logger.info(
                 'HTTP server waiting for %s seconds for client updates before quitting',
                 self._poll_sec)
             time.sleep(self._poll_sec)

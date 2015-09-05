@@ -30,14 +30,14 @@ import atexit
 import asyncoro.disasyncoro as asyncoro
 from asyncoro import Coro, logger
 
-__all__ = ['Scheduler', 'Computation', 'StatusMessage']
+__all__ = ['Scheduler', 'Computation', 'DiscoroStatus']
 
 MsgTimeout = 10
 MinPulseInterval = MsgTimeout
 MaxPulseInterval = 10 * MinPulseInterval
 
 # status about nodes / servers are sent with this structure
-StatusMessage = collections.namedtuple('StatusMessage', ['status', 'info'])
+DiscoroStatus = collections.namedtuple('DiscoroStatus', ['status', 'info'])
 CoroInfo = collections.namedtuple('CoroInfo', ['coro', 'args', 'kwargs', 'start_time'])
 
 # for internal use only
@@ -248,7 +248,7 @@ class Computation(object):
                 rcoro = yield coro.receive(self.timeout)
                 if self.status_coro and isinstance(rcoro, Coro):
                     msg = CoroInfo(rcoro, args, kwargs, time.time())
-                    self.status_coro.send(StatusMessage(Scheduler.CoroCreated, msg))
+                    self.status_coro.send(DiscoroStatus(Scheduler.CoroCreated, msg))
             else:
                 rcoro = None
             raise StopIteration(rcoro)
@@ -294,7 +294,7 @@ class Computation(object):
                     rcoros.append(rcoro)
                     if self.status_coro:
                         msg = CoroInfo(rcoro, args, kwargs, time.time())
-                        self.status_coro.send(StatusMessage(Scheduler.CoroCreated, msg))
+                        self.status_coro.send(DiscoroStatus(Scheduler.CoroCreated, msg))
             raise StopIteration(rcoros)
 
         yield Coro(_run, self).finish()
@@ -407,7 +407,7 @@ class Computation(object):
 class Scheduler(object, metaclass=asyncoro.MetaSingleton):
 
 
-    # status indications ('status' attribute of StatusMessage)
+    # status indications ('status' attribute of DiscoroStatus)
     NodeDiscovered = 1
     NodeInitialized = 2
     NodeClosed = 3
@@ -569,7 +569,7 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
                         server = node.servers.pop(str(msg.location), None)
                         if server:
                             if computation and computation.status_coro:
-                                status_msg = StatusMessage(Scheduler.ServerDisconnected,
+                                status_msg = DiscoroStatus(Scheduler.ServerDisconnected,
                                                            server.location)
                                 computation.status_coro.send(status_msg)
                             # TODO: (re)start process elsewhere (fault-tolerant)?
@@ -578,7 +578,7 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
                             else:
                                 self._nodes.pop(server.location.addr, None)
                                 if computation and computation.status_coro:
-                                    status_msg = StatusMessage(Scheduler.NodeDisconnected,
+                                    status_msg = DiscoroStatus(Scheduler.NodeDisconnected,
                                                                server.location.addr)
                                     computation.status_coro.send(status_msg)
                                 Coro(self.__close_node, node)
@@ -627,13 +627,13 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
                                     if self._cur_computation and \
                                            self._cur_computation.status_coro:
                                         self._cur_computation.status_coro.send(
-                                            StatusMessage(Scheduler.NodeClosed, node.addr))
+                                            DiscoroStatus(Scheduler.NodeClosed, node.addr))
                                     if all(n.status != Scheduler.NodeInitialized
                                            for n in self._nodes.values()):
                                         if self._cur_computation and \
                                                self._cur_computation.status_coro:
                                             self._cur_computation.status_coro.send(
-                                                StatusMessage(Scheduler.ComputationClosed,
+                                                DiscoroStatus(Scheduler.ComputationClosed,
                                                               coro.location))
                                         Coro(self.__close_computation)
 
@@ -712,13 +712,13 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
                         if isinstance(server.coro, Coro):
                             server.status = Scheduler.ServerDiscovered
                             if self._cur_computation.status_coro:
-                                status_msg = StatusMessage(server.status, server.location)
+                                status_msg = DiscoroStatus(server.status, server.location)
                             self._cur_computation.status_coro.send(status_msg)
                     if (node.status != Scheduler.NodeDiscovered and
                        server.status == Scheduler.ServerDiscovered):
                         node.status = Scheduler.NodeDiscovered
                         if self._cur_computation.status_coro:
-                            status_msg = StatusMessage(node.status, node.addr)
+                            status_msg = DiscoroStatus(node.status, node.addr)
                             self._cur_computation.status_coro.send(status_msg)
 
             for node in self._nodes.values():
@@ -919,7 +919,7 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
                 server.status = Scheduler.ServerDiscovered
                 raise StopIteration(0)
             if self._cur_computation.status_coro:
-                self._cur_computation.status_coro.send(StatusMessage(Scheduler.ServerDiscovered,
+                self._cur_computation.status_coro.send(DiscoroStatus(Scheduler.ServerDiscovered,
                                                                      server.location))
         computation = self._cur_computation
         server.coro.send({'req': 'setup', 'client': coro, 'computation': computation,
@@ -941,9 +941,9 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
         if node.status != Scheduler.NodeInitialized:
             node.status = Scheduler.NodeInitialized
             if computation.status_coro:
-                computation.status_coro.send(StatusMessage(node.status, node.addr))
+                computation.status_coro.send(DiscoroStatus(node.status, node.addr))
         if computation.status_coro:
-            computation.status_coro.send(StatusMessage(server.status, server.location))
+            computation.status_coro.send(DiscoroStatus(server.status, server.location))
         raise StopIteration(0)
 
     def __close_node(self, node, coro=None):
@@ -956,7 +956,7 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
         node.ncoros = 0
         node.status = Scheduler.NodeClosed
         if computation and computation.status_coro:
-            computation.status_coro.send(StatusMessage(node.status, node.addr))
+            computation.status_coro.send(DiscoroStatus(node.status, node.addr))
 
     def __close_server(self, server, coro=None):
         computation = self._cur_computation
@@ -974,7 +974,7 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
         server.coros = {}
         server.done = {}
         if computation and computation.status_coro:
-            computation.status_coro.send(StatusMessage(server.status, server.location))
+            computation.status_coro.send(DiscoroStatus(server.status, server.location))
         raise StopIteration(0)
 
     def __close_computation(self, coro=None):

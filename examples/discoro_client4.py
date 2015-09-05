@@ -13,9 +13,9 @@
 # Note that the objective is to illustrate features, so implementation
 # is not ideal. Error checking is skipped at a few places for brevity.
 
-# StatusMessage must be imported in global scope as below; otherwise,
+# DiscoroStatus must be imported in global scope as below; otherwise,
 # unserializing status messages fails (if external scheduler is used)
-from asyncoro.discoro import StatusMessage
+from asyncoro.discoro import DiscoroStatus
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
 
@@ -95,7 +95,7 @@ def submit_jobs_proc(computation, njobs, coro=None):
                 if isinstance(rcoro, asyncoro.Coro):
                     asyncoro.Coro(client_proc, submitted, rcoro)
                 submitted += 1
-        elif isinstance(msg, StatusMessage):
+        elif isinstance(msg, DiscoroStatus):
             # asyncoro.logger.debug('Node/Server status: %s, %s' % (msg.status, msg.info))
             if msg.status == discoro.Scheduler.ServerInitialized and submitted < njobs:
                 # a new process found; submit a job

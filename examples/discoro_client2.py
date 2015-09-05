@@ -7,7 +7,7 @@
 
 import sys, logging, random
 import asyncoro.discoro as discoro
-from asyncoro.discoro import StatusMessage
+from asyncoro.discoro import DiscoroStatus
 import asyncoro.disasyncoro as asyncoro
 
 # objects of C are exchanged between client and servers
@@ -43,7 +43,7 @@ def status_proc(client, coro=None):
         if isinstance(msg, asyncoro.MonitorException):
             if msg.args[1][0] != StopIteration:
                 print('rcoro %s failed: %s / %s' % (msg.args[0], msg.args[1][0], msg.args[1][1]))
-        elif isinstance(msg, StatusMessage):
+        elif isinstance(msg, DiscoroStatus):
             print('Status: %s / %s' % (msg.info, msg.status))
             if msg.status == discoro.Scheduler.ServerInitialized:
                 # wait until 2 processes ready

@@ -1,9 +1,9 @@
 # This program uses status message notifications to submit jobs to
 # discoro processes.
 
-# StatusMessage must be imported in global scope as below; otherwise,
+# DiscoroStatus must be imported in global scope as below; otherwise,
 # unserializing status messages fails (if external scheduler is used)
-from asyncoro.discoro import StatusMessage
+from asyncoro.discoro import DiscoroStatus
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
 
@@ -48,7 +48,7 @@ def client_proc(computation, njobs, coro=None):
             if status['submitted'] < njobs:
                 # schedule another job at this process
                 asyncoro.Coro(submit_job, rcoro.location)
-        elif isinstance(msg, StatusMessage):
+        elif isinstance(msg, DiscoroStatus):
             asyncoro.logger.debug('Node/Server status: %s, %s' % (msg.status, msg.info))
             if msg.status == discoro.Scheduler.ServerInitialized:
                 # a new process is ready (if special initialization is

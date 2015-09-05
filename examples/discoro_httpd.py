@@ -7,7 +7,7 @@
 
 import sys, logging, random
 import asyncoro.discoro as discoro
-from asyncoro.discoro import StatusMessage
+from asyncoro.discoro import DiscoroStatus
 import asyncoro.disasyncoro as asyncoro
 
 # objects of C are exchanged between client and servers
@@ -39,11 +39,11 @@ def status_proc(coro=None):
                 print('  rcoro %s done' % (msg.args[0]))
             else:
                 print('  rcoro %s failed: %s / %s' % (msg.args[0], msg.args[1][0], msg.args[1][1]))
-        elif isinstance(msg, StatusMessage):
+        elif isinstance(msg, DiscoroStatus):
             if msg.status == discoro.Scheduler.CoroCreated:
                 print('rcoro %s started' % msg.info.coro)
-            else:
-                print('Status: %s / %s' % (msg.status, msg.info))
+            # else:
+            #     print('Status: %s / %s' % (msg.status, msg.info))
 
         else:
             print('status msg ignored: %s' % type(msg))
@@ -58,20 +58,24 @@ def client_proc(computation, coro=None):
 
     i = 0
     while True:
-        if (yield coro.receive()) is None:
+        cmd = yield coro.receive()
+        if cmd is None:
             break
         i += 1
         c = C(i)
         c.n = random.uniform(50, 90)
-        rcoro = yield computation.run(compute, c, coro)
-        if not isinstance(rcoro, asyncoro.Coro):
-            print('failed to create remote coroutine for %s: %s' % (c, rcoro))
+        if cmd == 'servers':
+            yield computation.run_servers(compute, c, coro)
+        elif cmd == 'nodes':
+            yield computation.run_nodes(compute, c, coro)
+        else:
+            yield computation.run(compute, c, coro)
 
     yield computation.close()
 
 if __name__ == '__main__':
     import os, threading, asyncoro.httpd
-    asyncoro.logger.setLevel(logging.DEBUG)
+    # asyncoro.logger.setLevel(logging.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start it (private scheduler):
     discoro.Scheduler()
@@ -81,13 +85,15 @@ if __name__ == '__main__':
     # objects of C)
     computation = discoro.Computation([compute, C])
     coro = asyncoro.Coro(client_proc, computation)
-    # each time anything other than 'quit' or 'exit' is entered, new
-    # coroutine is scheduled
+    print('   Enter "quit" or "exit" to end the program, or ')
+    print('   Enter "servers" to schedule coroutine on each server, or ')
+    print('   Enter "nodes" to schedule coroutine on each node, or ')
+    print('   Enter anything else to schedule a coroutine on one of the servers')
     while True:
         cmd = sys.stdin.readline().strip().lower()
         if cmd == 'quit' or cmd == 'exit':
             coro.send(None)
             break
         else:
-            coro.send('new')
+            coro.send(cmd)
     http_server.shutdown()

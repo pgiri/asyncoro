@@ -7,7 +7,7 @@
 
 import sys, logging, random
 import asyncoro.discoro as discoro
-from asyncoro.discoro import StatusMessage
+from asyncoro.discoro import DiscoroStatus
 import asyncoro.disasyncoro as asyncoro
 
 # this generator function is sent to remote discoro servers to run
@@ -75,7 +75,7 @@ def status_proc(computation, coro=None):
         if isinstance(msg, asyncoro.MonitorException):
             # send coroutine status message to 'MonitorCoros' object
             monitored.monitor_coro.send(msg)
-        elif isinstance(msg, StatusMessage):
+        elif isinstance(msg, DiscoroStatus):
             # print('Status: %s / %s' % (msg.info, msg.status))
             if msg.status == discoro.Scheduler.ServerInitialized and procs_used < 2:
                 asyncoro.Coro(client_proc, msg.info, coro)

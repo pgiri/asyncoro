@@ -1,9 +1,9 @@
 # This example uses status messages and message passing to run remote
 # coroutines to process streaming data in real time.
 
-# StatusMessage must be imported in global scope as below; otherwise,
+# DiscoroStatus must be imported in global scope as below; otherwise,
 # unserializing status messages fails (if external scheduler is used)
-from asyncoro.discoro import StatusMessage
+from asyncoro.discoro import DiscoroStatus
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
 
@@ -107,7 +107,7 @@ def status_proc(computation, coro=None):
             else:
                 asyncoro.logger.warning('%s terminated with "%s"' %
                                         (rcoro.location, str(msg.args[1])))
-        elif isinstance(msg, StatusMessage):
+        elif isinstance(msg, DiscoroStatus):
             asyncoro.logger.debug('Node/Server status: %s, %s' % (msg.status, msg.info))
             if msg.status == discoro.Scheduler.ServerInitialized:
                 # a new process is available

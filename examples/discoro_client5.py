@@ -1,9 +1,9 @@
 # This example uses status messages and message passing to run 'setup'
 # coroutine at remote process to prepare it for processing jobs.
 
-# StatusMessage must be imported in global scope as below; otherwise,
+# DiscoroStatus must be imported in global scope as below; otherwise,
 # unserializing status messages fails (if external scheduler is used)
-from asyncoro.discoro import StatusMessage
+from asyncoro.discoro import DiscoroStatus
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
 
@@ -97,7 +97,7 @@ def client_proc(computation, data_file, njobs, coro=None):
             if status['submitted'] < njobs:
                 # schedule another job at this process
                 submit_job_coro.send(rcoro.location)
-        elif isinstance(msg, StatusMessage):
+        elif isinstance(msg, DiscoroStatus):
             asyncoro.logger.debug('Node/Server status: %s, %s' % (msg.status, msg.info))
             if msg.status == discoro.Scheduler.ServerInitialized:
                 # a new process is available; initialize it
