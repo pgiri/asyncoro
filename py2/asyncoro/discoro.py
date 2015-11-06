@@ -96,9 +96,6 @@ class Computation(object):
         if zombie_period and zombie_period < MaxPulseInterval:
             raise Exception('zombie_period must be >= %s' % MaxPulseInterval)
 
-        # TODO: add option to leave transferred files on the nodes
-        # after computation is done (such as "cleanup" in dispy)?
-
         if not isinstance(components, list):
             components = [components]
 
@@ -203,8 +200,6 @@ class Computation(object):
                     logger.warning('invalid message ignored - waiting for scheduled')
 
         yield Coro(_schedule, self).finish()
-
-    # TODO: add a way to send 'depends' to run methods?
 
     def run_at(self, where, func, *args, **kwargs):
         """Run given generator function 'func' with arguments 'args'
@@ -587,8 +582,7 @@ class Scheduler(object):
 
     def __timer_proc(self, coro=None):
         coro.set_daemon()
-        client_pulse = time.time()
-        server_check = time.time()
+        server_check = client_pulse = time.time()
         while True:
             msg = yield coro.receive(timeout=self.__pulse_interval)
             now = time.time()
@@ -620,13 +614,13 @@ class Scheduler(object):
                                        for p in node.servers.itervalues()):
                                     node.status = Scheduler.NodeClosed
                                     if self._cur_computation and \
-                                           self._cur_computation.status_coro:
+                                       self._cur_computation.status_coro:
                                         self._cur_computation.status_coro.send(
                                             DiscoroStatus(Scheduler.NodeClosed, node.addr))
                                     if all(n.status != Scheduler.NodeInitialized
                                            for n in self._nodes.itervalues()):
                                         if self._cur_computation and \
-                                               self._cur_computation.status_coro:
+                                           self._cur_computation.status_coro:
                                             self._cur_computation.status_coro.send(
                                                 DiscoroStatus(Scheduler.ComputationClosed,
                                                               coro.location))
@@ -727,6 +721,8 @@ class Scheduler(object):
         computations = {}
         while not self.__terminate:
             msg = yield coro.receive()
+            if not isinstance(msg, dict):
+                continue
             req = msg.get('req', None)
             client = msg.get('client', None)
             auth = msg.get('auth', None)
@@ -777,25 +773,26 @@ class Scheduler(object):
                         Coro(node.run, func, client)
                 elif where == 'server':
                     servers = [server for node in self._nodes.itervalues()
-                             if node.status == Scheduler.NodeInitialized
-                             for server in node.servers.itervalues()
-                             if server.status == Scheduler.ServerInitialized]
+                               if node.status == Scheduler.NodeInitialized
+                               for server in node.servers.itervalues()
+                               if server.status == Scheduler.ServerInitialized]
                     if (yield client.deliver(len(servers), self._cur_computation.timeout)) != 1:
                         continue
                     for server in servers:
                         Coro(server.run, func, client)
-                else:
-                    # node_servers
+                elif where == 'node_servers':
                     node = self._nodes.get(where)
                     if node and node.status == Scheduler.NodeInitialized:
                         servers = [server for server in node.servers.itervalues()
-                                 if server.status == Scheduler.ServerInitialized]
+                                   if server.status == Scheduler.ServerInitialized]
                     else:
                         servers = []
                     if (yield client.deliver(len(servers), self._cur_computation.timeout)) != 1:
                         continue
                     for server in servers:
                         Coro(server.run, func, client)
+                else:
+                    client.send([])
 
             elif req == 'schedule':
                 try:
@@ -876,9 +873,9 @@ class Scheduler(object):
                 # computation is not the one querying?
                 if self.__cur_client_auth == auth:
                     servers = [server.location for node in self._nodes.itervalues()
-                             if node.status == Scheduler.NodeInitialized
-                             for server in node.servers.itervalues()
-                             if server.status == Scheduler.ServerInitialized]
+                               if node.status == Scheduler.NodeInitialized
+                               for server in node.servers.itervalues()
+                               if server.status == Scheduler.ServerInitialized]
                 else:
                     servers = []
                 client.send(servers)
@@ -960,6 +957,11 @@ class Scheduler(object):
             raise StopIteration(-1)
         if server.coros:
             logger.warning('%s coros running at %s' % (len(server.coros), server.location))
+            if computation and computation.status_coro:
+                for rcoro in server.coros:
+                    status = asyncoro.MonitorException(rcoro, (Scheduler.ServerClosed, None))
+                    computation.status_coro.send(status)
+
         asyncoro.logger.debug('Closing server %s' % server.location)
         # TODO: check/indicate error?
         yield server.coro.deliver({'req': 'close', 'auth': computation._auth},
