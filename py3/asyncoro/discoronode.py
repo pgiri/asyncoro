@@ -185,7 +185,8 @@ def discoro_proc():
             os.chdir(_discoro_dest_path)
             try:
                 _discoro_computation = _discoro_msg['computation']
-                exec(_discoro_computation._code, globals())
+                if _discoro_computation._code:
+                    exec(_discoro_computation._code, globals())
                 if __name__ == '__mp_main__':  # Windows multiprocessing process
                     exec(_discoro_computation._code, sys.modules['__mp_main__'].__dict__)
             except:

@@ -40,9 +40,9 @@
         $.each(sorted_keys, function(i, key) {
           var node = nodes[key];
           rows += '<tr><td>' + (i + 1) + '</td>' +
-            '<td><a href="node.html?host=' + node.ip_addr + '" ' + 'title="View processes on ' +
+            '<td><a href="node.html?host=' + node.ip_addr + '" ' + 'title="View servers on ' +
             node.ip_addr + '">' + node.ip_addr + '</a></td><td>' + node.name + '</td><td>' +
-            node.procs + '</td><td>' + node.coros_submitted + '</td><td>' +
+            node.servers + '</td><td>' + node.coros_submitted + '</td><td>' +
             node.coros_done + '</td><td>' + (node.coros_submitted - node.coros_done) + '</td><td>' +
             node.last_update.toLocaleTimeString() + '</td></tr>';
         });
@@ -155,7 +155,7 @@
         <ul>
           <li class="active"><a href="cluster.html">Cluster</a></li>
           <li><a href="node.html">Node</a></li>
-          <li><a href="process.html">Process</a></li>
+          <li><a href="server.html">Server</a></li>
         </ul>
       </nav>
 
@@ -175,9 +175,10 @@
         </tr>
       </table>
       <table class="fancy shadow" style="text-align:right;margin:10px auto;">
+        <caption><span class="border" style="display:inline-block;">Nodes</span></caption>
         <thead>
           <tr>
-            <th></th><th>IP Address</th><th>Name</th><th>Processes</th>
+            <th></th><th>IP Address</th><th>Name</th><th>Servers</th>
             <th>Coros Submitted</th><th>Coros Done</th><th>Coros Running</th><th>Last Update</th>
           </tr>
         </thead>

@@ -83,7 +83,6 @@
 
           .fail(function(jqXHR, textStatus, errorThrown) {
             $('#messages').append('<li>Node update failed</li>');
-            $('#jobs').hide();
           });
       }
 
@@ -91,11 +90,11 @@
         var host = getLocationParam('host');
         $('#host').val(host);
 
-        if (!host) {
+        if (host) {
+          show_node(host);
+        } else {
           $('#node').hide();
           $('#servers').hide();
-        } else {
-          show_node(host);
         }
 	
         $('#input-update').click(function() {

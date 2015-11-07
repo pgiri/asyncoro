@@ -359,7 +359,7 @@ class HTTPServer(object):
 
     def shutdown(self, wait=True):
         """This method should be called by user program to close the
-        http server.
+        http server. It should be called in 'main', not in a coroutine.
         """
         if wait:
             asyncoro.logger.info(

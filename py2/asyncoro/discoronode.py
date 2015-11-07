@@ -188,7 +188,8 @@ def discoro_proc():
             os.chdir(_discoro_dest_path)
             try:
                 _discoro_computation = _discoro_msg['computation']
-                exec(_discoro_computation._code) in globals()
+                if _discoro_computation._code:
+                    exec(_discoro_computation._code) in globals()
             except:
                 _discoro_computation = None
                 asyncoro.logger.warning('invalid computation')
