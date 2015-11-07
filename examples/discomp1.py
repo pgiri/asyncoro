@@ -1,16 +1,17 @@
 # Run 'discoronode.py' program to start processes to execute
 # computations sent by this client, along with this program.
 
-# Example where this client sends computation to remote discoro
-# process to run as remote coroutines. At any time at most one
-# computation coroutine is scheduled at a process. This version hangs
-# in case of server process terminates abruptly (faults). See
-# 'discomp2.py' for an alternate version.
+# Distributed computing example where this client sends computation to
+# remote discoro process to run as remote coroutines. At any time at
+# most one computation coroutine is scheduled at a process - as done
+# in 'dispy' project. This version hangs in case of server process
+# terminates abruptly (faults). See 'discomp2.py' for an alternate
+# version.
 
 import logging, random
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
-from discoro_schedulers import ProcScheduler
+from asyncoro.discoro_schedulers import ProcScheduler
 
 
 # this generator function is sent to remote discoro servers to run
@@ -29,7 +30,7 @@ def client_proc(computation, coro=None):
             result = yield coro.receive()
             print('result: %s' % result)
 
-    job_scheduler = ProcScheduler(computation)
+    proc_scheduler = ProcScheduler(computation)
     results_coro = asyncoro.Coro(results_proc)
 
     if (yield computation.schedule()):
@@ -37,10 +38,10 @@ def client_proc(computation, coro=None):
 
     # submit jobs
     for i in range(5):
-        rcoro = yield job_scheduler.submit(compute, random.uniform(3, 10), results_coro)
+        rcoro = yield proc_scheduler.schedule(compute, random.uniform(3, 10), results_coro)
 
     # wait for all results
-    yield job_scheduler.finish()
+    yield proc_scheduler.finish()
     yield computation.close()
 
 
