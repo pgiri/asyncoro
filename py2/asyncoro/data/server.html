@@ -1,0 +1,309 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <link type="text/css" rel="stylesheet" href="asyncoro.css" />
+
+    <script type="text/javascript" src="jquery.js"></script>
+
+    <script type="text/javascript">
+    //<![CDATA[
+
+      jQuery.ajaxSettings.traditional = true;
+
+      var server_location = null;
+      var timer = null;
+      var timeout = 1000 * %(TIMEOUT)s;
+      // TODO: make max_coros an input?
+      var max_coros = 100;
+
+      function getLocationParam(param) {
+        param = param.replace(/[\[]/, '\\[').replace(/[\]]/, '\\]');
+        var regex = new RegExp('[\\?&]' + param + '=([^&#]*)'),
+        results = regex.exec(location.search);
+        return results === null ? '' : decodeURIComponent(results[1].replace(/\+/g, ' '));
+      }
+
+      function show_server(location) {
+        $.ajax({
+          url: '/server_info',
+          method: 'POST',
+          data: {location: location, limit: max_coros},
+          dataType: 'json',
+          timeout: Math.min(5000, timeout)
+        })
+
+          .done(function(server) {
+            $('#messages').html('');
+            if (server.hasOwnProperty('location')) {
+              server_location = server.location;
+              $('#server_location').text(server.location);
+              $('#server_coros_submitted').text(server.coros_submitted);
+              $('#server_coros_done').text(server.coros_done);
+              $('#server_coros_running').text(server.coros_submitted - server.coros_done);
+              $('#server_update').text((new Date(1000 * server.update_time)).toLocaleTimeString());
+              if ($('#server').is(':hidden')) {
+                $('#server').show();
+              }
+
+              var rows = '';
+              $.each(server.coros, function(i, coro) {
+                var args = coro.args;
+                if (coro.kwargs.length > 0) {
+                  if (args.length > 0) {
+                    args += ', ';
+                  }
+	          args += coro.kwargs;
+                }
+                rows += '<tr>' +
+                  '<td><input type="checkbox" name="coro" value="' + coro.coro + '_' + i + '" /></td>' +
+                  '<td>' + coro.name + '</td><td>' + args + '</td><td>' +
+                  (new Date(1000 * coro.start_time)).toLocaleTimeString() + '</td>' +
+                  '</tr>';
+              });
+
+              if (server.coros.length > 0) {
+                if ($('#coros').is(':hidden')) {
+                  $('#coros').show();
+                }
+                $('#coros-table tbody').html(rows);
+              } else {
+                $('#coros').hide();
+                $('#messages').append('<li style="margin:10px 0;"><span class="border">' +
+                                      'No coroutines running on this server.</span></li>');
+              }
+
+              var now = new Date();
+              $('#messages').append('<li>Status updated at ' + now.toLocaleTimeString() + '</li>');
+              if (timeout >= 1000) {
+                timer = setTimeout(function() { show_server(server_location) }, timeout);
+              }
+            } else {
+              $('#messages').append('<li>Failed to get information about "' + server_location + '"</li>');
+              $('#server').hide();
+              $('#coros').hide();
+            }
+
+          })
+
+          .fail(function(jqXHR, textStatus, errorThrown) {
+            $('#messages').append('<li>Server update failed</li>');
+            $('#coros').hide();
+          });
+      }
+
+      $(document).ready(function() {
+        var server_location = getLocationParam('location');
+        $('#location').val(server_location);
+        $('#max_coros').val(max_coros);
+
+        if (server_location) {
+          show_server(server_location);
+        } else {
+          $('#server').hide();
+          $('#coros').hide();
+        }
+	
+        $('#input-update').click(function() {
+          var changed = false;
+          var inp = $('#location').val().trim();
+          if (inp != server_location) {
+            changed = true;
+            server_location = inp;
+          }
+
+          inp = $('#max_coros').val();
+          if ($.isNumeric(inp)) {
+            inp = parseInt(inp);
+            if (inp < 0) {
+              inp = 0;
+            }
+            if (inp != max_coros) {
+              changed = true;
+              max_coros = inp;
+            }
+          } else {
+            $('#messages').append('<li>Invalid Max Coroutines value ignored.</li>');
+            $('#max_coros').val(max_coros);
+          }
+
+          inp = $('#timeout').val();
+          if ($.isNumeric(inp)) {
+            inp = parseInt(inp);
+            if (inp < 1) {
+              inp = 0;
+              $('#messages').append('<li>Timed updates disabled.</li>');
+            }
+            if (timeout != (1000 * inp)) {
+              changed = true;
+              $.ajax({
+                url: '/set_poll_sec',
+                method: 'POST',
+                data: {timeout: inp},
+                timeout: 1000
+              });
+              $('#timeout').val(inp);
+              timeout = 1000 * inp;
+            }
+          } else {
+            $('#messages').append('<li>Invalid timeout value ignored.</li>');
+            $('#timeout').val(timeout / 1000);
+          }
+
+          if (changed && server_location) {
+            if (timer != null) {
+              clearTimeout(timer);
+              timer = null;
+            }
+            show_server(server_location);
+          }
+        });
+
+        $('#terminate-coros').click(function() {
+          if ($('select[name="terminate-confirm"]').val() != 'Yes') {
+            $('#messages').append('<li>Terminating coros not confirmed</li>');
+            return false;
+          }
+          var terminate_coros = [];
+          $('input[type="checkbox"][name="coro"]').each(function(i) {
+            if ($(this).prop('checked')) {
+              var uid = $(this).val();
+              uid = uid.substring(0, uid.lastIndexOf('_'));
+              terminate_coros.push(uid);
+            }
+          });
+          if (terminate_coros.length == 0) {
+            return false;
+          }
+
+          $(this).prop('disabled', true);
+          $('select[name="terminate-confirm"] > option[value=""]').prop('selected', true);
+
+          $.ajax({
+            url: '/terminate_coros',
+            method: 'POST',
+            data: {coro:terminate_coros},
+            dataType: 'json',
+            timeout: 5000
+          })
+
+            .done(function(data) {
+              $.each(data, function(i, uid) {
+                var row = $('input[type="checkbox"][name="coro"][value^="' + uid + '_"]').val();
+                if (row) {
+                  row = row.substring(row.lastIndexOf('_') + 1);
+                  $('#coros-table > tbody > tr:eq(' + row + ') td').each(function(i) {
+                    $(this).css('color', 'Gray');
+                    if (i == 3) {
+                      $(this).text('Terminated');
+                    }
+                  });
+                }
+              });
+              $('#terminate-coros').prop('disabled', false);
+            })
+
+            .fail(function() {
+              $('#terminate-coros').prop('disabled', false);
+              $('#messages').append('<li>Terminating coros failed</li>');
+            });
+
+        });
+
+
+      });
+
+    //]]>
+    </script>
+
+  <title>discoro: Server Status</title>
+  </head>
+  <body>
+
+    <div id="page">
+      <nav style="margin:0 auto;" id="navigation" role="navigation">
+        <ul>
+          <li><a href="cluster.html">Cluster</a></li>
+          <li><a href="node.html">Node</a></li>
+          <li class="active"><a href="server.html">Server</a></li>
+        </ul>
+      </nav>
+
+      <h1 style="margin:2em 0;"><span class="title">discoro: Server Status</span></h1>
+
+      <table id="server" class="fancy shadow" style="margin:20px auto;text-align:left;font-weight:bold;">
+        <tbody>
+          <tr>
+            <td>Location</td><td id="server_location"></td>
+          </tr>
+          <tr>
+            <td>Coros Submitted</td><td id="server_coros_submitted"></td>
+          </tr>
+          <tr>
+            <td>Coros Done</td><td id="server_coros_done"></td>
+          </tr>
+          <tr>
+            <td>Coros Running</td><td id="server_coros_running"></td>
+          </tr>
+          <tr>
+            <td>Last Update</td><td id="server_update"></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div id="coros">
+
+        <table class="fancy shadow" style="margin:20px auto;" id="coros-table">
+          <caption><span class="border" style="display:inline-block;">Coroutines</span></caption>
+          <thead>
+            <tr><th></th><th>Coroutine</th><th>Arguments</th><th>Start Time</th></tr>
+          </thead>
+          <tbody>
+          </tbody>
+        </table>
+
+        <div style="margin:10px auto;">
+          <span class="border" style="display:inline-block;">
+            <strong>Terminate Selected Corotuines : </strong>
+            <select name="terminate-confirm" style="margin-left:5px;">
+              <option value="" selected="selected">Confirm</option>
+              <option value="No">No</option>
+              <option value="Yes">Yes</option>
+            </select>
+            <button type="button" id="terminate-coros" style="margin-left:5px;">Terminate</button>
+          </span>
+        </div>
+
+      </div>
+
+      <hr style="margin:10px;" />
+
+      <table id="inputs" style="margin:10px auto;text-align:left;">
+        <tr>
+          <td><strong>Update Interval Seconds:</strong></td>
+          <td><input style="width:3em;padding-right:3px;" maxlength="6" type="text" id="timeout" value="%(TIMEOUT)s" /></td>
+        </tr>
+        <tr>
+          <td><strong>Max Coroutines to Show : </strong></td>
+          <td><input style="width:4em;padding-right:3px;" maxlength="5" type="text" id="max_coros" value="" /></td>
+        </tr>
+        <tr>
+          <td><strong>Server Location : </strong></td>
+          <td><input style="width:10em;padding-right:3px;" maxlength="32" type="text" id="location" value="" /></td>
+        </tr>
+      </table>
+      <div style="text-align:center;">
+        <button type="button" id="input-update" style="margin-left:5px;">Update</button>
+      </div>
+
+      <hr style="margin:10px;" />
+
+      <div>
+        <ul id="messages" style="margin:1em auto;display:inline-block;"></ul>
+      </div>
+
+    </div>
+  </body>
+</html>
