@@ -53,9 +53,9 @@ class ProcScheduler(object):
         self._rcoros = set()
         self._rcoros_done = asyncoro.Event()
 
-    def schedule(self, func, *args, **kwargs):
+    def schedule(self, gen, *args, **kwargs):
         """Similar to 'run' method of computation, except as noted
-        above: This method will wait until a server process is
+        above: This method will block until a server process is
         available (i.e., not running another computation).
 
         Must be used with 'yield', similar to 'run' method of Compute
@@ -65,7 +65,7 @@ class ProcScheduler(object):
             ProcScheduler.__ServerAvail.clear()
             yield ProcScheduler.__ServerAvail.wait()
         ProcScheduler._Servers -= 1
-        rcoro = yield self.computation.run(func, *args, **kwargs)
+        rcoro = yield self.computation.run(gen, *args, **kwargs)
         if isinstance(rcoro, asyncoro.Coro):
             self._rcoros.add(str(rcoro))
         else:

@@ -24,6 +24,7 @@ import inspect
 import hashlib
 import collections
 import time
+import socket
 import shutil
 import atexit
 
@@ -207,34 +208,35 @@ class Computation(object):
 
         yield Coro(_schedule, self).finish()
 
-    def run_at(self, where, func, *args, **kwargs):
-        """Run given generator function 'func' with arguments 'args'
-        and 'kwargs' at 'where'. Must be used with 'yield' as 'rcoro =
-        yield compute.run_at(loc, genf, ...)'. If the request is
-        successful, 'rcoro' will be a (remote) coroutine.
+    def run_at(self, where, gen, *args, **kwargs):
+        """Run given generator function 'gen' with arguments 'args'
+        and 'kwargs' at 'where'.  If the request is successful,
+        'rcoro' will be a (remote) coroutine; check result with
+        'isinstance(rcoro, asyncoro.Coro)'. Must be used with 'yield'
+        as 'rcoro = yield compute.run_at(loc, genf, ...)'.
 
         If 'where' is a string, it is assumed to be IP address of a
-        node, in which case the function is scheduled at that node on
+        node, in which case the coroutine is scheduled at that node on
         a server with least load (i.e., server with least number of
         pending coroutines). If 'where' is a Location instance, it is
-        assumed to be server location in which case the function is
+        assumed to be server location in which case the coroutine is
         scheduled at that server.
 
-        'func' must be generator function, as it is used to run
+        'gen' must be generator function, as it is used to run
         coroutine at remote location.
         """
-        if isinstance(func, str):
-            name = func
+        if isinstance(gen, str):
+            name = gen
         else:
-            name = func.__name__
+            name = gen.__name__
 
         if name in self._xfer_funcs:
             code = None
         else:
-            # if not inspect.isgeneratorfunction(func):
+            # if not inspect.isgeneratorfunction(gen):
             #     logger.warning('"%s" is not a valid generator function' % name)
             #     raise StopIteration(None)
-            code = inspect.getsource(func).lstrip()
+            code = inspect.getsource(gen).lstrip()
 
         def _run(self, coro=None):
             msg = {'req': 'run', 'auth': self._auth, 'where': where, 'client': coro,
@@ -250,29 +252,31 @@ class Computation(object):
 
         yield Coro(_run, self).finish()
 
-    def run_each(self, where, func, *args, **kwargs):
-        """Run given generator function 'func' with arguments 'args'
-        and 'kwargs' at each node or server. Must be used with
-        'yield' as 'rcoros = yield compute.run_each(loc, genf,
-        ...)'. 'rcoros' will be list of (remote) coroutines.
+    def run_each(self, where, gen, *args, **kwargs):
+        """Run given generator function 'gen' with arguments 'args'
+        and 'kwargs' at each node or server.  If the request is
+        successful, 'rcoro' will be a (remote) coroutine; check result
+        with 'isinstance(rcoro, asyncoro.Coro)'. Must be used with
+        'yield' as 'rcoros = yield compute.run_each(loc, genf, ...)'.
 
-        'where' is same as in the case of 'run_at'; if it is string,
-        the function is scheduled at every node and if it is a
-        Location instance, the function is scheduled at every server
-        (on every node).
+        If 'where' is 'node', the function is scheduled at every node,
+        if 'where' is 'server', the function is scheduled at every
+        server (on every node); otherwise, 'where' must be IP address,
+        in which case the function is scheduled at every server at
+        that node.
         """
-        if isinstance(func, str):
-            name = func
+        if isinstance(gen, str):
+            name = gen
         else:
-            name = func.__name__
+            name = gen.__name__
 
         if name in self._xfer_funcs:
             code = None
         else:
-            # if not inspect.isgeneratorfunction(func):
+            # if not inspect.isgeneratorfunction(gen):
             #     logger.warning('"%s" is not a valid generator function' % name)
             #     raise StopIteration([])
-            code = inspect.getsource(func).lstrip()
+            code = inspect.getsource(gen).lstrip()
 
         def _run(self, coro=None):
             msg = {'req': 'run_each', 'auth': self._auth, 'where': where, 'client': coro,
@@ -294,40 +298,53 @@ class Computation(object):
 
         yield Coro(_run, self).finish()
 
-    def run(self, func, *args, **kwargs):
-        """Run given generator function 'func' with arguments 'args'
+    def run(self, gen, *args, **kwargs):
+        """Run given generator function 'gen' with arguments 'args'
         and 'kwargs' at a server with least load at a node with least
-        load. Must be used with 'yield' as 'rcoro = yield
-        compute.run(genf, ...)'. If the request is successful, 'rcoro'
-        will be a (remote) coroutine.
-        """
-        yield self.run_at(None, func, *args, **kwargs)
+        load.
 
-    def run_nodes(self, func, *args, **kwargs):
-        """Run given generator function 'func' with arguments 'args'
-        and 'kwargs' at a server with least load at every node. Must
-        be used with 'yield' as 'rcoros = yield
+        Must be used with 'yield' as 'rcoro = yield compute.run(genf,
+        ...)'. If the request is successful, 'rcoro' will be a
+        (remote) coroutine.
+        """
+        yield self.run_at(None, gen, *args, **kwargs)
+
+    def run_nodes(self, gen, *args, **kwargs):
+        """Run given generator function 'gen' with arguments 'args'
+        and 'kwargs' at a server with least load at every node.
+
+        Must be used with 'yield' as 'rcoros = yield
         compute.run_nodes(genf, ...)'. 'rcoros' will be a list of
         (remote) coroutines.
         """
-        yield self.run_each('node', func, *args, **kwargs)
+        yield self.run_each('node', gen, *args, **kwargs)
 
-    def run_servers(self, func, *args, **kwargs):
-        """Run given generator function 'func' with arguments 'args'
-        and 'kwargs' at every server (at every node). Must be used
-        with 'yield' as 'rcoros = yield compute.run_servers(genf,
-        ...)'. 'rcoros' will be a list of (remote) coroutines.
-        """
-        yield self.run_each('server', func, *args, **kwargs)
+    def run_servers(self, gen, *args, **kwargs):
+        """Run given generator function 'gen' with arguments 'args'
+        and 'kwargs' at every server (at every node).
 
-    def run_node_servers(self, addr, func, *args, **kwargs):
-        """Run given generator function 'func' with arguments 'args'
-        and 'kwargs' at every server at given node at 'addr'. Must be
-        used with 'yield' as 'rcoros = yield
-        compute.run_node_servers(addr, genf, ...)'. 'rcoros' will be a
-        list of (remote) coroutines at that node.
+        Must be used with 'yield' as 'rcoros = yield
+        compute.run_servers(genf, ...)'. 'rcoros' will be a list of
+        (remote) coroutines.
         """
-        yield self.run_each(addr, func, *args, **kwargs)
+        yield self.run_each('server', gen, *args, **kwargs)
+
+    def run_node_servers(self, host, gen, *args, **kwargs):
+        """Run given generator function 'gen' with arguments 'args'
+        and 'kwargs' at every server at given node at 'host'. 'host'
+        must IP address or host name of that node.
+
+        Must be used with 'yield' as 'rcoros = yield
+        compute.run_node_servers(host, genf, ...)'. 'rcoros' will be a
+        list of (remote) coroutines scheduled at servers on that node.
+        """
+        if isinstance(host, str) and len(host) > 0:
+            # if host starts with digit, assume IP address
+            if not host[0].isdigit():
+                host = socket.gethostbyname(host)
+            yield self.run_each(host, gen, *args, **kwargs)
+        else:
+            raise StopIteration([])
 
     # TODO: add 'map' methods to run with arguments as iterators
     # (e.g., list of tuples)
@@ -784,7 +801,7 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
                         continue
                     for server in servers:
                         Coro(server.run, func, client)
-                elif where == 'node_servers':
+                else:
                     node = self._nodes.get(where)
                     if node and node.status == Scheduler.NodeInitialized:
                         servers = [server for server in node.servers.values()
@@ -795,8 +812,6 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
                         continue
                     for server in servers:
                         Coro(server.run, func, client)
-                else:
-                    client.send([])
 
             elif req == 'schedule':
                 try:
