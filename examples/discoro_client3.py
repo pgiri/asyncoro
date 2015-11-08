@@ -7,11 +7,13 @@ from asyncoro.discoro import DiscoroStatus
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
 
+
 # this generator function is sent to remote server to run
 # coroutines there
 def rcoro_proc(n, coro=None):
     yield coro.sleep(n)
     raise StopIteration(n)
+
 
 def client_proc(computation, njobs, coro=None):
     status = {'submitted': 0, 'done': 0}
@@ -58,8 +60,9 @@ def client_proc(computation, njobs, coro=None):
             asyncoro.logger.debug('Ignoring status message %s' % str(msg))
     yield computation.close()
 
+
 if __name__ == '__main__':
-    import logging, random, threading
+    import logging, random
     asyncoro.logger.setLevel(logging.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start it (private scheduler):

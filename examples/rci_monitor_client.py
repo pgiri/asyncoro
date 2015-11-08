@@ -5,7 +5,7 @@
 
 import sys, logging, random
 # import disasyncoro to use distributed version of AsynCoro
-import disasyncoro as asyncoro
+import asyncoro.disasyncoro as asyncoro
 
 def monitor_proc(n, coro=None):
     # this coro gets exceptions from (remote) coroutines created in coro1

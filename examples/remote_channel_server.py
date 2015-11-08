@@ -10,7 +10,7 @@
 
 import sys, logging
 # import disasyncoro to use distributed version of AsynCoro
-import disasyncoro as asyncoro
+import asyncoro.disasyncoro as asyncoro
 
 def receiver_proc(coro=None):
     coro.set_daemon()

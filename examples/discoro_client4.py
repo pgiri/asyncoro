@@ -19,12 +19,14 @@ from asyncoro.discoro import DiscoroStatus
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
 
+
 # objects of C are sent by a client to remote coroutine
 class C(object):
     def __init__(self, i, n, client):
         self.i = i
         self.n = n
         self.client = client
+
 
 # this generator function is used to create local coroutine (at the
 # client) to communicate with a remote coroutine
@@ -52,6 +54,7 @@ def client_proc(job_id, rcoro, coro=None):
     # os.rename(output, os.getcwd())
     print('%s processed' % (obj.i))
 
+
 # this generator function is sent to remote server to run
 # coroutines there
 def rcoro_proc(coro=None):
@@ -74,6 +77,7 @@ def rcoro_proc(coro=None):
     cobj.client.send(result)
     os.remove(inp_file)
     os.remove(out_file)
+
 
 def submit_jobs_proc(computation, njobs, coro=None):
     computation.status_coro = coro
@@ -107,8 +111,9 @@ def submit_jobs_proc(computation, njobs, coro=None):
             asyncoro.logger.debug('Ignoring status message %s' % str(msg))
     yield computation.close()
 
+
 if __name__ == '__main__':
-    import logging, random, os, threading
+    import logging, random, os
     asyncoro.logger.setLevel(logging.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start it (private scheduler):

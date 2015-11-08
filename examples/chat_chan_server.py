@@ -2,16 +2,16 @@
 
 # chat server; must be used with 'chat_chan_client.py'
 
-import sys, logging, collections
-import disasyncoro as asyncoro
+import sys, logging
+# import disasyncoro to use distributed version of AsynCoro
+import asyncoro.disasyncoro as asyncoro
 
-# in case of (network) failures, discard a client if connecting fails
-# 3 consecutive times (default is 10 consecutive times)
 asyncoro.MaxConnectionErrors = 3
 
 def server_proc(coro=None):
     # to illustrate 'transform' function of channel, messages are modified
-    def txfm_msgs(name, (msg, client_id)):
+    def txfm_msgs(name, msg_cid):
+        msg, client_id = msg_cid
         # assert name == 'channel'
         # e.g., drop shoutings
         if msg.isupper():
@@ -49,8 +49,8 @@ if __name__ == '__main__':
     server = asyncoro.Coro(server_proc)
     while True:
         try:
-            cmd = sys.stdin.readline().strip()
-            if cmd == 'quit':
+            cmd = sys.stdin.readline().strip().lower()
+            if cmd == 'quit' or cmd == 'exit':
                 break
         except KeyboardInterrupt:
             break

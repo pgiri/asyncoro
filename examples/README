@@ -8,11 +8,24 @@ implement Python framework for distributed and parallel computing.
 
 * chat_chan_client.py and chat_chan_server.py use broadcasting over
   a channel to send messages to all participants to implement a
-  simple chat (message) service.
+  simple chat (message) service.  To use this and other 'chat' examples
+  below, run the server, and multiple clients (either on same machine
+  or other machines in local network). Messages typed in one client
+  show up at other clients.
 
 * chat_sock_client.py and chat_sock_server.py use asynchronous network
   programming, coroutines and message passing to implement a chat
   (message) server that is used by clients to broadcast messages.
+
+* discomp1.py illustrates how to use discoro and ProcScheduler for
+  distributed computing. The computations are assumed to CPU intensive
+  so at most one computation would be running at a (local or remote)
+  server process (to use all available local or remote CPUs), similar
+  to using 'dispy' (http://dispy.sourceforge.net) project.
+
+* discomp2.py is another example of distributed computing, similar to
+  discomp1.py. It shows how to relay status messages from discoro
+  scheduler to ProcScheduler and httpd concurrently.
 
 * discoro_client.py uses discoro (server) to distribute a computation
   (and its dependencies) and execute remote coroutines. The client and
@@ -29,6 +42,12 @@ implement Python framework for distributed and parallel computing.
   files at the client to remote process to execute computations that
   process those files and the remote process in turn sends the results
   in files back to the client.
+
+* discoro_client5.py is yet another example of using discoro. It uses
+  status messages to initialize (setup) a process to read the data in
+  a file into a global variable, which is later used to efficiently
+  execute job processes (to use data in global variable instead of
+  reading from file each time).
 
 * hotswap.py and hotswap_funcs.py illustrate how a running coroutine
   function can be swapped with a new function. The currently running

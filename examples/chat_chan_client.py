@@ -4,8 +4,8 @@
 # multiple nodes on local network, along with 'chat_chan_server.py';
 # text typed in a client is broadcast over a channel to all clients
 
-import sys, logging, time
-import disasyncoro as asyncoro
+import sys, logging
+import asyncoro.disasyncoro as asyncoro
 
 def recv_proc(client_id, coro=None):
     coro.set_daemon()
@@ -23,7 +23,8 @@ def send_proc(coro=None):
     yield server.send(('join', coro))
     client_id = yield coro.receive()
     
-    channel = yield asyncoro.Channel.locate('channel')
+    # channel is at same location as server coroutine
+    channel = yield asyncoro.Channel.locate('channel', server.location)
     recv_coro = asyncoro.Coro(recv_proc, client_id)
     yield channel.subscribe(recv_coro)
     # since readline is synchronous (blocking) call, use async thread

@@ -9,7 +9,7 @@ def server_proc2(fname, coro=None):
     while True:
         try:
             n = yield coro.receive()
-            print('%s received: %s,  %s=%.2f' % (coro, n, fname, func(n)))
+            print('  * %s received: %s,  %s=%.2f' % (coro, n, fname, func(n)))
         except asyncoro.HotSwapException as exc:
             gen = exc.args[0]
             if gen.__name__.startswith('server_proc'):
@@ -24,7 +24,7 @@ def client_proc2(server, i=42, coro=None):
     coro.set_daemon()
     coro.hot_swappable(True)
     while True:
-        print('%s: sending %s' % (coro, i))
+        print('  * %s: sending %s' % (coro, i))
         server.send(i)
         i += 2
         yield coro.sleep(random.uniform(2, 6))

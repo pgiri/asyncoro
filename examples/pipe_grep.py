@@ -2,7 +2,7 @@
 
 import sys, logging, subprocess, traceback, platform
 import asyncoro
-import asyncfile
+import asyncoro.asyncfile
     
 def writer(apipe, inp, coro=None):
     fd = open(inp)
@@ -32,10 +32,10 @@ def line_reader(apipe, coro=None):
 # asyncoro.logger.setLevel(logging.DEBUG)
 if platform.system() == 'Windows':
     # asyncfile.Popen must be used instead of subprocess.Popen
-    p1 = asyncfile.Popen([r'\cygwin64\bin\grep.exe', '-i', 'error'],
+    p1 = asyncoro.asyncfile.Popen([r'\cygwin64\bin\grep.exe', '-i', 'error'],
                          stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-    p2 = asyncfile.Popen([r'\cygwin64\bin\wc.exe'], stdin=p1.stdout, stdout=subprocess.PIPE)
-    async_pipe = asyncfile.AsyncPipe(p1, p2)
+    p2 = asyncoro.asyncfile.Popen([r'\cygwin64\bin\wc.exe'], stdin=p1.stdout, stdout=subprocess.PIPE)
+    async_pipe = asyncoro.asyncfile.AsyncPipe(p1, p2)
     asyncoro.Coro(writer, async_pipe, r'\tmp\grep.inp')
     asyncoro.Coro(line_reader, async_pipe)
     # in Windows child process may not terminate when input is closed -
@@ -45,7 +45,7 @@ if platform.system() == 'Windows':
 else:
     p1 = subprocess.Popen(['grep', '-i', 'error'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     p2 = subprocess.Popen(['wc'], stdin=p1.stdout, stdout=subprocess.PIPE)
-    async_pipe = asyncfile.AsyncPipe(p1, p2)
+    async_pipe = asyncoro.asyncfile.AsyncPipe(p1, p2)
     asyncoro.Coro(writer, async_pipe, '/var/log/kern.log')
     asyncoro.Coro(line_reader, async_pipe)
 
@@ -54,5 +54,5 @@ else:
     # p1 = subprocess.Popen(['tail', '-f', '/var/log/kern.log'], stdin=None, stdout=subprocess.PIPE)
     # p2 = subprocess.Popen(['grep', '--line-buffered', '-i', 'error'],
     #                       stdin=p1.stdout, stdout=subprocess.PIPE)
-    # async_pipe = asyncfile.AsyncPipe(p2)
+    # async_pipe = asyncoro.asyncfile.AsyncPipe(p2)
     # asyncoro.Coro(line_reader, async_pipe)

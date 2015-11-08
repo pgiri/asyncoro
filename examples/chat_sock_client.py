@@ -13,7 +13,7 @@ def client_recv(conn, coro=None):
         line = yield conn.recv_msg()
         if not line:
             break
-        print(line)
+        print(line.decode())
 
 if __name__ == '__main__':
     asyncoro.logger.setLevel(logging.DEBUG)
@@ -40,5 +40,5 @@ if __name__ == '__main__':
         line = sys.stdin.readline().strip()
         if line.lower() == 'exit' or line.lower() == 'quit':
             break
-        conn.send_msg(line)
+        conn.send_msg(line.encode())
     conn.shutdown(socket.SHUT_WR)

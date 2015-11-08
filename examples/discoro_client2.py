@@ -5,10 +5,11 @@
 # process to run as remote coroutines. Remote coroutines and client
 # can use message passing to exchange data.
 
-import sys, logging, random
+import logging, random
 import asyncoro.discoro as discoro
 from asyncoro.discoro import DiscoroStatus
 import asyncoro.disasyncoro as asyncoro
+
 
 # objects of C are exchanged between client and servers
 class C(object):
@@ -18,6 +19,7 @@ class C(object):
 
     def __repr__(self):
         return '%d: %s' % (self.i, self.n)
+
 
 # this generator function is sent to remote discoro servers to run
 # coroutines there
@@ -32,6 +34,7 @@ def compute(obj, client, coro=None):
     yield coro.sleep(obj.n)
     # send result back to client
     yield client.deliver(obj, timeout=5)
+
 
 # status messages indicating nodes, processes as well as remote
 # coroutines finish status are sent to this coroutine
@@ -50,6 +53,7 @@ def status_proc(client, coro=None):
                 procs_ready += 1
                 if procs_ready == 2:
                     client.send('processes ready')
+
 
 def client_proc(computation, coro=None):
     # scheduler sends node / process status messages to status_coro
@@ -86,8 +90,8 @@ def client_proc(computation, coro=None):
 
     yield computation.close()
 
+
 if __name__ == '__main__':
-    import os, threading
     asyncoro.logger.setLevel(logging.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start it (private scheduler):

@@ -5,9 +5,10 @@
 # process to run as remote coroutines. Remote coroutines and client
 # can use message passing to exchange data.
 
-import sys, logging, random
+import logging, random
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
+
 
 # objects of C are exchanged between client and servers
 class C(object):
@@ -17,6 +18,7 @@ class C(object):
 
     def __repr__(self):
         return '%d: %.3f' % (self.i, self.n)
+
 
 # this generator function is sent to remote discoro servers to run
 # coroutines there
@@ -31,6 +33,7 @@ def compute(obj, client, coro=None):
     yield coro.sleep(obj.n)
     # send result back to client
     yield client.deliver(obj, timeout=5)
+
 
 def client_proc(computation, coro=None):
     # wait a bit for scheduler to detect processes; alternately status
@@ -64,6 +67,7 @@ def client_proc(computation, coro=None):
         print('reply: %s' % (reply))
 
     yield computation.close()
+
 
 if __name__ == '__main__':
     asyncoro.logger.setLevel(logging.DEBUG)

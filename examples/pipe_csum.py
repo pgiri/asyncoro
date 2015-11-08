@@ -7,16 +7,16 @@
 
 import sys, os, logging, traceback, subprocess, platform
 import asyncoro
-import asyncfile
+import asyncoro.asyncfile
     
 def communicate(input, coro=None):
     if platform.system() == 'Windows':
         # asyncfile.Popen must be used instead of subprocess.Popen
-        pipe = asyncfile.Popen([r'\cygwin64\bin\sha1sum.exe'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        pipe = asyncoro.asyncfile.Popen([r'\cygwin64\bin\sha1sum.exe'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     else:
         pipe = subprocess.Popen(['sha1sum'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     # convert pipe to asynchronous version
-    async_pipe = asyncfile.AsyncPipe(pipe)
+    async_pipe = asyncoro.asyncfile.AsyncPipe(pipe)
     # 'communicate' takes either the data or file descriptor with data
     # (if file is too large to read in full) as input
     input = open(input)
@@ -42,11 +42,12 @@ def custom_feeder(input, coro=None):
 
     if platform.system() == 'Windows':
         # asyncfile.Popen must be used instead of subprocess.Popen
-        pipe = asyncfile.Popen([r'\cygwin64\bin\sha1sum.exe'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        pipe = asyncoro.asyncfile.Popen([r'\cygwin64\bin\sha1sum.exe'],
+                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     else:
         pipe = subprocess.Popen(['sha1sum'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
 
-    async_pipe = asyncfile.AsyncPipe(pipe)
+    async_pipe = asyncoro.asyncfile.AsyncPipe(pipe)
     reader = asyncoro.Coro(read_proc, async_pipe)
     writer = asyncoro.Coro(write_proc, open(input), async_pipe)
     stdout = yield reader.finish()

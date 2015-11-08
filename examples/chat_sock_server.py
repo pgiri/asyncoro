@@ -10,36 +10,37 @@ import asyncoro
 def client_proc(conn, addr, server, coro=None):
     # given conn is synchronous, convert it to asynchronous
     conn = asyncoro.AsyncSocket(conn)
-    server.send(('joined', (conn, addr)))
+    server.send(('joined'.encode(), (conn, addr)))
 
     while True:
         line = yield conn.recv_msg()
         if not line:
-            server.send(('left', (conn, addr)))
+            server.send(('left'.encode(), (conn, addr)))
             break
-        server.send(('broadcast', (conn, line)))
+        server.send(('broadcast'.encode(), (conn, line)))
 
 def server_proc(coro=None):
     clients = set()
     while True:
         cmd, item = yield coro.receive()
+        cmd = cmd.decode()
         if cmd == 'broadcast':
             conn, msg = item
-            msg = '%s says: %s' % (conn.fileno(), msg)
+            msg = ('%s says: %s' % (conn.fileno(), msg.decode())).encode()
             for client in clients:
                 if conn != client:
                     yield client.send_msg(msg)
         elif cmd == 'joined':
             conn, addr = item
-            yield conn.send_msg('id: %s' % conn.fileno())
-            msg = '%s joined' % conn.fileno()
+            yield conn.send_msg(('id: %s' % conn.fileno()).encode())
+            msg = ('%s joined' % conn.fileno()).encode()
             for client in clients:
                 yield client.send_msg(msg)
             clients.add(conn)
         elif cmd == 'left':
             conn, addr = item
             clients.discard(conn)
-            msg = '%s left' % conn.fileno()
+            msg = ('%s left' % conn.fileno()).encode()
             conn.close()
             for client in clients:
                 yield client.send_msg(msg)
@@ -74,4 +75,4 @@ if __name__ == '__main__':
             asyncoro.Coro(client_proc, conn, addr, server)
     except KeyboardInterrupt:
         pass
-    server.send(('terminate', None))
+    server.send(('terminate'.encode(), None))

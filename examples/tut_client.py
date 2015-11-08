@@ -3,7 +3,7 @@
 # see http://asyncoro.sourceforge.net/tutorial.html for details.
 
 import sys, random, logging
-import disasyncoro as asyncoro
+import asyncoro.disasyncoro as asyncoro
 
 def client_proc(n, coro=None):
     global msg_id

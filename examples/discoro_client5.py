@@ -7,6 +7,7 @@ from asyncoro.discoro import DiscoroStatus
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
 
+
 # This generator function is sent to remote discoro process to
 # initialize it. The function reads data from given file (which
 # would've been sent by client). Instead of writing another function
@@ -28,6 +29,7 @@ def proc_setup(data_file, client, coro=None):
         # assert msg == 'cleanup'
     del data, os, hashlib
 
+
 # This generator function is sent to remote discoro process to run
 # coroutines there; a generator function must have at least one
 # 'yield', so result is 'yield'ed instead of 'raise StopIteration' in
@@ -42,6 +44,7 @@ def rcoro_proc(alg, n, coro=None):
     checksum = getattr(hashlib, alg)()
     checksum.update(data)
     yield (alg, checksum.hexdigest())
+
 
 def client_proc(computation, data_file, njobs, coro=None):
     proc_setup_coros = set()
@@ -109,6 +112,7 @@ def client_proc(computation, data_file, njobs, coro=None):
     for proc_setup_coro in proc_setup_coros:
         yield proc_setup_coro.deliver('cleanup', timeout=5)
     yield computation.close()
+
 
 if __name__ == '__main__':
     import logging, random, sys

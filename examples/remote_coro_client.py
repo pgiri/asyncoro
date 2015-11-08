@@ -5,7 +5,7 @@
 
 import sys, logging
 # import disasyncoro to use distributed version of AsynCoro
-import disasyncoro as asyncoro
+import asyncoro.disasyncoro as asyncoro
 
 def sender(coro=None):
     # if server is in remote network, add it; set 'stream_send' to

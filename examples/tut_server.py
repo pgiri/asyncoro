@@ -4,7 +4,7 @@
 # see http://asyncoro.sourceforge.net/tutorial.html for details.
 
 import sys, random, logging
-import disasyncoro as asyncoro
+import asyncoro.disasyncoro as asyncoro
 
 def server_proc(coro=None):
     coro.set_daemon()

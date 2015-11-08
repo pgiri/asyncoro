@@ -11,7 +11,7 @@
 
 import socket, logging, hashlib, sys, os
 import asyncoro
-import asyncfile
+import asyncoro.asyncfile
 
 def client_proc(host, port, input, coro=None):
     # client reads input file and sends data in chunks
@@ -21,7 +21,7 @@ def client_proc(host, port, input, coro=None):
     # data can be written to this asynchronous socket; however, for
     # illustration, convert its file descriptor to asynchronous file
     # and write to that instead
-    afd = asyncfile.AsyncFile(sock)
+    afd = asyncoro.asyncfile.AsyncFile(sock)
     input = open(input)
     csum = hashlib.sha1()
     while True:
@@ -37,7 +37,7 @@ def server_proc(conn, coro=None):
     # conn is a synchronous socket (as it is obtained from synchronous
     # 'accept'); it's file-descriptor is converted to asynchronous
     # file to read data from that
-    afd = asyncfile.AsyncFile(conn)
+    afd = asyncoro.asyncfile.AsyncFile(conn)
     csum = hashlib.sha1()
     nlines = 0
     while True:
