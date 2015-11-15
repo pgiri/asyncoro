@@ -49,7 +49,9 @@ class ProcScheduler(object):
 
     def __init__(self, computation):
         self.computation = computation
-        computation.status_coro = asyncoro.Coro(self.status_proc)
+        self.status_coro = asyncoro.Coro(self.status_proc)
+        if not computation.status_coro:
+            computation.status_coro = self.status_coro
         self._rcoros = set()
         self._rcoros_done = asyncoro.Event()
 
@@ -84,6 +86,10 @@ class ProcScheduler(object):
             yield self._rcoros_done.wait()
         if close:
             yield self.computation.close()
+            # TODO: status messages may arrive (e.g., ServerClosed)
+            # after computation is closed; when to terminate
+            # status_coro?
+            # self.status_coro.terminate()
 
     def status_proc(self, coro=None):
         """Coroutine to process discoro scheduler messages.

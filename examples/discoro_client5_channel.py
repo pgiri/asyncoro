@@ -26,6 +26,12 @@ def proc_setup(data_file, client, coro=None):
     data = fd.read()
     fd.close()
     os.remove(data_file)
+    # subscribe to 'cleanup' channel at client
+    chan = yield asyncoro.Channel.locate('cleanup', location=client.location, timeout=2)
+    if not isinstance(chan, asyncoro.Channel):
+        raise StopIteration
+    if (yield chan.subscribe(coro)):
+        raise StopIteration
     if (yield client.deliver('ready', timeout=10)) == 1:
         # data will be kept in memory until 'cleanup' is received
         msg = yield coro.receive()
@@ -47,17 +53,17 @@ def rcoro_proc(alg, n, coro=None):
 
 
 def client_proc(computation, data_file, njobs, coro=None):
-    proc_setup_coros = set() # processes used are kept track to cleanup when done
     algs = ['md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512']
     status = {'submitted': 0, 'done': 0}
+    cleanup_chan = asyncoro.Channel('cleanup')
+    cleanup_chan.register()
 
     # submit job at given location
     def submit_job(where, coro=None):
-        if status['submitted'] < njobs:
-            alg = algs[status['submitted'] % len(algs)]
-            rcoro = yield computation.run_at(where, rcoro_proc, alg, random.uniform(1, 5))
-            if isinstance(rcoro, asyncoro.Coro):
-                status['submitted'] += 1
+        alg = algs[status['submitted'] % len(algs)]
+        rcoro = yield computation.run_at(where, rcoro_proc, alg, random.uniform(1, 5))
+        if isinstance(rcoro, asyncoro.Coro):
+            status['submitted'] += 1
 
     # client coroutine to setup a remote process; it first sends data
     # file to the process, then starts 'proc_setup' coroutine there,
@@ -71,7 +77,6 @@ def client_proc(computation, data_file, njobs, coro=None):
             # wait till coroutine has read data in to memory
             msg = yield coro.receive()
             assert msg == 'ready'
-            proc_setup_coros.add(rcoro) # this will be cleaned up at the end
             asyncoro.Coro(submit_job, rcoro.location)
         else:
             print('Setup of %s failed' % where)
@@ -100,15 +105,15 @@ def client_proc(computation, data_file, njobs, coro=None):
                 asyncoro.Coro(submit_job, rcoro.location)
         elif isinstance(msg, DiscoroStatus):
             # asyncoro.logger.debug('Node/Server status: %s, %s' % (msg.status, msg.info))
-            if msg.status == discoro.Scheduler.ServerInitialized and status['submitted'] < njobs:
+            if msg.status == discoro.Scheduler.ServerInitialized:
                 # a new process is available; initialize it
                 asyncoro.Coro(init_proc, msg.info)
         else:
             asyncoro.logger.debug('Ignoring status message %s' % str(msg))
 
     # cleanup processes
-    for proc_setup_coro in proc_setup_coros:
-        yield proc_setup_coro.deliver('cleanup', timeout=5)
+    n = yield cleanup_chan.deliver('cleanup', timeout=5)
+    print('cleanup message delivered to %s remote coroutines' % n)
     yield computation.close()
 
 

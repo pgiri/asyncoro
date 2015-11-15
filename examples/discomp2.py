@@ -29,7 +29,7 @@ def client_proc(computation, coro=None):
         while True:
             msg = yield coro.receive()
             # send message to ProcScheduler's status_proc:
-            proc_scheduler_status_coro.send(msg)
+            proc_scheduler.status_coro.send(msg)
             # and to httpd's status_coro:
             httpd.status_coro.send(msg)
             if isinstance(msg, asyncoro.MonitorException):
@@ -41,9 +41,6 @@ def client_proc(computation, coro=None):
                     print('%s failed: %s' % (msg.args[0], msg.args[1][1]))
 
     proc_scheduler = ProcScheduler(computation)
-    # ProcScheduler sets 'status_coro'; save it and set to status_proc
-    # above, which relays status messages to ProcScheduler's coro
-    proc_scheduler_status_coro = computation.status_coro
     computation.status_coro = asyncoro.Coro(status_proc)
 
     if (yield computation.schedule()):
