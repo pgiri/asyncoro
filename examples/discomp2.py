@@ -9,7 +9,7 @@
 import logging, random
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
-from asyncoro.discoro_schedulers import ProcScheduler
+from asyncoro.discoro_schedulers import ProcScheduler, NodeScheduler
 import asyncoro.httpd
 
 
@@ -29,7 +29,7 @@ def client_proc(computation, coro=None):
         while True:
             msg = yield coro.receive()
             # send message to ProcScheduler's status_proc:
-            proc_scheduler.status_coro.send(msg)
+            job_scheduler.status_coro.send(msg)
             # and to httpd's status_coro:
             httpd.status_coro.send(msg)
             if isinstance(msg, asyncoro.MonitorException):
@@ -40,18 +40,18 @@ def client_proc(computation, coro=None):
                     # (keep track of submitted rcoro, args and kwargs)
                     print('%s failed: %s' % (msg.args[0], msg.args[1][1]))
 
-    proc_scheduler = ProcScheduler(computation)
+    job_scheduler = ProcScheduler(computation)
     computation.status_coro = asyncoro.Coro(status_proc)
 
     if (yield computation.schedule()):
         raise Exception('schedule failed')
 
     # submit jobs
-    for i in range(5):
-        rcoro = yield proc_scheduler.schedule(compute, random.uniform(3, 10))
+    for i in range(3):
+        rcoro = yield job_scheduler.schedule(compute, random.uniform(3, 10))
 
     # wait for all jobs to be done and close computation
-    yield proc_scheduler.finish(close=True)
+    yield job_scheduler.finish(close=True)
 
 
 if __name__ == '__main__':

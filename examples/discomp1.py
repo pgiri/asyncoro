@@ -30,7 +30,7 @@ def client_proc(computation, coro=None):
             result = yield coro.receive()
             print('result: %s' % result)
 
-    proc_scheduler = ProcScheduler(computation)
+    job_scheduler = ProcScheduler(computation)
     results_coro = asyncoro.Coro(results_proc)
 
     if (yield computation.schedule()):
@@ -38,10 +38,10 @@ def client_proc(computation, coro=None):
 
     # submit jobs
     for i in range(5):
-        rcoro = yield proc_scheduler.schedule(compute, random.uniform(3, 10), results_coro)
+        rcoro = yield job_scheduler.schedule(compute, random.uniform(3, 10), results_coro)
 
     # wait for all results
-    yield proc_scheduler.finish()
+    yield job_scheduler.finish()
     yield computation.close()
 
 

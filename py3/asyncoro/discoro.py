@@ -995,14 +995,15 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
 
     def __close_computation(self, coro=None):
         computation = self._cur_computation
-        if computation:
-            computation.status_coro = None
         for node in self._nodes.values():
             yield self.__close_node(node)
         if self.__cur_client_auth:
             computation_path = os.path.join(self.__dest_path, self.__cur_client_auth)
             if os.path.isdir(computation_path):
                 shutil.rmtree(computation_path, ignore_errors=True)
+        if computation and computation.status_coro:
+            computation.status_coro.send(DiscoroStatus(Scheduler.ComputationClosed, None))
+            computation.status_coro = None
         self._cur_computation = None
         self.__cur_client_auth = None
         self.__sched_event.set()
