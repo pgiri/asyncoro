@@ -48,8 +48,10 @@ class ProcScheduler(object):
     __ServerAvail = asyncoro.Event()
 
     def __init__(self, computation):
+        """'computation' should be an instance of discoro.Computation
+        """
         self.computation = computation
-        self.status_coro = asyncoro.Coro(self.status_proc)
+        self.status_coro = asyncoro.Coro(self._status_proc)
         if not computation.status_coro:
             computation.status_coro = self.status_coro
         self._rcoros = set()
@@ -87,8 +89,9 @@ class ProcScheduler(object):
         if close:
             yield self.computation.close()
 
-    def status_proc(self, coro=None):
-        """Coroutine to process discoro scheduler messages.
+    def _status_proc(self, coro=None):
+        """Internal use only. Coroutine to process discoro scheduler
+        messages.
         """
         coro.set_daemon()
         while True:
@@ -132,8 +135,10 @@ class NodeScheduler(object):
     __NodeAvail = asyncoro.Event()
 
     def __init__(self, computation):
+        """'computation' should be an instance of discoro.Computation
+        """
         self.computation = computation
-        self.status_coro = asyncoro.Coro(self.status_proc)
+        self.status_coro = asyncoro.Coro(self._status_proc)
         if not computation.status_coro:
             computation.status_coro = self.status_coro
         self._rcoros = set()
@@ -171,8 +176,9 @@ class NodeScheduler(object):
         if close:
             yield self.computation.close()
 
-    def status_proc(self, coro=None):
-        """Coroutine to process discoro scheduler messages.
+    def _status_proc(self, coro=None):
+        """Internal use only. Coroutine to process discoro scheduler
+        messages.
         """
         coro.set_daemon()
         while True:
