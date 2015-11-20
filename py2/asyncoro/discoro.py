@@ -426,6 +426,7 @@ class Scheduler(object):
     ServerDisconnected = 15
 
     CoroCreated = 20
+    ComputationScheduled = 23
     ComputationClosed = 25
 
     """This class is for use by Computation class (see below) only.
@@ -714,6 +715,9 @@ class Scheduler(object):
                 self._cur_computation = None
                 continue
 
+            if self._cur_computation.status_coro:
+                self._cur_computation.status_coro.send(DiscoroStatus(Scheduler.ComputationScheduled,
+                                                                     self.__cur_client_auth))
             for node in self._nodes.itervalues():
                 for server in node.servers.itervalues():
                     if (server.status == Scheduler.ServerClosed or
@@ -1001,7 +1005,8 @@ class Scheduler(object):
             if os.path.isdir(computation_path):
                 shutil.rmtree(computation_path, ignore_errors=True)
         if computation and computation.status_coro:
-            computation.status_coro.send(DiscoroStatus(Scheduler.ComputationClosed, None))
+            computation.status_coro.send(DiscoroStatus(Scheduler.ComputationClosed,
+                                                       self.__cur_client_auth))
             computation.status_coro = None
         self._cur_computation = None
         self.__cur_client_auth = None

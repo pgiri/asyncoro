@@ -52,6 +52,7 @@ class ProcScheduler(object):
         """'computation' should be an instance of discoro.Computation
         """
         self.computation = computation
+        self.computation_auth = None
         self.status_coro = asyncoro.Coro(self._status_proc)
         if not computation.status_coro:
             computation.status_coro = self.status_coro
@@ -152,7 +153,10 @@ class ProcScheduler(object):
                     ProcScheduler.__ServerAvail.set()
                 elif msg.status == discoro.Scheduler.ServerClosed:
                     ProcScheduler._Servers -= 1
-                elif msg.status == discoro.Scheduler.ComputationClosed and msg.info is None:
+                elif msg.status == discoro.Scheduler.ComputationScheduled:
+                    self.computation_auth = msg.info
+                elif (msg.status == discoro.Scheduler.ComputationClosed and
+                      msg.info == self.computation_auth):
                     raise StopIteration
 
 
@@ -178,6 +182,7 @@ class NodeScheduler(object):
         """'computation' should be an instance of discoro.Computation
         """
         self.computation = computation
+        self.computation_auth = None
         self.status_coro = asyncoro.Coro(self._status_proc)
         if not computation.status_coro:
             computation.status_coro = self.status_coro
@@ -279,5 +284,8 @@ class NodeScheduler(object):
                     NodeScheduler.__NodeAvail.set()
                 elif msg.status == discoro.Scheduler.NodeClosed:
                     NodeScheduler._Nodes -= 1
-                elif msg.status == discoro.Scheduler.ComputationClosed and msg.info is None:
+                elif msg.status == discoro.Scheduler.ComputationScheduled:
+                    self.computation_auth = msg.info
+                elif (msg.status == discoro.Scheduler.ComputationClosed and
+                      msg.info == self.computation_auth):
                     raise StopIteration
