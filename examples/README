@@ -1,7 +1,6 @@
 Example files in this directory are meant to illustrate features of
 asyncoro framework. They are not necessarily efficient versions, nor
-very useful. Most examples are based on client/server model of
-communication.
+very useful.
 
 dispy project (http://dispy.sourceforge.net) uses asyncoro to
 implement Python framework for distributed and parallel computing.
@@ -27,6 +26,13 @@ implement Python framework for distributed and parallel computing.
   discomp1.py. It shows how to relay status messages from discoro
   scheduler to ProcScheduler and httpd concurrently.
 
+* discomp3.py and discomp4.py demonstrate using AsyncThreadPool to run
+  synchronous tasks (i.e., computations without 'yield' statements) in
+  remote processes.
+
+* discomp5.py uses 'execute' method of ProcScheduler to issue
+  computation jobs and get their results.
+
 * discoro_client.py uses discoro (server) to distribute a computation
   (and its dependencies) and execute remote coroutines. The client and
   remote coroutines use message passing to exhcange data.
@@ -43,11 +49,14 @@ implement Python framework for distributed and parallel computing.
   process those files and the remote process in turn sends the results
   in files back to the client.
 
-* discoro_client5.py is yet another example of using discoro. It uses
-  status messages to initialize (setup) a process to read the data in
-  a file into a global variable, which is later used to efficiently
-  execute job processes (to use data in global variable instead of
-  reading from file each time).
+* discoro_client5.py shows how to use remote servers for in-memory
+  processing. It uses status messages to initialize (setup) a process
+  to read the data in a file into a global variable, which is later
+  used to efficiently execute job processes (to use data in global
+  variable instead of reading from file each time).
+
+* discoro_client6.py uses streaming of data to remote coroutines for
+  efficient communication.
 
 * hotswap.py and hotswap_funcs.py illustrate how a running coroutine
   function can be swapped with a new function. The currently running

@@ -467,7 +467,6 @@ class Scheduler(object):
             self.name = name
             self.location = location
             self.coros = {}
-            self.done = {}
             self.status = None
             self.coro = None
             self.xfer_files = []
@@ -487,14 +486,9 @@ class Scheduler(object):
                                 'client': coro, 'notify': self.scheduler._status_coro})
                 rcoro = yield coro.receive(timeout=computation.timeout)
                 if isinstance(rcoro, Coro):
-                    key = str(rcoro)
-                    done = self.done.pop(key, None)
-                    if done is None:
-                        # TODO: keep func too for fault-tolerance
-                        self.coros[key] = rcoro
-                        node.ncoros += 1
-                    else:
-                        rcoro = done
+                    # TODO: keep func too for fault-tolerance
+                    self.coros[str(rcoro)] = rcoro
+                    node.ncoros += 1
                 raise StopIteration(rcoro)
 
             rcoro = yield Coro(_run, self, func).finish()
@@ -537,6 +531,12 @@ class Scheduler(object):
     def __status_proc(self, coro=None):
         coro.set_daemon()
         self.asyncoro.peer_status(coro)
+        # A server may not have updated server.coros before the
+        # coroutine 's MonitorException is received, so put such
+        # coroutines in pass2coros and resend the message to process
+        # second time. By second pass either server would've updated
+        # server.coros or MonitorException is invalid
+        pass2coros = {}
         while True:
             msg = yield coro.receive()
             if isinstance(msg, asyncoro.MonitorException):
@@ -550,9 +550,12 @@ class Scheduler(object):
                     logger.warning('server "%s" is invalid' % (rcoro.location))
                     continue
                 if server.coros.pop(str(rcoro), None) is None:
-                    # logger.warning('rcoro "%s" is invalid at "%s"' % (rcoro, server.location))
-                    server.done[str(rcoro)] = msg
-                    # TODO: prune 'done'
+                    if pass2coros.pop(str(rcoro), None) is None:
+                        pass2coros[str(rcoro)] = True
+                        coro.send(msg)
+                    else:
+                        asyncoro.logger.warning('Inavlid remote coroutine %s exit status '
+                                                'ignored' % rcoro)
                     continue
                 if self._cur_computation and self._cur_computation.status_coro:
                     self._cur_computation.status_coro.send(msg)
