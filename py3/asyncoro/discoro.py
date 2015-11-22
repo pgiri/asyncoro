@@ -536,12 +536,6 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
     def __status_proc(self, coro=None):
         coro.set_daemon()
         self.asyncoro.peer_status(coro)
-        # A server may not have updated server.coros before the
-        # coroutine 's MonitorException is received, so put such
-        # coroutines in pass2coros and resend the message to process
-        # second time. By second pass either server would've updated
-        # server.coros or MonitorException is invalid
-        pass2coros = {}
         while True:
             msg = yield coro.receive()
             if isinstance(msg, asyncoro.MonitorException):
@@ -555,14 +549,26 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
                     logger.warning('server "%s" is invalid' % (rcoro.location))
                     continue
                 if server.coros.pop(str(rcoro), None) is None:
-                    if pass2coros.pop(str(rcoro), None) is None:
-                        pass2coros[str(rcoro)] = True
-                        coro.send(msg)
+                    # A server may not have updated server.coros
+                    # before the coroutine's MonitorException is
+                    # received, so put it back in message queue with a
+                    # marker added to 'args' to indicate number of
+                    # times it went through the loop. If it goes
+                    # through 5 times, it is an invalid exception and
+                    # drop it.
+                    if len(msg.args) > 2:
+                        if msg.args[2] > 5:
+                            logger.warning('Inavlid remote coroutine %s exit status ignored: %s' %
+                                           (rcoro, msg.args[2]))
+                            continue
+                        msg.args = (msg.args[0], msg.args[1], (msg.args[2] + 1))
                     else:
-                        asyncoro.logger.warning('Inavlid remote coroutine %s exit status '
-                                                'ignored' % rcoro)
+                        msg.args = (msg.args[0], msg.args[1], 1)
+                    coro.send(msg)
                     continue
                 if self._cur_computation and self._cur_computation.status_coro:
+                    if len(msg.args) > 2:
+                        msg.args = (msg.args[0], msg.args[1])
                     self._cur_computation.status_coro.send(msg)
                 node.ncoros -= 1
 
@@ -721,7 +727,7 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
 
             if self._cur_computation.status_coro:
                 self._cur_computation.status_coro.send(DiscoroStatus(Scheduler.ComputationScheduled,
-                                                                     self.__cur_client_auth))
+                                                                     id(self._cur_computation)))
             for node in self._nodes.values():
                 for server in node.servers.values():
                     if (server.status == Scheduler.ServerClosed or
@@ -868,7 +874,8 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
                     client.send(None)
                 else:
                     # TODO: allow zombie_period to be set?
-                    computation.zombie_period = self.__zombie_period
+                    if self.__zombie_period:
+                        computation.zombie_period = self.__zombie_period
                     self.__scheduler_coro.send((computation, client))
                     self.__sched_event.set()
 
@@ -1010,7 +1017,7 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
                 shutil.rmtree(computation_path, ignore_errors=True)
         if computation and computation.status_coro:
             computation.status_coro.send(DiscoroStatus(Scheduler.ComputationClosed,
-                                                       self.__cur_client_auth))
+                                                       id(computation)))
             computation.status_coro = None
         self._cur_computation = None
         self.__cur_client_auth = None
