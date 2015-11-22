@@ -47,7 +47,7 @@ def rcoro_proc(alg, n, coro=None):
 
 
 def client_proc(computation, data_file, njobs, coro=None):
-    proc_setup_coros = set() # processes used are kept track to cleanup when done
+    cleanup_rcoros = set() # processes used are kept track to cleanup when done
     algs = ['md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512']
     status = {'submitted': 0, 'done': 0}
 
@@ -71,7 +71,7 @@ def client_proc(computation, data_file, njobs, coro=None):
             # wait till coroutine has read data in to memory
             msg = yield coro.receive()
             assert msg == 'ready'
-            proc_setup_coros.add(rcoro) # this will be cleaned up at the end
+            cleanup_rcoros.add(rcoro) # this will be cleaned up at the end
             asyncoro.Coro(submit_job, rcoro.location)
         else:
             print('Setup of %s failed' % where)
@@ -107,8 +107,9 @@ def client_proc(computation, data_file, njobs, coro=None):
             asyncoro.logger.debug('Ignoring status message %s' % str(msg))
 
     # cleanup processes
-    for proc_setup_coro in proc_setup_coros:
-        yield proc_setup_coro.deliver('cleanup', timeout=5)
+    for rcoro in cleanup_rcoros:
+        if (yield rcoro.deliver('cleanup', timeout=5)) != 1:
+            print('cleanup failed for %s' % rcoro)
     yield computation.close()
 
 
@@ -120,5 +121,8 @@ if __name__ == '__main__':
     discoro.Scheduler()
     computation = discoro.Computation([rcoro_proc])
     inp_file = sys.argv[0] if len(sys.argv) == 1 else sys.argv[1]
+    # call '.value()' of coroutine created here, otherwise main thread
+    # may finish (causing interpreter to start cleanup) before asyncoro
+    # scheduler gets a chance to start
     # run 10 jobs
     asyncoro.Coro(client_proc, computation, inp_file, 10).value()

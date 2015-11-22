@@ -1,6 +1,10 @@
 # This example uses status messages and message passing to run 'setup'
 # coroutine at remote process to prepare it for processing jobs.
 
+# This example is a variation of discomp3.py; it shows computations
+# executed with AsyncThreadPool can send messages (in this case, to
+# the client).
+
 # DiscoroStatus must be imported in global scope as below; otherwise,
 # unserializing status messages fails (if external scheduler is used)
 from asyncoro.discoro import DiscoroStatus
@@ -8,17 +12,8 @@ import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
 
 
-# discoronode expects user computations to be generator functions (to
-# create coroutines) that will 'yield' within pulse_interval (default
-# 10 seconds). Otherwise, the daemon coroutine that sends pulse
-# messages to scheduler will not get a chance to do so, causing
-# scheduler to assume the node may be unreachable and abandon the
-# computation. In this example, user computations are executed in
-# threads, using AsyncThreadPool. The computation is simulated with
-# 'time.sleep'. (Note that 'time.sleep' shouldn't be used in
-# coroutines, as this will block entire asyncoro framework.)  This
-# function sends message to client when the setup is done and then
-# waits for (client's) message to cleanup.
+# This function sends message to client when the setup is done and
+# then waits for (client's) message to cleanup.
 def proc_setup(client, coro=None):
     global time, thread_pool # 'time' and 'thread_pool' used in compute_proc
     import time
@@ -30,7 +25,18 @@ def proc_setup(client, coro=None):
         msg = yield coro.receive()
         # assert msg == 'cleanup'
     thread_pool.terminate()
+    del time, thread_pool
 
+
+# discoronode expects user computations to be generator functions (to
+# create coroutines) that will 'yield' within pulse_interval (default
+# 10 seconds). Otherwise, the daemon coroutine that sends pulse
+# messages to scheduler will not get a chance to do so, causing
+# scheduler to assume the node may be unreachable and abandon the
+# computation. In this example, user computations are executed in
+# threads, using AsyncThreadPool. The computation is simulated with
+# 'time.sleep'. (Note that 'time.sleep' shouldn't be used in
+# coroutines, as this will block entire asyncoro framework.)
 
 # This generator function is sent to remote discoro process to run
 # coroutines there. Note that compute_proc and proc_setup run in the
@@ -58,8 +64,6 @@ def client_proc(computation, njobs, coro=None):
             result = yield coro.receive()
             print('result from %s: %s' % (result[0], result[1]))
 
-    results_coro = asyncoro.Coro(results_proc)
-
     # submit job at given location
     def submit_job(where, coro=None):
         if status['submitted'] < njobs:
@@ -83,6 +87,8 @@ def client_proc(computation, njobs, coro=None):
     computation.status_coro = coro
     if (yield computation.schedule()):
         raise Exception('Failed to schedule computation')
+
+    results_coro = asyncoro.Coro(results_proc)
     while True:
         msg = yield coro.receive()
         if isinstance(msg, asyncoro.MonitorException):
@@ -119,5 +125,8 @@ if __name__ == '__main__':
     # start it (private scheduler):
     discoro.Scheduler()
     computation = discoro.Computation([compute_proc])
+    # call '.value()' of coroutine created here, otherwise main thread
+    # may finish (causing interpreter to start cleanup) before asyncoro
+    # scheduler gets a chance to start
     # run 10 jobs
     asyncoro.Coro(client_proc, computation, 10).value()

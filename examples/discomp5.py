@@ -28,13 +28,14 @@ def compute(n, coro=None):
 
 def client_proc(computation, n, coro=None):
 
-    def exec_proc(n, coro=None):
+    # coroutine to (concurrently) execute computations
+    def exec_proc(gen, *args, **kwargs):
         # execute computation; result of computation is result of
         # 'yield' which is also result of this coroutine (obtained
         # with 'finish' method below)
-        yield job_scheduler.execute(compute, n)
+        yield job_scheduler.execute(gen, *args, **kwargs)
         # results can be processed here (as they become available), or
-        # in-line as done below
+        # await in sequence as done below
 
     # Use ProcScheduler to run at most one coroutine at a server process
     # This should be created before scheduling computation
@@ -46,8 +47,8 @@ def client_proc(computation, n, coro=None):
     # execute n jobs (coroutines) and get their results. Note that
     # number of jobs created can be more than number of server
     # processes available; the scheduler will use as many processes as
-    # necessary, running one job at a server process
-    jobs = [asyncoro.Coro(exec_proc, random.uniform(3, 10)) for _ in range(n)]
+    # necessary/available, running one job at a server process
+    jobs = [asyncoro.Coro(exec_proc, compute, random.uniform(3, 10)) for _ in range(n)]
     for job in jobs:
         print('result: %s' % (yield job.finish()))
 
@@ -61,6 +62,9 @@ if __name__ == '__main__':
     # if scheduler is not already running (on a node as a program),
     # start private scheduler:
     discoro.Scheduler()
-    # send 'compute' generator function; 'depends' can include files, functions, objets
+    # send 'compute' generator function
     computation = discoro.Computation([compute])
+    # call '.value()' of coroutine created here, otherwise main thread
+    # may finish (causing interpreter to start cleanup) before asyncoro
+    # scheduler gets a chance to start
     asyncoro.Coro(client_proc, computation, n).value()

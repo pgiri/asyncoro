@@ -17,7 +17,6 @@ import asyncoro.httpd
 # coroutines there
 def compute(n, coro=None):
     import time
-    print('process at %s received: %s' % (coro.location, n))
     yield coro.sleep(n)
     raise StopIteration(time.asctime()) # result of 'compute' is current time
 
@@ -62,7 +61,10 @@ if __name__ == '__main__':
     # to illustrate passing status messages to multiple coroutines,
     # httpd is also used in this example:
     httpd = asyncoro.httpd.HTTPServer()
-    # send 'compute' generator function; 'depends' can include files, functions, objets
+    # send 'compute' generator function
     computation = discoro.Computation([compute], timeout=5)
+    # call '.value()' of coroutine created here, otherwise main thread
+    # may finish (causing interpreter to start cleanup) before asyncoro
+    # scheduler gets a chance to start
     asyncoro.Coro(client_proc, computation).value()
     httpd.shutdown()

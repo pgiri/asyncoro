@@ -47,7 +47,6 @@ def status_proc(client, coro=None):
             if msg.args[1][0] != StopIteration:
                 print('rcoro %s failed: %s / %s' % (msg.args[0], msg.args[1][0], msg.args[1][1]))
         elif isinstance(msg, DiscoroStatus):
-            print('Status: %s / %s' % (msg.info, msg.status))
             if msg.status == discoro.Scheduler.ServerInitialized:
                 # wait until 2 processes ready
                 procs_ready += 1
@@ -99,4 +98,7 @@ if __name__ == '__main__':
     # send generator function and class C (as the computation uses
     # objects of C)
     computation = discoro.Computation([compute, C])
+    # call '.value()' of coroutine created here, otherwise main thread
+    # may finish (causing interpreter to start cleanup) before asyncoro
+    # scheduler gets a chance to start
     asyncoro.Coro(client_proc, computation).value()

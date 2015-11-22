@@ -123,5 +123,8 @@ if __name__ == '__main__':
     # instead, it is sent each time a job is submitted,
     # which is a bit inefficient
     computation = discoro.Computation([C])
+    # call '.value()' of coroutine created here, otherwise main thread
+    # may finish (causing interpreter to start cleanup) before asyncoro
+    # scheduler gets a chance to start
     # run 10 jobs
     asyncoro.Coro(submit_jobs_proc, computation, 10).value()

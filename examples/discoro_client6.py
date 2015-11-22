@@ -50,7 +50,6 @@ def rcoro_save_proc(coro=None):
 # This process runs locally. It sends (random) data to remote coroutines.
 def client_proc(count, rcoro_avg, rcoro_save, coro=None):
     import random
-    print('avg: %s, save: %s' % (rcoro_avg, rcoro_save))
     # if data is sent frequently (say, many times a second), enable
     # streaming data to remote peer; this is more efficient as
     # connections are kept open (so the cost of opening and closing
@@ -137,4 +136,7 @@ if __name__ == '__main__':
     # othrwise, start private scheduler:
     discoro.Scheduler()
     computation = discoro.Computation([])
+    # call '.value()' of coroutine created here, otherwise main thread
+    # may finish (causing interpreter to start cleanup) before asyncoro
+    # scheduler gets a chance to start
     asyncoro.Coro(status_proc, computation).value()

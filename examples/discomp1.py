@@ -50,6 +50,9 @@ if __name__ == '__main__':
     # if scheduler is not already running (on a node as a program),
     # start private scheduler:
     discoro.Scheduler()
-    # send 'compute' generator function; 'depends' can include files, functions, objets
+    # send 'compute' generator function
     computation = discoro.Computation([compute], timeout=5)
+    # call '.value()' of coroutine created here, otherwise main thread
+    # may finish (causing interpreter to start cleanup) before asyncoro
+    # scheduler gets a chance to start
     asyncoro.Coro(client_proc, computation).value()

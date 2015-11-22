@@ -125,5 +125,8 @@ if __name__ == '__main__':
     discoro.Scheduler()
     computation = discoro.Computation([rcoro_proc])
     inp_file = sys.argv[0] if len(sys.argv) == 1 else sys.argv[1]
+    # call '.value()' of coroutine created here, otherwise main thread
+    # may finish (causing interpreter to start cleanup) before asyncoro
+    # scheduler gets a chance to start
     # run 10 jobs
     asyncoro.Coro(client_proc, computation, inp_file, 10).value()

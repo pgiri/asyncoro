@@ -100,4 +100,7 @@ if __name__ == '__main__':
     computation = discoro.Computation([compute])
     # create 'MonitorCoros' object so remote coros can be waited for in 'client_proc'
     monitored = monitor_coros.MonitorCoros()
+    # call '.value()' of coroutine created here, otherwise main thread
+    # may finish (causing interpreter to start cleanup) before asyncoro
+    # scheduler gets a chance to start
     asyncoro.Coro(status_proc, computation).value()

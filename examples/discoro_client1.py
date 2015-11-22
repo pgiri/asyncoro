@@ -75,6 +75,9 @@ if __name__ == '__main__':
     # start it (private scheduler):
     discoro.Scheduler()
     # send generator function and class C (as the function uses
-    # objects of C); 'depends' can include files, functions, objets
+    # objects of C)
     computation = discoro.Computation([compute, C], timeout=5)
+    # call '.value()' of coroutine created here, otherwise main thread
+    # may finish (causing interpreter to start cleanup) before asyncoro
+    # scheduler gets a chance to start
     asyncoro.Coro(client_proc, computation).value()
