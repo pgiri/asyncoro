@@ -39,6 +39,7 @@
             $('#messages').html('');
             if (server.hasOwnProperty('location')) {
               server_location = server.location;
+              $('#server_name').text(server.name);
               $('#server_location').text(server.location);
               $('#server_coros_submitted').text(server.coros_submitted);
               $('#server_coros_done').text(server.coros_done);
@@ -236,7 +237,10 @@
       <table id="server" class="fancy shadow" style="margin:20px auto;text-align:left;font-weight:bold;">
         <tbody>
           <tr>
-            <td>Location</td><td id="server_location"></td>
+            <td>Server Name</td><td id="server_name"></td>
+          </tr>
+          <tr>
+            <td>Server Location</td><td id="server_location"></td>
           </tr>
           <tr>
             <td>Coros Submitted</td><td id="server_coros_submitted"></td>

@@ -33,11 +33,15 @@ implement Python framework for distributed and parallel computing.
 * discomp5.py uses 'execute' method of ProcScheduler to issue
   computation jobs and get their results.
 
-* discoro_client.py uses discoro (server) to distribute a computation
+* discomp6.py uses 'execute_at' method of ProcScheduler to initialize
+  server processes for in-memory processing, issue computation jobs
+  and get their results.
+
+* discoro_client1.py uses discoro (server) to distribute a computation
   (and its dependencies) and execute remote coroutines. The client and
   remote coroutines use message passing to exhcange data.
 
-* discoro_client2.py is similar to discoro_client.py, except that it
+* discoro_client2.py is similar to discoro_client1.py, except that it
   uses status messages from scheduler to distribute computations.
 
 * discoro_client3.py is a variation of discoro_client2.py where a

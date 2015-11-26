@@ -39,7 +39,11 @@ MaxPulseInterval = 10 * MinPulseInterval
 
 # status about nodes / servers are sent with this structure
 DiscoroStatus = collections.namedtuple('DiscoroStatus', ['status', 'info'])
-CoroInfo = collections.namedtuple('CoroInfo', ['coro', 'args', 'kwargs', 'start_time'])
+DiscoroCoroInfo = collections.namedtuple('DiscoroCoroInfo', ['coro', 'args', 'kwargs', 'start_time'])
+DiscoroNodeInfo = collections.namedtuple('DiscoroNodeInfo',
+                                         ['name', 'addr', 'cpus', 'cpus_use', 'memory', 'disk'])
+DiscoroNodeStatus = collections.namedtuple('DiscoroNodeStatus', ['addr', 'cpu', 'memory', 'disk'])
+DiscoroServerInfo = collections.namedtuple('DiscoroServeInfo', ['name', 'location'])
 
 # for internal use only
 _Function = collections.namedtuple('_Function', ['name', 'code', 'args', 'kwargs'])
@@ -130,8 +134,8 @@ class Computation(object):
                     raise Exception('File "%s" is not valid' % dep)
                 depends.add(dep)
                 self._xfer_files.append(dep)
-            elif inspect.isgeneratorfunction(dep) or inspect.isfunction(dep) or \
-               inspect.isclass(dep) or hasattr(dep, '__class__'):
+            elif (inspect.isgeneratorfunction(dep) or inspect.isfunction(dep) or
+                  inspect.isclass(dep) or hasattr(dep, '__class__')):
                 if inspect.isgeneratorfunction(dep) or inspect.isfunction(dep):
                     name = dep.func_name
                 elif inspect.isclass(dep):
@@ -238,7 +242,7 @@ class Computation(object):
             if (yield self.scheduler.deliver(msg, timeout=self.timeout)) == 1:
                 rcoro = yield coro.receive(self.timeout)
                 if self.status_coro and isinstance(rcoro, Coro):
-                    msg = CoroInfo(rcoro, args, kwargs, time.time())
+                    msg = DiscoroCoroInfo(rcoro, args, kwargs, time.time())
                     self.status_coro.send(DiscoroStatus(Scheduler.CoroCreated, msg))
             else:
                 rcoro = None
@@ -286,7 +290,7 @@ class Computation(object):
                 if isinstance(rcoro, Coro):
                     rcoros.append(rcoro)
                     if self.status_coro:
-                        msg = CoroInfo(rcoro, args, kwargs, time.time())
+                        msg = DiscoroCoroInfo(rcoro, args, kwargs, time.time())
                         self.status_coro.send(DiscoroStatus(Scheduler.CoroCreated, msg))
             raise StopIteration(rcoros)
 
@@ -438,8 +442,10 @@ class Scheduler(object):
 
     class _Node(object):
 
-        def __init__(self, addr, scheduler):
+        def __init__(self, name, addr, scheduler):
+            self.name = name
             self.addr = addr
+            self.info = None
             self.servers = {}
             self.ncoros = 0
             self.status = None
@@ -574,7 +580,7 @@ class Scheduler(object):
                     server = Scheduler._Server(msg.name, msg.location, self)
                     node = self._nodes.get(msg.location.addr, None)
                     if not node:
-                        node = Scheduler._Node(msg.location.addr, self)
+                        node = Scheduler._Node(msg.name, msg.location.addr, self)
                         self._nodes[msg.location.addr] = node
                     node.servers[str(msg.location)] = server
                     if node.status != Scheduler.NodeIgnore:
@@ -593,10 +599,10 @@ class Scheduler(object):
                             if node.servers:
                                 Coro(self.__close_server, server)
                             else:
-                                self._nodes.pop(server.location.addr, None)
-                                if computation and computation.status_coro:
+                                node = self._nodes.pop(server.location.addr, None)
+                                if node and computation and computation.status_coro:
                                     status_msg = DiscoroStatus(Scheduler.NodeDisconnected,
-                                                               server.location.addr)
+                                                               node.info)
                                     computation.status_coro.send(status_msg)
                                 Coro(self.__close_node, node)
                     elif computation and msg.location == computation._pulse_coro.location:
@@ -722,22 +728,23 @@ class Scheduler(object):
                 continue
 
             if self._cur_computation.status_coro:
-                self._cur_computation.status_coro.send(DiscoroStatus(Scheduler.ComputationScheduled,
-                                                                     id(self._cur_computation)))
+                status_msg = DiscoroStatus(Scheduler.ComputationScheduled, id(self._cur_computation))
+                self._cur_computation.status_coro.send(status_msg)
             for node in self._nodes.itervalues():
+                if node.info:
+                    node.status = Scheduler.NodeDiscovered
+                    if self._cur_computation.status_coro:
+                        status_msg = DiscoroStatus(node.status, node.info)
+                        self._cur_computation.status_coro.send(status_msg)
+                else:
+                    continue
                 for server in node.servers.itervalues():
-                    if (server.status == Scheduler.ServerClosed or
-                       server.status == Scheduler.ServerIgnore):
-                        if isinstance(server.coro, Coro):
-                            server.status = Scheduler.ServerDiscovered
-                            if self._cur_computation.status_coro:
-                                status_msg = DiscoroStatus(server.status, server.location)
-                            self._cur_computation.status_coro.send(status_msg)
-                    if (node.status != Scheduler.NodeDiscovered and
-                       server.status == Scheduler.ServerDiscovered):
-                        node.status = Scheduler.NodeDiscovered
+                    if isinstance(server.coro, Coro):
+                        server.status = Scheduler.ServerDiscovered
                         if self._cur_computation.status_coro:
-                            status_msg = DiscoroStatus(node.status, node.addr)
+                            status_msg = DiscoroStatus(server.status,
+                                                       DiscoroServerInfo(server.name,
+                                                                         server.location))
                             self._cur_computation.status_coro.send(status_msg)
 
             for node in self._nodes.itervalues():
@@ -923,6 +930,9 @@ class Scheduler(object):
         if server.status in (Scheduler.ServerInitialized, Scheduler.ServerIgnore):
             raise StopIteration(0)
         server.status = Scheduler.ServerIgnore
+        node = self._nodes.get(server.location.addr, None)
+        if not node:
+            raise StopIteration(0)
         if not server.coro:
             if self._cur_computation:
                 timeout = self._cur_computation.timeout
@@ -932,16 +942,25 @@ class Scheduler(object):
             if not isinstance(server.coro, Coro):
                 logger.debug('server at %s is not valid' % (server.location))
                 # TODO: asuume temporary issue instead of removing it?
-                node = self._nodes.get(server.location.addr, None)
-                if node:
-                    node.servers.pop(str(server.location), None)
+                node.servers.pop(str(server.location), None)
                 raise StopIteration(-1)
+            if not node.info:
+                server.coro.send({'req': 'node_info', 'client': coro})
+                node_info = yield coro.receive(timeout=2)
+                if node_info:
+                    node.status = Scheduler.NodeDiscovered
+                    node.info = node_info
+                    if self._cur_computation and self._cur_computation.status_coro:
+                        status = DiscoroStatus(Scheduler.NodeDiscovered, node.info)
+                        self._cur_computation.status_coro.send(status)
             if not self._cur_computation:
                 server.status = Scheduler.ServerDiscovered
                 raise StopIteration(0)
             if self._cur_computation.status_coro:
-                self._cur_computation.status_coro.send(DiscoroStatus(Scheduler.ServerDiscovered,
-                                                                     server.location))
+                status = DiscoroStatus(Scheduler.ServerDiscovered,
+                                       DiscoroServerInfo(server.name, server.location))
+                self._cur_computation.status_coro.send(status)
+
         computation = self._cur_computation
         server.coro.send({'req': 'setup', 'client': coro, 'computation': computation,
                           'pulse_coro': self.__timer_coro})
@@ -958,7 +977,6 @@ class Scheduler(object):
                 raise StopIteration(-1)
         server.status = Scheduler.ServerInitialized
         server.last_pulse = time.time()
-        node = self._nodes[server.location.addr]
         if node.status != Scheduler.NodeInitialized:
             node.status = Scheduler.NodeInitialized
             if computation.status_coro:
@@ -984,17 +1002,16 @@ class Scheduler(object):
         if not computation or server.status != Scheduler.ServerInitialized:
             logger.warning('Closing server %s ignored' % server.location)
             raise StopIteration(-1)
-        if server.coros:
-            logger.warning('%s coros running at %s' % (len(server.coros), server.location))
-            if computation and computation.status_coro:
-                for rcoro in server.coros:
-                    status = asyncoro.MonitorException(rcoro, (Scheduler.ServerClosed, None))
-                    computation.status_coro.send(status)
-
-        asyncoro.logger.debug('Closing server %s' % server.location)
         # TODO: check/indicate error?
         yield server.coro.deliver({'req': 'close', 'auth': computation._auth},
                                   timeout=computation.timeout)
+        if server.coros:
+            logger.warning('%s coros running at %s' % (len(server.coros), server.location))
+            if computation and computation.status_coro:
+                for rcoro in server.coros.itervalues():
+                    status = asyncoro.MonitorException(rcoro, (Scheduler.ServerClosed, None))
+                    computation.status_coro.send(status)
+
         server.status = Scheduler.ServerClosed
         server.xfer_files = []
         server.coros = {}

@@ -26,7 +26,7 @@ import traceback
 
 import asyncoro.disasyncoro as asyncoro
 import asyncoro.discoro as discoro
-from asyncoro.discoro import DiscoroStatus
+from asyncoro.discoro import DiscoroStatus, DiscoroNodeInfo, DiscoroNodeStatus, DiscoroServerInfo
 
 if sys.version_info.major > 2:
     import http.server as BaseHTTPServer
@@ -35,21 +35,31 @@ else:
     import BaseHTTPServer
     from urlparse import urlparse
 
+# Compatability function to work with both Python 2.7 and Python 3
+if sys.version_info.major >= 3:
+    def itervalues(arg):
+        return getattr(arg, 'values')()
+else:
+    def itervalues(arg):
+        return getattr(arg, 'itervalues')()
 
 class HTTPServer(object):
 
     class _Node(object):
-        def __init__(self, ip_addr, name=None):
-            if not name:
-                name = ip_addr
-            self.ip_addr = ip_addr
+        def __init__(self, name, ip_addr):
             self.name = name
+            self.ip_addr = ip_addr
             self.status = None
             self.servers = {}
             self.update_time = time.time()
+            self.cpu_info = {'total': 0, 'use': -1}
+            self.memory_info = {'total': 0, 'use': -1}
+            self.disk_info = {'total': 0, 'use': -1}
+            self.system_info_rcoro = None
 
     class _Server(object):
-        def __init__(self, location):
+        def __init__(self, name, location):
+            self.name = name
             self.location = location
             self.status = None
             self.coros = {}
@@ -74,8 +84,11 @@ class HTTPServer(object):
                      'update_time': node.update_time,
                      'coros_submitted': sum(server.coros_submitted
                                             for server in node.servers.values()),
-                     'coros_done': sum(server.coros_done for server in node.servers.values())}
-                    for node in self._ctx._updates.values()
+                     'coros_done': sum(server.coros_done for server in node.servers.values()),
+                     'cpu': node.cpu_info['use'] if node.cpu_info else -1,
+                     'memory': node.memory_info['use'] if node.memory_info else -1,
+                     'disk': node.disk_info['use'] if node.disk_info else -1,
+                     } for node in itervalues(self._ctx._updates)
                     ]
                 self._ctx._updates = {}
                 self._ctx._lock.release()
@@ -91,8 +104,11 @@ class HTTPServer(object):
                      'update_time': node.update_time,
                      'coros_submitted': sum(server.coros_submitted
                                             for server in node.servers.values()),
-                     'coros_done': sum(server.coros_done for server in node.servers.values())}
-                    for node in self._ctx._nodes.values()
+                     'coros_done': sum(server.coros_done for server in node.servers.values()),
+                     'cpu': node.cpu_info['use'] if node.cpu_info else -1,
+                     'memory': node.memory_info['use'] if node.memory_info else -1,
+                     'disk': node.disk_info['use'] if node.disk_info else -1,
+                     } for node in itervalues(self._ctx._nodes)
                     ]
                 self._ctx._lock.release()
                 self.send_response(200)
@@ -103,7 +119,7 @@ class HTTPServer(object):
             else:
                 parsed_path = urlparse(self.path)
                 path = parsed_path.path.lstrip('/')
-                if path == '' or path == 'index.html':
+                if not path or path == 'index.html':
                     path = 'cluster.html'
                 path = os.path.join(self.DocumentRoot, path)
                 try:
@@ -158,12 +174,8 @@ class HTTPServer(object):
                             pass
                 if server:
                     if 0 < max_coros < len(server.coros):
-                        if sys.version_info.major == 2:
-                            iterrcoros = server.coros.itervalues()
-                        else:
-                            iterrcoros = server.coros.values()
                         rcoros = []
-                        for i, rcoro in enumerate(iterrcoros):
+                        for i, rcoro in enumerate(itervalues(server.coros)):
                             if i >= max_coros:
                                 break
                             rcoros.append(rcoro)
@@ -173,9 +185,9 @@ class HTTPServer(object):
                                'args': ', '.join(str(arg) for arg in rcoro.args),
                                'kwargs': ', '.join('%s=%s' % (key, val)
                                                    for key, val in rcoro.kwargs.items()),
-                               'start_time': rcoro.start_time}
-                              for rcoro in rcoros]
-                    info = {'location': str(server.location),
+                               'start_time': rcoro.start_time
+                               } for rcoro in rcoros]
+                    info = {'location': str(server.location), 'name': server.name,
                             'coros_submitted': server.coros_submitted,
                             'coros_done': server.coros_done,
                             'coros': rcoros, 'update_time': node.update_time}
@@ -211,9 +223,12 @@ class HTTPServer(object):
                                  'coros_submitted': server.coros_submitted,
                                  'coros_done': server.coros_done,
                                  'coros_running': len(server.coros),
-                                 'update_time': node.update_time}
-                                for server in node.servers.values()
-                                ]
+                                 'update_time': node.update_time
+                                 } for server in node.servers.values()
+                                ],
+                            'cpu': node.cpu_info,
+                            'memory': node.memory_info,
+                            'disk': node.disk_info,
                             }
                 else:
                     info = {}
@@ -269,6 +284,14 @@ class HTTPServer(object):
                         asyncoro.logger.warning('HTTP client %s: invalid timeout "%s" ignored',
                                                 self.client_address[0], item.value)
                         timeout = 0
+                    if timeout >= 10:
+                        if sys.version_info.major >= 3:
+                            node_iter = self._ctx._nodes.values()
+                        else:
+                            node_iter = self._ctx._nodes.itervalues()
+                        for node in node_iter:
+                            if isinstance(node.system_info_rcoro, asyncoro.Coro):
+                                node.system_info_rcoro.send(timeout)
                     self._ctx._poll_sec = timeout
                     self.send_response(200)
                     self.send_header('Content-Type', 'text/html')
@@ -279,7 +302,7 @@ class HTTPServer(object):
             self.send_error(400)
             return
 
-    def __init__(self, host='', port=8181, poll_sec=10, DocumentRoot=None,
+    def __init__(self, computation, host='', port=8181, poll_sec=10, DocumentRoot=None,
                  keyfile=None, certfile=None):
         self._lock = threading.Lock()
         if not DocumentRoot:
@@ -299,6 +322,9 @@ class HTTPServer(object):
         self._httpd_thread.daemon = True
         self._httpd_thread.start()
         self.status_coro = asyncoro.Coro(self.status_proc)
+        self.computation = computation
+        if not computation.status_coro:
+            computation.status_coro = self.status_coro
         asyncoro.logger.info('Started HTTP%s server at %s' %
                              ('s' if certfile else '', str(self._server.socket.getsockname())))
 
@@ -327,17 +353,18 @@ class HTTPServer(object):
                             server.coros_submitted += 1
                             node.update_time = time.time()
                             self._updates[node.ip_addr] = node
-                elif msg.status == discoro.Scheduler.ServerInitialized:
-                    node = self._nodes.get(msg.info.addr)
-                    if not node:
-                        node = HTTPServer._Node(msg.info.addr)
-                        node.status = discoro.Scheduler.NodeInitialized
-                        self._nodes[msg.info.addr] = node
-                    server = HTTPServer._Server(msg.info)
-                    server.status = msg.status
-                    node.servers[str(msg.info)] = server
-                    node.update_time = time.time()
-                    self._updates[node.ip_addr] = node
+                elif msg.status == discoro.Scheduler.ServerDiscovered:
+                    if isinstance(msg.info, DiscoroServerInfo):
+                        node = self._nodes.get(msg.info.location.addr)
+                        if not node:
+                            node = HTTPServer._Node(msg.info.name, msg.info.location.addr)
+                            node.status = discoro.Scheduler.NodeInitialized
+                            self._nodes[msg.info.location.addr] = node
+                        server = HTTPServer._Server(msg.info.name, msg.info.location)
+                        server.status = msg.status
+                        node.servers[str(server.location)] = server
+                        node.update_time = time.time()
+                        self._updates[node.ip_addr] = node
                 elif msg.status in (discoro.Scheduler.ServerClosed, discoro.Scheduler.ServerIgnore,
                                     discoro.Scheduler.ServerDisconnected):
                     node = self._nodes.get(msg.info.addr)
@@ -347,6 +374,19 @@ class HTTPServer(object):
                             self._nodes.pop(msg.info.addr)
                         node.update_time = time.time()
                         self._updates[node.ip_addr] = node
+                elif msg.status == discoro.Scheduler.NodeDiscovered:
+                    node = self._nodes.get(msg.info.addr, None)
+                    if not node:
+                        node = HTTPServer._Node(msg.info.name, msg.info.addr)
+                        node.status = discoro.Scheduler.NodeDiscovered
+                        self._nodes[msg.info.addr] = node
+                    if isinstance(msg.info, DiscoroNodeInfo):
+                        node.cpu_info = {'total': msg.info.cpus, 'use': msg.info.cpus_use}
+                        node.memory_info = {'total': '{:,.0f} M'.format(msg.info.memory.total / 1e6),
+                                            'use': msg.info.memory.percent}
+                        node.disk_info = {'total': '{:,.0f} G'.format(msg.info.disk.total / 1e9),
+                                          'use': msg.info.disk.percent}
+
                 elif msg.status in (discoro.Scheduler.NodeInitialized,
                                     discoro.Scheduler.NodeClosed, discoro.Scheduler.NodeIgnore,
                                     discoro.Scheduler.NodeDisconnected):
@@ -354,6 +394,15 @@ class HTTPServer(object):
                     if node:
                         node.status = msg.status
                         node.update_time = time.time()
+                        if msg.status == discoro.Scheduler.NodeInitialized:
+                            node.system_info_rcoro = yield self.computation.run_at(
+                                msg.info, system_info, self.status_coro, max(10, self._poll_sec))
+            elif isinstance(msg, DiscoroNodeStatus):
+                node = self._nodes.get(msg.addr, None)
+                if node and node.memory_info:
+                    node.cpu_info['use'] = msg.cpu
+                    node.memory_info['use'] = msg.memory
+                    node.disk_info['use'] = msg.disk
             else:
                 asyncoro.logger.warning('Status message ignored: %s' % type(msg))
 
@@ -368,3 +417,33 @@ class HTTPServer(object):
             time.sleep(self._poll_sec)
         self._server.shutdown()
         self._server.server_close()
+
+
+def system_info(client=None, interval=None, coro=None):
+    try:
+        import os
+        import psutil
+    except:
+        raise StopIteration(None)
+
+    addr = coro.location.addr
+    partition = asyncoro.AsynCoro.instance().dest_path
+    msg = DiscoroNodeInfo(asyncoro.AsynCoro.instance().name, addr,
+                          psutil.cpu_count(), psutil.cpu_percent(),
+                          psutil.virtual_memory(), psutil.disk_usage(partition))
+    if ((not isinstance(interval, (int, float))) or (interval < 10) or
+       (not isinstance(client, asyncoro.Coro))):
+        if not isinstance(client, asyncoro.Coro):
+            raise StopIteration(msg)
+        else:
+            client.send(msg)
+            raise StopIteration
+
+    while True:
+        msg = yield coro.receive(timeout=interval)
+        if msg and isinstance(msg, (float, int)) and msg >= 10:
+            interval = msg
+        msg = DiscoroNodeStatus(addr, psutil.cpu_percent(), psutil.virtual_memory().percent,
+                                psutil.disk_usage(partition).percent)
+        if client.send(msg):
+            break

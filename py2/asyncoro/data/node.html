@@ -37,12 +37,22 @@
             $('#messages').html('');
             if (node.hasOwnProperty('ip_addr')) {
               node_ip_addr = node.ip_addr;
+              $('#node_name').text(node.name);
               $('#node_ip_addr').text(node.ip_addr);
               $('#node_servers').text(node.servers.length);
               $('#node_coros_submitted').text(node.coros_submitted);
               $('#node_coros_done').text(node.coros_done);
               $('#node_coros_running').text(node.coros_submitted - node.coros_done);
               $('#node_update').text((new Date(1000 * node.update_time)).toLocaleTimeString());
+              if (node.cpu) {
+                $('#node_cpu').text(node.cpu.use.toFixed(1) + ' %% / ' + node.cpu.total);
+              }
+              if (node.memory) {
+                $('#node_memory').text(node.memory.use.toFixed(1) + ' %% / ' + node.memory.total);
+              }
+              if (node.disk) {
+                $('#node_disk').text(node.disk.use.toFixed(1) + ' %% / ' + node.disk.total);
+              }
               if ($('#node').is(':hidden')) {
                 $('#node').show();
               }
@@ -164,10 +174,22 @@
       <table id="node" class="fancy shadow" style="margin:20px auto;text-align:left;font-weight:bold;">
         <tbody>
           <tr>
+            <td>Name</td><td id="node_name"></td>
+          </tr>
+          <tr>
             <td>IP Address</td><td id="node_ip_addr"></td>
           </tr>
           <tr>
             <td>Servers</td><td id="node_servers"></td>
+          </tr>
+          <tr>
+            <td>CPUs (Use / Total)</td><td id="node_cpu"></td>
+          </tr>
+          <tr>
+            <td>Memory (Use / Total)</td><td id="node_memory"></td>
+          </tr>
+          <tr>
+            <td>Disk (Use / Total)</td><td id="node_disk"></td>
           </tr>
           <tr>
             <td>Coros Submitted</td><td id="node_coros_submitted"></td>
@@ -189,8 +211,8 @@
         <table class="fancy shadow" style="margin:20px auto;" id="servers-table">
           <caption><span class="border" style="display:inline-block;">Servers</span></caption>
           <thead>
-            <tr><th></th><th>Server</th><th>Coros Submitted</th><th>Coros Done</th>
-              <th>Coros Running</th><th>Last Update</th></tr>
+            <tr><th></th><th>Server</th><th>Coros<br />Submitted</th><th>Coros<br />Done</th>
+              <th>Coros<br />Running</th><th>Last<br />Update</th></tr>
           </thead>
           <tbody>
           </tbody>

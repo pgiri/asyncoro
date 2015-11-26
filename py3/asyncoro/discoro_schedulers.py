@@ -49,6 +49,11 @@ class ProcScheduler(object):
 
     def __init__(self, computation, proc_status=None):
         """'computation' should be an instance of discoro.Computation
+
+        'proc_status' if not None should be a generator function. When
+        a server process is initialized or closed, this function is
+        executed (as coroutine) with the status and location of server
+        as arguments.
         """
         if proc_status:
             if not inspect.isgeneratorfunction(proc_status):
@@ -188,7 +193,7 @@ class ProcScheduler(object):
                     self._rcoros_done.set()
 
             elif isinstance(msg, DiscoroStatus):
-                if msg.status == discoro.Scheduler.ServerInitialized:
+                if msg.status == discoro.Scheduler.ServerDiscovered:
                     if self.proc_status:
                         def status_proc(self, msg, coro=None):
                             if (yield Coro(self.proc_status, msg.status, msg.info).finish()) == 0:
@@ -225,6 +230,10 @@ class NodeScheduler(object):
 
     def __init__(self, computation, node_status=None):
         """'computation' should be an instance of discoro.Computation
+
+        'node_status' if not None should be a generator function. When
+        a node is initialized or closed, this function is executed (as
+        coroutine) with the status and location of node as arguments.
         """
         if node_status:
             if not inspect.isgeneratorfunction(node_status):
@@ -361,7 +370,7 @@ class NodeScheduler(object):
                     self._rcoros_done.set()
 
             elif isinstance(msg, DiscoroStatus):
-                if msg.status == discoro.Scheduler.NodeInitialized:
+                if msg.status == discoro.Scheduler.NodeDiscovered:
                     if self.node_status:
                         def status_proc(self, msg, coro=None):
                             if (yield Coro(self.node_status, msg.status, msg.info).finish()) == 0:
@@ -369,7 +378,7 @@ class NodeScheduler(object):
                                 self._node_avail.set()
                         Coro(status_proc, self, msg)
                     else:
-                        self._nodes[msg.info] = msg.info
+                        self._nodes[msg.info.addr] = msg.info
                         self._node_avail.set()
                 elif msg.status == discoro.Scheduler.NodeClosed:
                     self._nodes.pop(msg.info, None)

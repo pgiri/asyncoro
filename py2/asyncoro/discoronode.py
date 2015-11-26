@@ -20,13 +20,8 @@ __copyright__ = "Copyright (c) 2014 Giridhar Pemmasani"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 
-import os
-import sys
-import traceback
-import time
-import shutil
-
 import asyncoro.disasyncoro as asyncoro
+from asyncoro.discoro import DiscoroNodeInfo, DiscoroNodeStatus
 
 __all__ = ['discoro_proc']
 
@@ -35,6 +30,17 @@ def discoro_proc():
     # coroutine
     """Server process receives computations and runs coroutines for it.
     """
+
+    import os
+    import shutil
+    import traceback
+    import sys
+    import time
+
+    try:
+        import psutil
+    except:
+        psutil = None
 
     import asyncoro.disasyncoro as asyncoro
     from asyncoro import Coro
@@ -206,6 +212,18 @@ def discoro_proc():
             asyncoro.logger.debug('computation "%s" from %s' %
                                   (_discoro_computation._auth, _discoro_msg['client'].location))
             _discoro_client.send(0)
+        elif _discoro_req == 'node_info':
+            _discoro_client = _discoro_msg.get('client', None)
+            if not isinstance(_discoro_client, Coro):
+                continue
+            if psutil:
+                info = DiscoroNodeInfo(asyncoro.AsynCoro.instance().name,
+                                       _discoro_coro.location.addr, psutil.cpu_count(),
+                                       psutil.cpu_percent(), psutil.virtual_memory(),
+                                       psutil.disk_usage(_discoro_dest_path))
+            else:
+                info = None
+            _discoro_client.send(info)
         elif _discoro_req == 'close':
             _discoro_auth = _discoro_msg.get('auth', None)
             if not _discoro_computation or _discoro_auth != _discoro_computation._auth:
@@ -321,6 +339,8 @@ if __name__ == '__main__':
     Remaining options are as per AsynCoro in disasyncoro module.
     """
 
+    import sys
+    import time
     import logging
     import argparse
     import multiprocessing
