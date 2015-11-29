@@ -744,11 +744,11 @@ class AsyncPipe(object):
         """
         if not last:
             last = first
+        self.first = first
+        self.last = last
         if platform.system() == 'Windows':
             if not isinstance(first, Popen) or not isinstance(last, Popen):
                 raise ValueError('argument must be asyncfile.Popen object')
-            self.first = first
-            self.last = last
             if first.stdin:
                 self.stdin = first.stdin
             else:
@@ -764,8 +764,6 @@ class AsyncPipe(object):
         else:
             if not isinstance(first, subprocess.Popen) or not isinstance(last, subprocess.Popen):
                 raise ValueError('argument must be subprocess.Popen object')
-            self.first = None
-            self.last = None
             if first.stdin:
                 self.stdin = AsyncFile(first.stdin)
             else:
@@ -778,6 +776,14 @@ class AsyncPipe(object):
                 self.stderr = AsyncFile(last.stderr)
             else:
                 self.stderr = None
+
+    def __getattr__(self, name):
+        if self.last:
+            return getattr(self.last, name)
+        elif self.first:
+            return getattr(self.first, name)
+        else:
+            raise RuntimeError('AsyncPipe is invalid')
 
     def write(self, buf, full=False, timeout=None):
         """Write data in buf to stdin of pipe. See 'write' method of
@@ -864,17 +870,19 @@ class AsyncPipe(object):
         raise StopIteration((yield stdout_coro.finish()) if self.stdout else None,
                             (yield stderr_coro.finish()) if self.stderr else None)
 
+    def poll(self):
+        """Similar to 'poll' of Popen.
+        """
+        if self.last:
+            return self.last.poll()
+        elif self.first:
+            return self.first.poll()
+
     def close(self):
         """Close pipe.
         """
-        if self.first:
-            if self.first == self.last:
-                self.last = None
-            self.first.close()
-            self.first = None
-        if self.last:
-            self.last.close()
-            self.last = None
+        self.first = None
+        self.last = None
 
     def __del__(self):
         self.close()
