@@ -25,8 +25,8 @@ import re
 import traceback
 
 import asyncoro.disasyncoro as asyncoro
-import asyncoro.discoro as discoro
 from asyncoro.discoro import DiscoroStatus, DiscoroNodeInfo, DiscoroNodeStatus, DiscoroServerInfo
+import asyncoro.discoro as discoro
 
 if sys.version_info.major > 2:
     import http.server as BaseHTTPServer
@@ -43,6 +43,7 @@ else:
     def itervalues(arg):
         return getattr(arg, 'itervalues')()
 
+
 class HTTPServer(object):
 
     class _Node(object):
@@ -55,7 +56,6 @@ class HTTPServer(object):
             self.cpu_info = {'total': 0, 'use': -1}
             self.memory_info = {'total': 0, 'use': -1}
             self.disk_info = {'total': 0, 'use': -1}
-            self.system_info_rcoro = None
 
     class _Server(object):
         def __init__(self, name, location):
@@ -284,14 +284,6 @@ class HTTPServer(object):
                         asyncoro.logger.warning('HTTP client %s: invalid timeout "%s" ignored',
                                                 self.client_address[0], item.value)
                         timeout = 0
-                    if timeout >= 10:
-                        if sys.version_info.major >= 3:
-                            node_iter = self._ctx._nodes.values()
-                        else:
-                            node_iter = self._ctx._nodes.itervalues()
-                        for node in node_iter:
-                            if isinstance(node.system_info_rcoro, asyncoro.Coro):
-                                node.system_info_rcoro.send(timeout)
                     self._ctx._poll_sec = timeout
                     self.send_response(200)
                     self.send_header('Content-Type', 'text/html')
@@ -357,7 +349,13 @@ class HTTPServer(object):
                     if isinstance(msg.info, DiscoroServerInfo):
                         node = self._nodes.get(msg.info.location.addr)
                         if not node:
-                            node = HTTPServer._Node(msg.info.name, msg.info.location.addr)
+                            # name is host name followed by '-' and ID
+                            host_name = re.search(r'-\d+$', msg.info.name)
+                            if host_name:
+                                host_name = msg.info.name[:-len(host_name.group(0))]
+                            else:
+                                host_name = msg.info.name
+                            node = HTTPServer._Node(host_name, msg.info.location.addr)
                             node.status = discoro.Scheduler.NodeInitialized
                             self._nodes[msg.info.location.addr] = node
                         server = HTTPServer._Server(msg.info.name, msg.info.location)
@@ -377,7 +375,13 @@ class HTTPServer(object):
                 elif msg.status == discoro.Scheduler.NodeDiscovered:
                     node = self._nodes.get(msg.info.addr, None)
                     if not node:
-                        node = HTTPServer._Node(msg.info.name, msg.info.addr)
+                        # name is host name followed by '-' and ID
+                        host_name = re.search(r'-\d+$', msg.info.name)
+                        if host_name:
+                            host_name = msg.info.name[:-len(host_name.group(0))]
+                        else:
+                            host_name = msg.info.name
+                        node = HTTPServer._Node(host_name, msg.info.addr)
                         node.status = discoro.Scheduler.NodeDiscovered
                         self._nodes[msg.info.addr] = node
                     if isinstance(msg.info, DiscoroNodeInfo):
@@ -386,6 +390,8 @@ class HTTPServer(object):
                                             'use': msg.info.memory.percent}
                         node.disk_info = {'total': '{:,.0f} G'.format(msg.info.disk.total / 1e9),
                                           'use': msg.info.disk.percent}
+                    else:
+                        print('invalid node info: %s' % type(msg.info))
 
                 elif msg.status in (discoro.Scheduler.NodeInitialized,
                                     discoro.Scheduler.NodeClosed, discoro.Scheduler.NodeIgnore,
@@ -394,9 +400,6 @@ class HTTPServer(object):
                     if node:
                         node.status = msg.status
                         node.update_time = time.time()
-                        if msg.status == discoro.Scheduler.NodeInitialized:
-                            node.system_info_rcoro = yield self.computation.run_at(
-                                msg.info, system_info, self.status_coro, max(10, self._poll_sec))
             elif isinstance(msg, DiscoroNodeStatus):
                 node = self._nodes.get(msg.addr, None)
                 if node and node.memory_info:
@@ -408,42 +411,18 @@ class HTTPServer(object):
 
     def shutdown(self, wait=True):
         """This method should be called by user program to close the
-        http server. It should be called in 'main', not in a coroutine.
+        http server. If 'wait' is True the server waits for poll_sec
+        so the http client gets all the updates before server is
+        closed.
         """
         if wait:
-            asyncoro.logger.info(
-                'HTTP server waiting for %s seconds for client updates before quitting',
-                self._poll_sec)
-            time.sleep(self._poll_sec)
+            asyncoro.logger.info('HTTP server waiting for %s seconds for client updates '
+                                 'before quitting', self._poll_sec)
+            if asyncoro.AsynCoro().cur_coro():
+                def _wait(sec, coro=None):
+                    yield coro.sleep(sec)
+                asyncoro.Coro(_wait, self._poll_sec)
+            else:
+                time.sleep(self._poll_sec)
         self._server.shutdown()
         self._server.server_close()
-
-
-def system_info(client=None, interval=None, coro=None):
-    try:
-        import os
-        import psutil
-    except:
-        raise StopIteration(None)
-
-    addr = coro.location.addr
-    partition = asyncoro.AsynCoro.instance().dest_path
-    msg = DiscoroNodeInfo(asyncoro.AsynCoro.instance().name, addr,
-                          psutil.cpu_count(), psutil.cpu_percent(),
-                          psutil.virtual_memory(), psutil.disk_usage(partition))
-    if ((not isinstance(interval, (int, float))) or (interval < 10) or
-       (not isinstance(client, asyncoro.Coro))):
-        if not isinstance(client, asyncoro.Coro):
-            raise StopIteration(msg)
-        else:
-            client.send(msg)
-            raise StopIteration
-
-    while True:
-        msg = yield coro.receive(timeout=interval)
-        if msg and isinstance(msg, (float, int)) and msg >= 10:
-            interval = msg
-        msg = DiscoroNodeStatus(addr, psutil.cpu_percent(), psutil.virtual_memory().percent,
-                                psutil.disk_usage(partition).percent)
-        if client.send(msg):
-            break
