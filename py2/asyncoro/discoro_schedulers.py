@@ -47,22 +47,35 @@ class ProcScheduler(object):
     don't take up CPU), as this scheduler is not aware of those.
     """
 
-    def __init__(self, computation, proc_status=None):
+    def __init__(self, computation, use_server=None):
         """'computation' should be an instance of discoro.Computation
 
-        'proc_status' if not None should be a generator function. When
-        a server process is initialized or closed, this function is
-        executed (as coroutine) with the status and location of server
-        as arguments.
+        'use_server' if not None should be a function. When a server
+        process is discovered, this function is called with the status
+        and DiscoroServerInfo as arguments. If the function returns
+        non-zero value, the server is ignored.
         """
-        if proc_status:
-            if not inspect.isgeneratorfunction(proc_status):
-                asyncoro.logger.warning('Invalid proc_status ignored')
-                proc_status = None
+        if use_server:
+            try:
+                assert inspect.isfunction(use_server) or inspect.ismethod(use_server)
+                args = inspect.getargspec(use_server)
+                if inspect.isfunction(use_server):
+                    assert len(args.args) == 1
+                else:
+                    assert len(args.args) == 2
+                    if args.args[0] != 'self':
+                        logger.warning('First argument to "use_server" method is not "self"')
+                assert args.varargs is None
+                assert args.keywords is None
+                assert args.defaults is None
+            except:
+                asyncoro.logger.warning('Invalid "use_server" ignored; '
+                                        'it must be a function or method')
+                use_server = None
 
         self.computation = computation
         self.computation_sign = None
-        self.proc_status = proc_status
+        self._use_server = use_server
         self.status_coro = Coro(self._status_proc)
         if not computation.status_coro:
             computation.status_coro = self.status_coro
@@ -70,6 +83,7 @@ class ProcScheduler(object):
         self._rcoros_done = asyncoro.Event()
         self._servers = {}
         self._server_avail = asyncoro.Event()
+        self._ignore_servers = set()
 
     def schedule(self, gen, *args, **kwargs):
         """Similar to 'run' method of computation, except as noted
@@ -194,19 +208,14 @@ class ProcScheduler(object):
 
             elif isinstance(msg, DiscoroStatus):
                 if msg.status == discoro.Scheduler.ServerDiscovered:
-                    if self.proc_status:
-                        def status_proc(self, msg, coro=None):
-                            if (yield Coro(self.proc_status, msg.status, msg.info).finish()) == 0:
-                                self._servers[str(msg.info)] = msg.info
-                                self._server_avail.set()
-                        Coro(status_proc, self, msg)
-                    else:
+                    if self._use_server and (self._use_server(msg.info) != 0):
+                        self._ignore_servers.add(str(msg.info.location))
+                elif msg.status == discoro.Scheduler.ServerInitialized:
+                    if str(msg.info) not in self._ignore_servers:
                         self._servers[str(msg.info)] = msg.info
                         self._server_avail.set()
                 elif msg.status == discoro.Scheduler.ServerClosed:
                     self._servers.pop(str(msg.info), None)
-                    if self.proc_status:
-                        Coro(self.proc_status, msg.status, msg.info)
                 elif msg.status == discoro.Scheduler.ComputationScheduled:
                     self.computation_sign = msg.info
                 elif (msg.status == discoro.Scheduler.ComputationClosed and
@@ -231,18 +240,32 @@ class NodeScheduler(object):
     def __init__(self, computation, node_status=None):
         """'computation' should be an instance of discoro.Computation
 
-        'node_status' if not None should be a generator function. When
-        a node is initialized or closed, this function is executed (as
-        coroutine) with the status and location of node as arguments.
+        'use_node' if not None should be a function. When a server
+        process is discovered, this function is called with the status
+        and DiscoroServerInfo as arguments. If the function returns
+        non-zero value, the server is ignored.
         """
-        if node_status:
-            if not inspect.isgeneratorfunction(node_status):
-                asyncoro.logger.warning('Invalid node_status ignored')
-                node_status = None
+        if use_node:
+            try:
+                assert inspect.isfunction(use_node) or inspect.ismethod(use_node)
+                args = inspect.getargspec(use_node)
+                if inspect.isfunction(use_node):
+                    assert len(args.args) == 1
+                else:
+                    assert len(args.args) == 2
+                    if args.args[0] != 'self':
+                        logger.warning('First argument to "use_node" method is not "self"')
+                assert args.varargs is None
+                assert args.keywords is None
+                assert args.defaults is None
+            except:
+                asyncoro.logger.warning('Invalid "use_node" ignored; '
+                                        'it must be a function or method')
+                use_node = None
 
         self.computation = computation
         self.computation_sign = None
-        self.node_status = node_status
+        self._use_node = use_node
         self.status_coro = Coro(self._status_proc)
         if not computation.status_coro:
             computation.status_coro = self.status_coro
@@ -250,6 +273,7 @@ class NodeScheduler(object):
         self._rcoros_done = asyncoro.Event()
         self._nodes = {}
         self._node_avail = asyncoro.Event()
+        self._ignore_nodes = set()
 
     def schedule(self, gen, *args, **kwargs):
         """Similar to 'run' method of computation, except as noted
@@ -371,19 +395,14 @@ class NodeScheduler(object):
 
             elif isinstance(msg, DiscoroStatus):
                 if msg.status == discoro.Scheduler.NodeDiscovered:
-                    if self.node_status:
-                        def status_proc(self, msg, coro=None):
-                            if (yield Coro(self.node_status, msg.status, msg.info).finish()) == 0:
-                                self._nodes[msg.info] = msg.info
-                                self._node_avail.set()
-                        Coro(status_proc, self, msg)
-                    else:
-                        self._nodes[msg.info.addr] = msg.info
+                    if self._use_node and (self._use_node(msg.info) != 0):
+                        self._ignore_nodes.add(str(msg.info.addr))
+                elif msg.status == discoro.Scheduler.NodeInitialized:
+                    if msg.info not in self._ignore_nodes:
+                        self._nodes[msg.info] = msg.info
                         self._node_avail.set()
                 elif msg.status == discoro.Scheduler.NodeClosed:
                     self._nodes.pop(msg.info, None)
-                    if self.node_status:
-                        Coro(self.node_status, msg.status, msg.info)
                 elif msg.status == discoro.Scheduler.ComputationScheduled:
                     self.computation_sign = msg.info
                 elif (msg.status == discoro.Scheduler.ComputationClosed and
