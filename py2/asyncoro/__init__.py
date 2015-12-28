@@ -17,7 +17,7 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "3.6.2"
+__version__ = "3.6.3"
 
 __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
@@ -2446,6 +2446,16 @@ class Coro(object):
             s = '%s@%s' % (s, self._location)
         return s
 
+    def __eq__(self, other):
+        return isinstance(other, Coro) and \
+               self._location == other._location and self._id == other._id
+
+    def __hash__(self):
+        if self._location:
+            return hash(str(self))
+        else:
+            return hash(self)
+
 
 class Location(object):
     """Distributed asyncoro, coroutines, channels use Location to
@@ -2472,6 +2482,9 @@ class Location(object):
 
     def __repr__(self):
         return '%s:%s' % (self.addr, self.port)
+
+    def __hash__(self):
+        return hash(str(self))
 
 
 class Channel(object):
