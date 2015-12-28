@@ -385,11 +385,16 @@ class HTTPServer(object):
                         node.status = discoro.Scheduler.NodeDiscovered
                         self._nodes[msg.info.addr] = node
                     if isinstance(msg.info, DiscoroNodeInfo):
-                        node.cpu_info = {'total': msg.info.cpus, 'use': msg.info.cpus_use}
-                        node.memory_info = {'total': '{:,.0f} M'.format(msg.info.memory.total / 1e6),
-                                            'use': msg.info.memory.percent}
-                        node.disk_info = {'total': '{:,.0f} G'.format(msg.info.disk.total / 1e9),
-                                          'use': msg.info.disk.percent}
+                        if msg.info.memory:
+                            node.cpu_info = {'total': msg.info.cpus, 'use': msg.info.cpus_use}
+                            node.memory_info = {'total': '{:,.0f} M'.format(msg.info.memory.total / 1e6),
+                                                'use': msg.info.memory.percent}
+                            node.disk_info = {'total': '{:,.0f} G'.format(msg.info.disk.total / 1e9),
+                                              'use': msg.info.disk.percent}
+                        else:
+                            node.cpu_info = {'total': -1, 'use': -1}
+                            node.memory_info = {'total': -1, 'use': -1}
+                            node.disk_info = {'total': -1, 'use': -1}
                     else:
                         print('invalid node info: %s' % type(msg.info))
 
