@@ -9,7 +9,7 @@
 import logging, random
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
-from asyncoro.discoro_schedulers import ProcScheduler, NodeScheduler
+from asyncoro.discoro_schedulers import ProcScheduler
 import asyncoro.httpd
 
 

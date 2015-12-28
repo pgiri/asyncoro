@@ -8,7 +8,7 @@
 # client (which is sent to the program) and to send output from the
 # program back to the client.
 
-import logging, random
+import logging, random, sys
 from asyncoro.discoro import DiscoroStatus
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
@@ -49,18 +49,23 @@ def rcoro_proc(client, program, coro=None):
         if not data:
             break
         # write data as lines to program
-        yield pipe.write(str(data) + '\n', full=True)
+        yield pipe.write(data + '\n'.encode(), full=True)
     pipe.stdin.close()
-    # wait for all data to be read
+    # wait for all data to be read (subprocess to end)
     yield reader.finish()
     raise StopIteration(pipe.poll())
 
-def client_proc(computation, coro=None):
+def client_proc(computation, n, coro=None):
+    # use ProcScheduler to run one discomp7_proc.py at a server
+    job_scheduler = asyncoro.discoro_schedulers.ProcScheduler(computation)
+    if (yield computation.schedule()):
+        raise Exception('schedule failed')
 
     # send 10 random numbers to remote process (rcoro_proc)
     def send_input(rcoro, coro=None):
         for i in range(10):
-            rcoro.send(random.uniform(1, 4))
+            # encode strings so works with both Python 2.7 and 3
+            rcoro.send(('%.2f' % random.uniform(0, 5)).encode())
             # assume delay in input availability
             yield coro.sleep(random.uniform(0, 2))
         # end of input is indicated with None
@@ -70,16 +75,11 @@ def client_proc(computation, coro=None):
     def get_output(i, coro=None):
         while True:
             line = yield coro.receive()
-            if not line:
+            if not line: # end of output
                 break
-            print('job %s output: %s' % (i, line.strip()))
+            print('job %s output: %s' % (i, line.strip().decode()))
 
-    # use ProcScheduler to run one discomp7_proc.py at a server
-    job_scheduler = asyncoro.discoro_schedulers.ProcScheduler(computation)
-    if (yield computation.schedule()):
-        raise Exception('schedule failed')
-
-    def run_instance(i, coro=None):
+    def create_job(i, coro=None):
         client_reader = asyncoro.Coro(get_output, i)
         rcoro = yield job_scheduler.schedule(rcoro_proc, client_reader, 'discomp7_proc.py')
         if isinstance(rcoro, asyncoro.Coro):
@@ -91,8 +91,7 @@ def client_proc(computation, coro=None):
         else:
             client_reader.terminate()
 
-    # in this example 5 instances of discomp7_proc.py are run
-    for job in [asyncoro.Coro(run_instance, i) for i in range(1, 6)]:
+    for job in [asyncoro.Coro(create_job, i) for i in range(1, n+1)]:
         yield job.finish()
 
     yield job_scheduler.finish(close=True)
@@ -100,9 +99,11 @@ def client_proc(computation, coro=None):
 
 if __name__ == '__main__':
     asyncoro.logger.setLevel(logging.DEBUG)
+    # run n (defailt 5) instances of discomp7_proc.py
+    n = int(sys.argv[1]) if len(sys.argv) == 2 else 5
     # if scheduler is not already running (on a node as a program),
     # start private scheduler:
     discoro.Scheduler()
     # send rcoro_proc and discomp7_proc.py
     computation = discoro.Computation([rcoro_proc, 'discomp7_proc.py'])
-    asyncoro.Coro(client_proc, computation).value()
+    asyncoro.Coro(client_proc, computation, n).value()

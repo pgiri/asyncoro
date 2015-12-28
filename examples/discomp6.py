@@ -5,8 +5,7 @@
 # remote discoro process to run as remote coroutines. At any time at
 # most one computation coroutine is scheduled at a process (due to
 # ProcScheduler). This example shows how to use 'execute' method of
-# ProcScheduler / NodeScheduler to submit comutations and get their
-# results easily.
+# ProcScheduler to submit comutations and get their results easily.
 
 # This example can be combined with in-memory processing (see
 # 'discoro_client5.py') and streaming (see 'discoro_client6.py') for
@@ -49,7 +48,7 @@ def compute(alg, n, coro=None):
 
 
 def client_proc(computation, data_file, coro=None):
-    server_locations = {} # keep track of which servers to cleanup
+    used_servers = {} # keep track of which servers to cleanup
 
     # coroutine to (concurrently) execute computations
     def exec_proc(gen, *args, **kwargs):
@@ -60,20 +59,18 @@ def client_proc(computation, data_file, coro=None):
         # results can be processed here (as they become available), or
         # await in sequence as done below
 
-    def status_proc(status, location, coro=None):
+    def status_proc(status, info, coro=None):
         # this coroutine is executed with status (either
         # ServerInitialized or ServerClosed) and location of server
         if status != discoro.Scheduler.ServerInitialized:
             raise StopIteration(0)
         # send data file to server
-        if (yield asyncoro.AsynCoro().send_file(location, data_file, timeout=10)) < 0:
-            print('Could not send data file "%s" to %s' % (data_file, location))
+        if (yield asyncoro.AsynCoro().send_file(info, data_file, timeout=10)) < 0:
+            print('Could not send data file "%s" to %s' % (data_file, info))
             raise StopIteration(-1)
         # run 'proc_setup' to read file in to memory
-        if (yield job_scheduler.execute_at(location, proc_setup, data_file)) == 0:
-            # use str(location) as key; 'Location' objects may be
-            # different at different times even for same location
-            server_locations[str(location)] = location
+        if (yield job_scheduler.execute_at(info, proc_setup, data_file)) == 0:
+            used_servers[info] = info
             raise StopIteration(0) # indicate server initialized with exit value 0
         raise StopIteration(-1)
 
@@ -98,8 +95,8 @@ def client_proc(computation, data_file, coro=None):
         else:
             print('rcoro %s failed: %s' % (job, result))
 
-    jobs = [asyncoro.Coro(job_scheduler.execute_at, location, proc_cleanup)
-            for location in server_locations.values()]
+    jobs = [asyncoro.Coro(job_scheduler.execute_at, info, proc_cleanup)
+            for info in used_servers.values()]
 
     yield job_scheduler.finish(close=True)
 

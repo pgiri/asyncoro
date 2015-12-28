@@ -5,8 +5,7 @@
 # remote discoro process to run as remote coroutines. At any time at
 # most one computation coroutine is scheduled at a process (due to
 # ProcScheduler). This example shows how to use 'execute' method of
-# ProcScheduler / NodeScheduler to submit comutations and get their
-# results easily.
+# ProcScheduler to submit comutations and get their results easily.
 
 # This example can be combined with in-memory processing (see
 # 'discoro_client5.py') and streaming (see 'discoro_client6.py') for

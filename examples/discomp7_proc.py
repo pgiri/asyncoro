@@ -7,6 +7,7 @@ import sys
 import time
 
 lineno = 0
+errors = 0
 while True:
     line = sys.stdin.readline()
     if not line:
@@ -15,8 +16,9 @@ while True:
     try:
         n = float(line)
     except:
+        errors += 1
         continue
     time.sleep(n)
-    print('%s: Current time is %s' % (lineno, time.asctime()))
+    print('Line %s - current time is %s' % (lineno, time.asctime()))
     sys.stdout.flush() # flush so output is sent to client immediately
-exit(0)
+exit(errors)

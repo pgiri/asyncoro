@@ -47,12 +47,12 @@ def proc_setup(client, coro=None):
 # illustrate messages can be sent from thread function. However,
 # messages can't be received in thread function.
 def compute_proc(client, n, coro=None):
-    def thread_proc(i): # executed in a thread
+    def thread_proc(): # executed in a thread
         time.sleep(n)
-        client.send((coro.location, i*n))
+        client.send((coro.location, n))
         return 0
 
-    yield thread_pool.async_task(thread_proc, x)
+    yield thread_pool.async_task(thread_proc)
 
 def client_proc(computation, njobs, coro=None):
     cleanup_rcoros = set() # processes used are kept track to cleanup when done
@@ -68,7 +68,7 @@ def client_proc(computation, njobs, coro=None):
     def submit_job(where, coro=None):
         if status['submitted'] < njobs:
             rcoro = yield computation.run_at(where, compute_proc,
-                                             results_coro, random.uniform(10, 50))
+                                             results_coro, random.uniform(10, 20))
             if isinstance(rcoro, asyncoro.Coro):
                 status['submitted'] += 1
 

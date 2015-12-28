@@ -1,6 +1,9 @@
 Example files in this directory are meant to illustrate features of
 asyncoro framework. They are not necessarily efficient versions, nor
-very useful.
+very useful. The descriptions below are sorted on the names of files,
+so some examples at the beginning use advanced features, whereas later
+files (especially files that start with 'tut_') may be easier to
+follow.
 
 dispy project (http://dispy.sourceforge.net) uses asyncoro to
 implement Python framework for distributed and parallel computing.
@@ -36,6 +39,12 @@ implement Python framework for distributed and parallel computing.
 * discomp6.py uses 'execute_at' method of ProcScheduler to initialize
   server processes for in-memory processing, issue computation jobs
   and get their results.
+
+* discomp7.py runs an external program, discomp7_proc.py, at remote
+  servers. The program reads from standard input and writes to
+  standard output. Asynchronous pipes and message passing are used to
+  send input from client to this program executing on remote servers,
+  and get the output back to client.
 
 * discoro_client1.py uses discoro (server) to distribute a computation
   (and its dependencies) and execute remote coroutines. The client and
