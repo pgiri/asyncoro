@@ -449,6 +449,7 @@ class Scheduler(object):
             self.addr = addr
             self.servers = {}
             self.ncoros = 0
+            self.load = 0.0
             self.status = None
             self.info = None
             self.status_server = None
@@ -497,8 +498,9 @@ class Scheduler(object):
                 rcoro = yield coro.receive(timeout=computation.timeout)
                 if isinstance(rcoro, Coro):
                     # TODO: keep func too for fault-tolerance
-                    self.rcoros[str(rcoro)] = rcoro
+                    self.rcoros[rcoro] = rcoro
                     node.ncoros += 1
+                    node.load = float(node.ncoros) / len(node.servers)
                 raise StopIteration(rcoro)
 
             rcoro = yield Coro(_run, self, func).finish()
@@ -549,11 +551,11 @@ class Scheduler(object):
                 if not node:
                     logger.warning('node %s is invalid' % rcoro.location.addr)
                     continue
-                server = node.servers.get(str(rcoro.location), None)
+                server = node.servers.get(rcoro.location, None)
                 if not server:
                     logger.warning('server "%s" is invalid' % (rcoro.location))
                     continue
-                if server.rcoros.pop(str(rcoro), None) is None:
+                if server.rcoros.pop(rcoro, None) is None:
                     # A server may not have updated server.rcoros
                     # before the coroutine's MonitorException is
                     # received, so put it back in message queue with a
@@ -563,7 +565,7 @@ class Scheduler(object):
                     # drop it.
                     if len(msg.args) > 2:
                         if msg.args[2] > 5:
-                            logger.warning('Inavlid remote coroutine %s exit status ignored: %s' %
+                            logger.warning('Invalid remote coroutine %s exit status ignored: %s' %
                                            (rcoro, msg.args[2]))
                             continue
                         msg.args = (msg.args[0], msg.args[1], (msg.args[2] + 1))
@@ -576,6 +578,7 @@ class Scheduler(object):
                         msg.args = (msg.args[0], msg.args[1])
                     self._cur_computation.status_coro.send(msg)
                 node.ncoros -= 1
+                node.load = float(node.ncoros) / len(node.servers)
 
             elif isinstance(msg, asyncoro.PeerStatus):
                 computation = self._cur_computation
@@ -585,14 +588,14 @@ class Scheduler(object):
                     if not node:
                         node = Scheduler._Node(msg.name, msg.location.addr, self)
                         self._nodes[msg.location.addr] = node
-                    node.servers[str(msg.location)] = server
+                    node.servers[msg.location] = server
                     if node.status != Scheduler.NodeIgnore:
                         Coro(self.__setup_server, server)
                 else:
                     # msg.status == asyncoro.PeerStatus.Offline
                     node = self._nodes.get(msg.location.addr, None)
                     if node:
-                        server = node.servers.pop(str(msg.location), None)
+                        server = node.servers.pop(msg.location, None)
                         if server:
                             Coro(self.__close_server, server)
                     elif computation and msg.location == computation._pulse_coro.location:
@@ -615,7 +618,7 @@ class Scheduler(object):
                     ncoros = msg.get('ncoros', -1)
                     node = self._nodes.get(loc.addr, None)
                     if node:
-                        server = node.servers.get(str(loc), None)
+                        server = node.servers.get(loc, None)
                         if server:
                             server.last_pulse = now
                             if ncoros != len(server.rcoros):
@@ -632,7 +635,7 @@ class Scheduler(object):
                     if isinstance(location, asyncoro.Location):
                         node = self._nodes.get(location.addr, None)
                         if node:
-                            server = node.servers.get(str(location), None)
+                            server = node.servers.get(location, None)
                             if server:
                                 yield self.__close_server(server)
                                 if all(p.status != Scheduler.ServerInitialized
@@ -677,10 +680,9 @@ class Scheduler(object):
         for node in self._nodes.itervalues():
             if node.status != Scheduler.NodeInitialized:
                 continue
-            node_load = float(node.ncoros) / len(node.servers)
-            if load is None or node_load < load:
+            if load is None or node.load < load:
                 host = node
-                load = node_load
+                load = node.load
         if host:
             yield host.run(func, client)
         else:
@@ -777,7 +779,7 @@ class Scheduler(object):
                 elif isinstance(where, asyncoro.Location):
                     node = self._nodes.get(where.addr)
                     if node:
-                        server = node.servers.get(str(where))
+                        server = node.servers.get(where)
                         if server:
                             Coro(server.run, func, client)
                         else:
@@ -934,7 +936,7 @@ class Scheduler(object):
             if not isinstance(server.coro, Coro):
                 logger.debug('server at %s is not valid' % (server.location))
                 # TODO: asuume temporary issue instead of removing it?
-                node.servers.pop(str(server.location), None)
+                node.servers.pop(server.location, None)
                 raise StopIteration(-1)
             if not node.info:
                 server.coro.send({'req': 'node_info', 'client': coro})
@@ -996,7 +998,7 @@ class Scheduler(object):
         node = self._nodes.get(server.location.addr, None)
         if not node:
             raise StopIteration(-1)
-        disconnected = str(server.location) not in node.servers
+        disconnected = server.location not in node.servers
         if disconnected:
             if computation and computation.status_coro:
                 computation.status_coro.send(DiscoroStatus(Scheduler.ServerDisconnected,
@@ -1029,6 +1031,7 @@ class Scheduler(object):
                         node.status_server = None
             else:
                 node.ncoros = 0
+                node.load = 0.0
                 node.status = Scheduler.NodeClosed
                 node.status_server = None
                 if computation and computation.status_coro:
