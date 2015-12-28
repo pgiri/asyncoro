@@ -77,6 +77,7 @@ class HTTPServer(object):
             return
 
         def do_GET(self):
+            # TODO: indicate node and server status (e.g., that a server is closed)
             if self.path == '/cluster_updates':
                 self._ctx._lock.acquire()
                 updates = [
@@ -328,9 +329,9 @@ class HTTPServer(object):
                 rcoro = msg.args[0]
                 node = self._nodes.get(rcoro.location.addr)
                 if node:
-                    server = node.servers.get(str(rcoro.location))
+                    server = node.servers.get(rcoro.location)
                     if server:
-                        if server.coros.pop(str(rcoro), None) is not None:
+                        if server.coros.pop(rcoro, None) is not None:
                             server.coros_done += 1
                             node.update_time = time.time()
                             self._updates[node.ip_addr] = node
@@ -339,9 +340,9 @@ class HTTPServer(object):
                     rcoro = msg.info
                     node = self._nodes.get(rcoro.coro.location.addr)
                     if node:
-                        server = node.servers.get(str(rcoro.coro.location))
+                        server = node.servers.get(rcoro.coro.location)
                         if server:
-                            server.coros[str(rcoro.coro)] = rcoro
+                            server.coros[rcoro.coro] = rcoro
                             server.coros_submitted += 1
                             node.update_time = time.time()
                             self._updates[node.ip_addr] = node
@@ -360,18 +361,21 @@ class HTTPServer(object):
                             self._nodes[msg.info.location.addr] = node
                         server = HTTPServer._Server(msg.info.name, msg.info.location)
                         server.status = msg.status
-                        node.servers[str(server.location)] = server
+                        node.servers[server.location] = server
                         node.update_time = time.time()
                         self._updates[node.ip_addr] = node
                 elif msg.status in (discoro.Scheduler.ServerClosed, discoro.Scheduler.ServerIgnore,
                                     discoro.Scheduler.ServerDisconnected):
                     node = self._nodes.get(msg.info.addr)
                     if node:
-                        node.servers.pop(str(msg.info), None)
-                        if not node.servers:
-                            self._nodes.pop(msg.info.addr)
-                        node.update_time = time.time()
-                        self._updates[node.ip_addr] = node
+                        # node.servers.pop(msg.info, None)
+                        # if not node.servers:
+                        #     self._nodes.pop(msg.info.addr)
+                        server = node.servers.get(msg.info, None)
+                        if server:
+                            server.status = msg.status
+                            node.update_time = time.time()
+                            self._updates[node.ip_addr] = node
                 elif msg.status == discoro.Scheduler.NodeDiscovered:
                     node = self._nodes.get(msg.info.addr, None)
                     if not node:

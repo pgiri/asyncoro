@@ -47,7 +47,7 @@ def client_proc(computation, coro=None):
 
     # submit jobs
     for i in range(3):
-        rcoro = yield job_scheduler.schedule(compute, random.uniform(3, 10))
+        rcoro = yield job_scheduler.schedule(compute, random.uniform(10, 20))
 
     # wait for all jobs to be done and close computation
     yield job_scheduler.finish(close=True)
@@ -58,13 +58,15 @@ if __name__ == '__main__':
     # if scheduler is not already running (on a node as a program),
     # start private scheduler:
     discoro.Scheduler()
-    # to illustrate passing status messages to multiple coroutines,
-    # httpd is also used in this example:
-    httpd = asyncoro.httpd.HTTPServer()
     # send 'compute' generator function
     computation = discoro.Computation([compute], timeout=5)
+    # to illustrate passing status messages to multiple coroutines,
+    # httpd is also used in this example:
+    httpd = asyncoro.httpd.HTTPServer(computation)
     # call '.value()' of coroutine created here, otherwise main thread
     # may finish (causing interpreter to start cleanup) before asyncoro
     # scheduler gets a chance to start
     asyncoro.Coro(client_proc, computation).value()
+    import time
+    time.sleep(5)
     httpd.shutdown()

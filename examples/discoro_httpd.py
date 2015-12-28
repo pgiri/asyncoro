@@ -48,6 +48,8 @@ def status_proc(coro=None):
             # else:
             #     print('Status: %s / %s' % (msg.status, msg.info))
 
+        elif isinstance(msg, discoro.DiscoroNodeStatus):
+            pass
         else:
             print('status msg ignored: %s' % type(msg))
 
@@ -84,11 +86,11 @@ if __name__ == '__main__':
     # if scheduler is not already running (on a node as a program),
     # start it (private scheduler):
     discoro.Scheduler()
-    # create http server to monitor nodes, servers, coroutines
-    http_server = asyncoro.httpd.HTTPServer()
     # send generator function and class C (as the computation uses
     # objects of C)
     computation = discoro.Computation([compute, C])
+    # create http server to monitor nodes, servers, coroutines
+    http_server = asyncoro.httpd.HTTPServer(computation)
     coro = asyncoro.Coro(client_proc, computation)
     print('   Enter "quit" or "exit" to end the program, or ')
     print('   Enter "servers" to schedule coroutine on each server, or ')
