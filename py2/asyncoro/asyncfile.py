@@ -34,7 +34,6 @@ if platform.system() == 'Windows':
     __all__ += ['pipe', 'Popen']
 
     import itertools
-    import tempfile
     import win32file
     import win32pipe
     import win32event
@@ -49,8 +48,7 @@ if platform.system() == 'Windows':
     def pipe(bufsize=8192):
         """Creates overlapped (asynchronous) pipe.
         """
-        name = tempfile.mkstemp(prefix=r'\\.\pipe\asyncoro-pipe-%d-%d-' %
-                                (os.getpid(), next(_pipe_id)))
+        name = r'\\.\pipe\asyncoro-pipe-%d-%d' % (os.getpid(), next(_pipe_id))
         rh = wh = None
         try:
             rh = win32pipe.CreateNamedPipe(
@@ -80,7 +78,6 @@ if platform.system() == 'Windows':
                 win32file.CloseHandle(rh)
             if wh is not None:
                 win32file.CloseHandle(wh)
-            os.remove(name)
             raise
 
     class Popen(subprocess.Popen):
@@ -265,7 +262,8 @@ if platform.system() == 'Windows':
                         _AsyncFile._notifier._del_timeout(self)
                     self._overlap.object = self._read_result = None
                     if rc != winerror.ERROR_OPERATION_ABORTED:
-                        if self._buflist or rc == winerror.ERROR_HANDLE_EOF:
+                        if (self._buflist or rc == winerror.ERROR_HANDLE_EOF or
+                           rc == winerror.ERROR_BROKEN_PIPE):
                             buf, self._buflist = ''.join(self._buflist), []
                             self._read_coro._proceed_(buf)
                             return
