@@ -35,6 +35,7 @@ import select
 import sys
 import types
 import struct
+import re
 import logging
 import errno
 import platform
@@ -2469,8 +2470,11 @@ class Location(object):
     __slots__ = ('addr', 'port')
 
     def __init__(self, host, tcp_port):
-        self.addr = socket.gethostbyname(host)
-        self.port = tcp_port
+        if re.match(r'^\d+[\.\d]+$', host):
+            self.addr = host
+        else:
+            self.addr = socket.gethostbyname(host)
+        self.port = int(tcp_port)
 
     def __eq__(self, other):
         return isinstance(other, type(self)) and \
