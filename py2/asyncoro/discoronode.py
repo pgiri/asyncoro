@@ -50,8 +50,7 @@ def discoro_proc():
         def __init__(self, **kwargs):
             self.__dict__.update(kwargs)
 
-    _discoro_serve = globals()['_discoro_serve']
-    del globals()['_discoro_serve']
+    _discoro_serve = globals().get('_discoro_serve', -1)
     _discoro_coro = asyncoro.AsynCoro.cur_coro()
     _discoro_coro.register('discoro_server')
     _discoro_name = asyncoro.AsynCoro.instance().name
@@ -65,7 +64,7 @@ def discoro_proc():
     if os.path.exists(_discoro_pid_path):
         pid = open(_discoro_pid_path, 'r').read()
         print('\n   Another discoronode seems to be running;\n'
-              '   make sure server with ID %s quit and remove "%s"\n' % (pid, _discoro_pid_path))
+              '   make sure server with PID %s quit and remove "%s"\n' % (pid, _discoro_pid_path))
         import signal
         os.kill(os.getpid(), signal.SIGTERM)
     if os.path.isdir(_discoro_dest_path):
@@ -332,7 +331,7 @@ def discoro_proc():
         os.remove(_discoro_pid_path)
     os.chdir(_discoro_dest_path)
     # shutil.rmtree(_discoro_dest_path, ignore_errors=True)
-    asyncoro.logger.debug('discoro server %s quit' % _discoro_coro)
+    asyncoro.logger.debug('discoro server %s quit' % _discoro_coro.location)
 
 
 def _discoro_process(_discoro_config, _discoro_queue):
@@ -451,7 +450,15 @@ if __name__ == '__main__':
     try:
         assert os.getpgrp() == os.tcgetpgrp(sys.stdin.fileno())
     except:
-        pass
+        while True:
+            try:
+                _discoro_cmd = raw_input('Enter "quit" or "exit" to terminate discoronode: ')
+                _discoro_cmd = _discoro_cmd.strip().lower()
+                if _discoro_cmd in ('quit', 'exit'):
+                    break
+            except:
+                pass
+        _discoro_coro.send({'req': 'quit'})
     else:
         def read_stdin(coro=None):
             coro.set_daemon()
@@ -469,11 +476,12 @@ if __name__ == '__main__':
             _discoro_coro.send({'req': 'quit'})
         asyncoro.Coro(read_stdin)
 
+    _discoro_coro.value()
+
     # make sure all servers quit; otherwise, multiple keyboard interrupts can
     # leave servers hanging, with unpredictable behavior
     while True:
         try:
-            _discoro_coro.value()
             asyncoro.logger.debug('terminating servers')
             while not _discoro_queue.empty():
                 asyncoro.unserialize(_discoro_queue.get()).send({'req': 'quit'})
