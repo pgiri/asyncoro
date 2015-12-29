@@ -20,13 +20,17 @@ import asyncoro.discoro_schedulers
 # client.
 def rcoro_proc(client, program, coro=None):
     import sys
+    import os
     import subprocess
     import asyncoro.asyncfile
 
     if program.endswith('.py'):
         program = [sys.executable, program]
     # start program as a subprocess (to read from and write to pipe)
-    pipe = subprocess.Popen(program, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    if os.name == 'nt':
+        pipe = asyncoro.asyncfile.Popen(program, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    else:
+        pipe = subprocess.Popen(program, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     # convert to asynchronous pipe
     pipe = asyncoro.asyncfile.AsyncPipe(pipe)
 
@@ -39,6 +43,8 @@ def rcoro_proc(client, program, coro=None):
             # send output to client
             client.send(line)
         pipe.stdout.close()
+        if os.name == 'nt':
+            pipe.close()
         client.send(None)
 
     reader = asyncoro.Coro(reader_proc)
