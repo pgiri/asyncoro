@@ -17,7 +17,7 @@
       var timer = null;
       var timeout = 1000 * %(TIMEOUT)s;
 
-      function getLocationParam(param) {
+      function getParam(param) {
         param = param.replace(/[\[]/, '\\[').replace(/[\]]/, '\\]');
         var regex = new RegExp('[\\?&]' + param + '=([^&#]*)'),
         results = regex.exec(location.search);
@@ -39,6 +39,7 @@
               node_ip_addr = node.ip_addr;
               $('#node_name').text(node.name);
               $('#node_ip_addr').text(node.ip_addr);
+              $('#node_status').text(node.status);
               $('#node_servers').text(node.servers.length);
               $('#node_coros_submitted').text(node.coros_submitted);
               $('#node_coros_done').text(node.coros_done);
@@ -62,8 +63,9 @@
                 rows += '<tr><td>' + (i + 1) + '</td>' +
                   '<td><a href="server.html?location=' + server.location + '" ' + 'title="View coros on ' +
                   server.location + '">' + server.location + '</a></td><td>' +
-                  server.coros_submitted + '</td><td>' + server.coros_done + '</td><td>' +
+                  server.coros_submitted + '</td><td>' +
                   (server.coros_submitted - server.coros_done) + '</td><td>' +
+                  server.coros_done + '</td><td>' +
                   (new Date(1000 * server.update_time)).toLocaleTimeString() + '</td></tr>';
 
               });
@@ -97,7 +99,7 @@
       }
 
       $(document).ready(function() {
-        var host = getLocationParam('host');
+        var host = getParam('host');
         $('#host').val(host);
 
         if (host) {
@@ -180,6 +182,9 @@
             <td>IP Address</td><td id="node_ip_addr"></td>
           </tr>
           <tr>
+            <td>Status</td><td id="node_status"></td>
+          </tr>
+          <tr>
             <td>Servers</td><td id="node_servers"></td>
           </tr>
           <tr>
@@ -195,10 +200,10 @@
             <td>Coros Submitted</td><td id="node_coros_submitted"></td>
           </tr>
           <tr>
-            <td>Coros Done</td><td id="node_coros_done"></td>
+            <td>Coros Running</td><td id="node_coros_running"></td>
           </tr>
           <tr>
-            <td>Coros Running</td><td id="node_coros_running"></td>
+            <td>Coros Done</td><td id="node_coros_done"></td>
           </tr>
           <tr>
             <td>Last Update</td><td id="node_update"></td>
@@ -211,8 +216,8 @@
         <table class="fancy shadow" style="margin:20px auto;" id="servers-table">
           <caption><span class="border" style="display:inline-block;">Servers</span></caption>
           <thead>
-            <tr><th></th><th>Server</th><th>Coros<br />Submitted</th><th>Coros<br />Done</th>
-              <th>Coros<br />Running</th><th>Last<br />Update</th></tr>
+            <tr><th></th><th>Server</th><th>Coros<br />Submitted</th><th>Coros<br />Running</th>
+              <th>Coros<br />Done</th><th>Last<br />Update</th></tr>
           </thead>
           <tbody>
           </tbody>

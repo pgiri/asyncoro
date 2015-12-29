@@ -23,8 +23,8 @@
 
       function show_cluster() {
         $('#coros-submitted').text(coros.submitted);
-        $('#coros-done').text(coros.done);
         $('#coros-running').text(coros.submitted - coros.done);
+        $('#coros-done').text(coros.done);
 
         if (sorted_keys.length == 0) {
           var key_ids = $.map(nodes, function(node) {
@@ -44,7 +44,7 @@
             node.ip_addr + '">' + node.ip_addr + '</a></td><td>' + node.name + '</td><td>' +
             node.servers + '</td><td>' + node.cpu + '</td><td>' + node.memory.toFixed(1) +
             '</td><td>' + node.disk.toFixed(1) + '</td><td>' + node.coros_submitted + '</td><td>' +
-            node.coros_done + '</td><td>' + (node.coros_submitted - node.coros_done) + '</td><td>' +
+            (node.coros_submitted - node.coros_done) + '</td><td>' + node.coros_done + '</td><td>' +
             node.last_update.toLocaleTimeString() + '</td></tr>';
         });
         $('#nodes').html(rows);
@@ -167,12 +167,12 @@
         <tr>
            <td>Coros Submitted : </td><td id="coros-submitted">0</td>
         </tr>
-        <tr><td style="border-top: 1px solid #bcd;">Coros Done : </td>
-          <td style="border-top: 1px solid #bcd;" id="coros-done">0</td>
-        </tr>
         <tr>
           <td style="border-top: 1px solid #bcd;">Coros Running : </td>
           <td style="border-top: 1px solid #bcd;" id="coros-running">0</td>
+        </tr>
+        <tr><td style="border-top: 1px solid #bcd;">Coros Done : </td>
+          <td style="border-top: 1px solid #bcd;" id="coros-done">0</td>
         </tr>
       </table>
       <table class="fancy shadow" style="text-align:right;margin:10px auto;">
@@ -181,7 +181,7 @@
           <tr>
             <th></th><th>IP Address</th><th>Name</th><th>Servers</th>
             <th>CPU<br />Use %%</th><th>Memory<br />Use %%</th><th>Disk<br />Use %%</th>
-            <th>Coros<br />Submitted</th><th>Coros<br />Done</th><th>Coros<br />Running</th>
+            <th>Coros<br />Submitted</th><th>Coros<br />Running</th><th>Coros<br />Done</th>
 	    <th>Last<br />Update</th>
           </tr>
         </thead>

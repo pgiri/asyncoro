@@ -19,7 +19,7 @@
       // TODO: make max_coros an input?
       var max_coros = 100;
 
-      function getLocationParam(param) {
+      function getParam(param) {
         param = param.replace(/[\[]/, '\\[').replace(/[\]]/, '\\]');
         var regex = new RegExp('[\\?&]' + param + '=([^&#]*)'),
         results = regex.exec(location.search);
@@ -41,9 +41,10 @@
               server_location = server.location;
               $('#server_name').text(server.name);
               $('#server_location').text(server.location);
+              $('#server_status').text(server.status);
               $('#server_coros_submitted').text(server.coros_submitted);
-              $('#server_coros_done').text(server.coros_done);
               $('#server_coros_running').text(server.coros_submitted - server.coros_done);
+              $('#server_coros_done').text(server.coros_done);
               $('#server_update').text((new Date(1000 * server.update_time)).toLocaleTimeString());
               if ($('#server').is(':hidden')) {
                 $('#server').show();
@@ -96,7 +97,7 @@
       }
 
       $(document).ready(function() {
-        var server_location = getLocationParam('location');
+        var server_location = getParam('location');
         $('#location').val(server_location);
         $('#max_coros').val(max_coros);
 
@@ -243,13 +244,16 @@
             <td>Server Location</td><td id="server_location"></td>
           </tr>
           <tr>
+            <td>Server Status</td><td id="server_status"></td>
+          </tr>
+          <tr>
             <td>Coros Submitted</td><td id="server_coros_submitted"></td>
           </tr>
           <tr>
-            <td>Coros Done</td><td id="server_coros_done"></td>
+            <td>Coros Running</td><td id="server_coros_running"></td>
           </tr>
           <tr>
-            <td>Coros Running</td><td id="server_coros_running"></td>
+            <td>Coros Done</td><td id="server_coros_done"></td>
           </tr>
           <tr>
             <td>Last Update</td><td id="server_update"></td>
