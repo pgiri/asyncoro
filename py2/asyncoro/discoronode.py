@@ -327,10 +327,13 @@ def discoro_proc():
             if not isinstance(_discoro_client, Coro):
                 continue
             _discoro_client.send(-1)
-    if os.path.isfile(_discoro_pid_path):
-        os.remove(_discoro_pid_path)
-    os.chdir(_discoro_dest_path)
-    # shutil.rmtree(_discoro_dest_path, ignore_errors=True)
+
+    for _discoro_var in os.listdir(_discoro_dest_path):
+        _discoro_var = os.path.join(_discoro_dest_path, _discoro_var)
+        if os.path.isdir(_discoro_var) and not os.path.islink(_discoro_var):
+            shutil.rmtree(_discoro_var, ignore_errors=True)
+        else:
+            os.remove(_discoro_var)
     asyncoro.logger.debug('discoro server %s quit' % _discoro_coro.location)
 
 
@@ -447,9 +450,24 @@ if __name__ == '__main__':
 
     _discoro_coro = asyncoro.Coro(discoro_proc)
 
-    try:
-        assert os.getpgrp() == os.tcgetpgrp(sys.stdin.fileno())
-    except:
+    if hasattr(os, 'getpgrp') and hasattr(os, 'tcgetpgrp'):
+        if os.getpgrp() == os.tcgetpgrp(sys.stdin.fileno()):
+            def read_stdin(coro=None):
+                coro.set_daemon()
+                _discoro_thread_pool = asyncoro.AsyncThreadPool(1)
+                while True:
+                    sys.stdout.write('Enter "quit" or "exit" to terminate discoronode: ')
+                    sys.stdout.flush()
+                    try:
+                        _discoro_cmd = yield _discoro_thread_pool.async_task(raw_input)
+                    except:
+                        continue
+                    _discoro_cmd = _discoro_cmd.strip().lower()
+                    if _discoro_cmd in ('quit', 'exit'):
+                        break
+                _discoro_coro.send({'req': 'quit'})
+            asyncoro.Coro(read_stdin)
+    else:
         while True:
             try:
                 _discoro_cmd = raw_input('Enter "quit" or "exit" to terminate discoronode: ')
@@ -459,22 +477,6 @@ if __name__ == '__main__':
             except:
                 pass
         _discoro_coro.send({'req': 'quit'})
-    else:
-        def read_stdin(coro=None):
-            coro.set_daemon()
-            _discoro_thread_pool = asyncoro.AsyncThreadPool(1)
-            while True:
-                sys.stdout.write('Enter "quit" or "exit" to terminate discoronode: ')
-                sys.stdout.flush()
-                try:
-                    _discoro_cmd = yield _discoro_thread_pool.async_task(raw_input)
-                except:
-                    continue
-                _discoro_cmd = _discoro_cmd.strip().lower()
-                if _discoro_cmd in ('quit', 'exit'):
-                    break
-            _discoro_coro.send({'req': 'quit'})
-        asyncoro.Coro(read_stdin)
 
     _discoro_coro.value()
 
