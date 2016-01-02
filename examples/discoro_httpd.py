@@ -96,11 +96,18 @@ if __name__ == '__main__':
     print('   Enter "servers" to schedule coroutine on each server, or ')
     print('   Enter "nodes" to schedule coroutine on each node, or ')
     print('   Enter anything else to schedule a coroutine on one of the servers')
+    if sys.version_info.major > 2:
+        read_input = input
+    else:
+        read_input = raw_input
+
     while True:
-        cmd = sys.stdin.readline().strip().lower()
-        if cmd == 'quit' or cmd == 'exit':
-            coro.send(None)
+        try:
+            cmd = read_input().strip().lower()
+            if cmd in ('quit', 'exit'):
+                break
+        except:
             break
-        else:
-            coro.send(cmd)
+        coro.send(cmd)
+    coro.send(None)
     http_server.shutdown()

@@ -29,12 +29,19 @@ def send_proc(coro=None):
     yield channel.subscribe(recv_coro)
     # since readline is synchronous (blocking) call, use async thread
     async_threads = asyncoro.AsyncThreadPool(1)
+    if sys.version_info.major > 2:
+        read_input = input
+    else:
+        read_input = raw_input
     while True:
-        msg = yield async_threads.async_task(sys.stdin.readline)
-        msg = msg.strip()
-        if msg == 'quit':
+        try:
+            line = yield async_threads.async_task(read_input)
+            line = line.strip()
+            if line in ('quit', 'exit'):
+                break
+        except:
             break
-        channel.send((msg, client_id))
+        channel.send((line, client_id))
     server.send(('quit', client_id))
     yield channel.unsubscribe(recv_coro)
 

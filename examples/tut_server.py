@@ -3,7 +3,7 @@
 # (tut_client.py) on same network;
 # see http://asyncoro.sourceforge.net/tutorial.html for details.
 
-import sys, random, logging
+import sys, logging
 import asyncoro.disasyncoro as asyncoro
 
 def server_proc(coro=None):
@@ -17,7 +17,14 @@ def server_proc(coro=None):
 asyncoro.logger.setLevel(logging.DEBUG)
 scheduler = asyncoro.AsynCoro(udp_port=0)
 server = asyncoro.Coro(server_proc)
+if sys.version_info.major > 2:
+    read_input = input
+else:
+    read_input = raw_input
 while True:
-    cmd = sys.stdin.readline().strip().lower()
-    if cmd == 'quit' or cmd == 'exit':
+    try:
+        cmd = read_input().strip().lower()
+        if cmd in ('quit', 'exit'):
+            break
+    except:
         break

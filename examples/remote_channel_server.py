@@ -30,8 +30,14 @@ channel = asyncoro.Channel('2clients')
 channel.register()
 
 asyncoro.Coro(receiver_proc)
+if sys.version_info.major > 2:
+    read_input = input
+else:
+    read_input = raw_input
 while True:
     try:
-        x = sys.stdin.readline()
-    except KeyboardInterrupt:
+        cmd = read_input()
+        if cmd.strip().lower() in ('quit', 'exit'):
+            break
+    except:
         break

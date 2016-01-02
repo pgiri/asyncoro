@@ -41,8 +41,12 @@ def server(host, port, coro=None):
 n = 0
 asyncoro.Coro(server, '127.0.0.1', 8010)
 
+if sys.version_info.major > 2:
+    read_input = input
+else:
+    read_input = raw_input
 while True:
-    cmd = sys.stdin.readline().strip().lower()
+    cmd = read_input().strip().lower()
     if cmd == 'exit' or cmd == 'quit':
         break
 print('n = %d' % n)

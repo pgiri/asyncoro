@@ -47,12 +47,16 @@ def server_proc(coro=None):
 if __name__ == '__main__':
     # asyncoro.logger.setLevel(logging.DEBUG)
     server = asyncoro.Coro(server_proc)
+    if sys.version_info.major > 2:
+        read_input = input
+    else:
+        read_input = raw_input
     while True:
         try:
-            cmd = sys.stdin.readline().strip().lower()
-            if cmd == 'quit' or cmd == 'exit':
+            cmd = read_input()
+            if cmd.strip().lower() in ('quit', 'exit'):
                 break
-        except KeyboardInterrupt:
+        except:
             break
     server.send(('terminate', None))
     server.value() # wait for server to finish

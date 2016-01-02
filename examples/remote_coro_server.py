@@ -24,9 +24,15 @@ asyncoro.logger.setLevel(logging.DEBUG)
 # scheduler = asyncoro.AsynCoro(secret='key')
 
 asyncoro.Coro(receiver)
+if sys.version_info.major > 2:
+    read_input = input
+else:
+    read_input = raw_input
 while True:
     try:
-        x = sys.stdin.readline()
-    except KeyboardInterrupt:
+        cmd = read_input().strip().lower()
+        if cmd in ('quit', 'exit'):
+            break
+    except:
         break
 

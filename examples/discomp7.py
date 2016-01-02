@@ -27,6 +27,7 @@ def rcoro_proc(client, program, coro=None):
     if program.endswith('.py'):
         program = [sys.executable, program]
     # start program as a subprocess (to read from and write to pipe)
+    # create pipe with asyncfile under Windows
     if os.name == 'nt':
         pipe = asyncoro.asyncfile.Popen(program, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     else:
@@ -86,17 +87,21 @@ def client_proc(computation, n, coro=None):
             print('job %s output: %s' % (i, line.strip().decode()))
 
     def create_job(i, coro=None):
+        # create reader and send to rcoro so it can send messages to reader
         client_reader = asyncoro.Coro(get_output, i)
+        # schedule rcoro on (available) remote server
         rcoro = yield job_scheduler.schedule(rcoro_proc, client_reader, 'discomp7_proc.py')
         if isinstance(rcoro, asyncoro.Coro):
             print('  job %s processed by %s' % (i, rcoro))
+            # sender sends input data to rcoro
             asyncoro.Coro(send_input, rcoro)
             # wait for all data to be received
             yield client_reader.finish()
             print('  job %s done' % i)
-        else:
+        else:  # failed to schedule
             client_reader.terminate()
 
+    # create n jobs
     for job in [asyncoro.Coro(create_job, i) for i in range(1, n+1)]:
         yield job.finish()
 

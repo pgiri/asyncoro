@@ -36,9 +36,18 @@ if __name__ == '__main__':
     # used
     conn = asyncoro.AsyncSocket(sock, blocking=True)
 
+    if sys.version_info.major > 2:
+        read_input = input
+    else:
+        read_input = raw_input
     while True:
-        line = sys.stdin.readline().strip()
-        if line.lower() == 'exit' or line.lower() == 'quit':
+        try:
+            line = read_input().strip()
+            if line.lower() in ('quit', 'exit'):
+                break
+            if not line:
+                continue
+        except:
             break
         conn.send_msg(line.encode())
     conn.shutdown(socket.SHUT_WR)

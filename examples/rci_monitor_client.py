@@ -16,11 +16,9 @@ def monitor_proc(n, coro=None):
             rcoro = msg.args[0]
             value_type, value = msg.args[1]
             if value_type == StopIteration:
-                asyncoro.logger.debug('RCI %s/%s finished with: %s',
-                                      rcoro.name, rcoro._id, value.args[0])
+                asyncoro.logger.debug('RCI %s finished with: %s', rcoro, value)
             else:
-                asyncoro.logger.debug('RCI %s/%s failed with: %s',
-                                      rcoro.name, rcoro._id, value.args[0])
+                asyncoro.logger.debug('RCI %s failed with: %s', rcoro, value.args[0])
             done += 1
             if done == n:
                 break

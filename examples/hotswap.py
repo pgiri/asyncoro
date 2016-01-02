@@ -47,14 +47,18 @@ if __name__ == '__main__':
     asyncoro.logger.setLevel(logging.DEBUG)
     server = asyncoro.Coro(server_proc)
     client = asyncoro.Coro(client_proc, server)
+    if sys.version_info.major > 2:
+        read_input = input
+    else:
+        read_input = raw_input
     while True:
         try:
-            cmd = sys.stdin.readline().strip().lower()
+            cmd = read_input().strip().lower()
             if cmd.startswith('client'):
                 swap('client_proc2', 'hotswap_funcs.py', client, server)
             elif cmd.startswith('server'):
                 swap('server_proc2', 'hotswap_funcs.py', server, random.choice(['log', 'sqrt']))
-            elif cmd == 'quit' or cmd == 'exit':
+            elif cmd in ('quit', 'exit'):
                 break
-        except KeyboardInterrupt:
+        except:
             break

@@ -43,10 +43,14 @@ def chat(host='localhost', port=1234, coro=None):
 
 if __name__ == '__main__':
     asyncoro.Coro(chat)
+    if sys.version_info.major > 2:
+        read_input = input
+    else:
+        read_input = raw_input
     while True:
         try:
-            cmd = sys.stdin.readline().strip().lower()
-            if cmd == 'quit' or cmd == 'exit':
+            cmd = read_input()
+            if cmd.strip().lower() in ('quit', 'exit'):
                 break
-        except KeyboardInterrupt:
+        except:
             break

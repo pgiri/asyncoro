@@ -30,10 +30,14 @@ def server(host, port, coro=None):
 if __name__ == '__main__':
     asyncoro.Coro(server, '127.0.0.1', 8010)
 
+    if sys.version_info.major > 2:
+        read_input = input
+    else:
+        read_input = raw_input
     while True:
         try:
-            cmd = sys.stdin.readline().strip().lower()
-            if not cmd or cmd == 'exit' or cmd == 'quit':
+            cmd = read_input().strip().lower()
+            if cmd in ('quit', 'exit'):
                 break
-        except KeyboardInterrupt:
+        except:
             break

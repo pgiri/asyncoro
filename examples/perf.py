@@ -9,7 +9,7 @@ else:
 
 def client_proc(i, server, coro=None):
     # wait until all processes are created
-    yield coro.sleep(1)
+    yield coro.sleep(5)
     # each client sends 3 messages
     for j in range(2):
         server.send((i, j))
@@ -26,10 +26,7 @@ def server_proc(n, coro=None):
                 break
 
 if __name__ == '__main__':
-    if len(sys.argv) > 1:
-        n = int(sys.argv[1])
-    else:
-        n = 10000
+    n = int(sys.argv[1]) if len(sys.argv) > 1 else 10000
 
     start = time.time()
     server = asyncoro.Coro(server_proc, n)

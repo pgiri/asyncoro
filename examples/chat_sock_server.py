@@ -73,6 +73,6 @@ if __name__ == '__main__':
             conn, addr = sock.accept()
             # each connection is handled by a coroutine
             asyncoro.Coro(client_proc, conn, addr, server)
-    except KeyboardInterrupt:
+    except:
         pass
     server.send(('terminate'.encode(), None))

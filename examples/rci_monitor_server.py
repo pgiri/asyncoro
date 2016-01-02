@@ -31,8 +31,14 @@ scheduler = asyncoro.AsynCoro(name='server', secret='test')
 rci1 = asyncoro.RCI(rci_1)
 rci1.register()
 
+if sys.version_info.major > 2:
+    read_input = input
+else:
+    read_input = raw_input
 while True:
     try:
-        sys.stdin.readline()
-    except KeyboardInterrupt:
+        line = read_input().strip().lower()
+        if line in ('quit', 'exit'):
+            break
+    except:
         break
