@@ -17,7 +17,7 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "3.6.3"
+__version__ = "3.6.5"
 
 __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
@@ -1135,17 +1135,17 @@ if platform.system() == 'Windows':
                         self._notifier = None
 
             def _timed_out(self):
-                if self._rsock.type & socket.SOCK_STREAM:
+                if self._rsock and self._rsock.type & socket.SOCK_STREAM:
                     if self._read_overlap or self._write_overlap:
                         win32file.CancelIo(self._fileno)
                 if self._read_coro:
-                    if self._rsock.type & socket.SOCK_DGRAM:
+                    if self._rsock and self._rsock.type & socket.SOCK_DGRAM:
                         self._notifier.clear(self, _AsyncPoller._Read)
                         self._read_task = None
                     self._read_coro.throw(socket.timeout('timed out'))
                     self._read_result = self._read_coro = None
                 if self._write_coro:
-                    if self._rsock.type & socket.SOCK_DGRAM:
+                    if self._rsock and self._rsock.type & socket.SOCK_DGRAM:
                         self._notifier.clear(self, _AsyncPoller._Write)
                         self._write_task = None
                     self._write_coro.throw(socket.timeout('timed out'))
