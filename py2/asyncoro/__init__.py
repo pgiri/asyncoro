@@ -3545,8 +3545,6 @@ class AsyncThreadPool(object):
         'target(*args, **kwargs)'.
         """
 
-        if not inspect.isroutine(target):
-            raise ValueError('invalid usage: "target" must be function or method')
         coro = AsynCoro.cur_coro()
         # assert isinstance(coro, Coro)
         # if arguments are passed as per Thread call, get args and kwargs
