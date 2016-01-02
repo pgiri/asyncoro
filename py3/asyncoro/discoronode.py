@@ -12,7 +12,7 @@ computations are to be run on systems with multiple processors, then
 this program should be run with multiple instances (see below for '-c'
 option to this program).
 
-See 'discoro_client*.py' files for example use cases.
+See 'discoro_client*.py' and 'discomp*.py' files for example use cases.
 """
 
 __author__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
@@ -46,8 +46,9 @@ def discoro_proc():
     from asyncoro.discoro import MinPulseInterval, MaxPulseInterval, \
          DiscoroNodeInfo, DiscoroNodeStatus
 
-    _discoro_serve = globals().get('_discoro_serve', -1)
     _discoro_coro = asyncoro.AsynCoro.cur_coro()
+    _discoro_config = yield _discoro_coro.receive()
+    assert _discoro_config['req'] == 'config'
     _discoro_coro.register('discoro_server')
     _discoro_name = asyncoro.AsynCoro.instance().name
     asyncoro.AsynCoro.instance().dest_path = os.path.join(
@@ -58,11 +59,28 @@ def discoro_proc():
     _discoro_pid_path = os.path.normpath(_discoro_pid_path)
     # TODO: is file locking necessary?
     if os.path.exists(_discoro_pid_path):
-        pid = open(_discoro_pid_path, 'r').read()
-        print('\n   Another discoronode seems to be running;\n'
-              '   make sure server with PID %s quit and remove "%s"\n' % (pid, _discoro_pid_path))
+        with open(_discoro_pid_path, 'r') as _discoro_req:
+            _discoro_var = _discoro_req.read()
+        _discoro_var = int(_discoro_var)
+        if not _discoro_config['phoenix']:
+            print('\n   Another discoronode seems to be running;\n'
+                  '   make sure server with PID %d quit and remove "%s"\n' %
+                  (_discoro_var, _discoro_pid_path))
+            _discoro_var = os.getpid()
+
         import signal
-        os.kill(os.getpid(), signal.SIGTERM)
+        try:
+            os.kill(_discoro_var, signal.SIGTERM)
+        except:
+            pass
+        else:
+            time.sleep(0.1)
+            try:
+                if os.waitpid(_discoro_var, os.WNOHANG)[0] != _discoro_var:
+                    asyncoro.logger.warning('Killing process %d failed' % _discoro_var)
+            except:
+                pass
+        del signal
     if os.path.isdir(_discoro_dest_path):
         shutil.rmtree(_discoro_dest_path)
     os.makedirs(_discoro_dest_path)
@@ -147,11 +165,9 @@ def discoro_proc():
 
     while True:
         _discoro_msg = yield _discoro_coro.receive()
-        try:
-            _discoro_req = _discoro_msg['req']
-        except:
-            asyncoro.logger.debug(traceback.format_exc())
-            _discoro_req = None
+        if not isinstance(_discoro_msg, dict):
+            continue
+        _discoro_req = _discoro_msg.get('req', None)
 
         if _discoro_req == 'run':
             _discoro_client = _discoro_msg.get('client', None)
@@ -260,9 +276,9 @@ def discoro_proc():
             asyncoro.AsynCoro.instance().dest_path = _discoro_dest_path
             _discoro_computation = _discoro_client = _discoro_pulse_coro = None
             _discoro_node_status = None
-            if _discoro_serve > 0:
-                _discoro_serve -= 1
-                if _discoro_serve == 0:
+            if _discoro_config['serve'] > 0:
+                _discoro_config['serve'] -= 1
+                if _discoro_config['serve'] == 0:
                     break
             _discoro_timer_coro.resume(MinPulseInterval)
         elif _discoro_req == 'node_info':
@@ -281,6 +297,9 @@ def discoro_proc():
                 continue
             _discoro_client.send(info)
         elif _discoro_req == 'quit':
+            if _discoro_msg.get('auth', None) != _discoro_config['quit_auth']:
+                asyncoro.logger.debug('ignoring quit: %s' % (_discoro_msg.get('auth')))
+                continue
             if _discoro_pulse_coro:
                 _discoro_pulse_coro.send({'status': 'ServerClosed',
                                           'location': _discoro_coro.location})
@@ -295,16 +314,10 @@ def discoro_proc():
     # wait until all computations are done; process only 'close'
     while _discoro_job_coros:
         _discoro_msg = yield _discoro_coro.receive()
-        try:
-            _discoro_req = _discoro_msg['req']
-        except:
-            if isinstance(_discoro_msg, asyncoro.MonitorException):
-                asyncoro.logger.debug('job %s done' % _discoro_msg.args[0])
-                _discoro_job_coros.discard(_discoro_msg.args[0])
-                continue
-            else:
-                asyncoro.logger.debug(traceback.format_exc())
-            _discoro_req = None
+        if not isinstance(_discoro_msg, dict):
+            continue
+        _discoro_req = _discoro_msg.get('req', None)
+
         if _discoro_req == 'close':
             _discoro_auth = _discoro_msg.get('auth', None)
             if not _discoro_computation or _discoro_auth != _discoro_computation._auth:
@@ -332,12 +345,25 @@ def discoro_proc():
             shutil.rmtree(_discoro_var, ignore_errors=True)
         else:
             os.remove(_discoro_var)
+    if os.path.isfile(_discoro_pid_path):
+        os.remove(_discoro_pid_path)
+    _discoro_config['quit_event'].set()
     asyncoro.logger.debug('discoro server %s quit' % _discoro_coro.location)
 
 
-def _discoro_process(_discoro_config, _discoro_queue):
+def _discoro_process(_discoro_config, _discoro_quit_event):
+    import os
+    import hashlib
+    _discoro_serve = _discoro_config.pop('serve', -1)
+    _discoro_phoenix = _discoro_config.pop('phoenix', False)
+    _discoro_quit_auth = hashlib.sha1(''.join(hex(_)[2:] for _ in os.urandom(10)).encode()).hexdigest()
     _discoro_scheduler = asyncoro.AsynCoro(**_discoro_config)
-    _discoro_queue.put(asyncoro.serialize(asyncoro.Coro(discoro_proc)))
+    _discoro_coro = asyncoro.Coro(discoro_proc)
+    _discoro_coro.send({'req': 'config', 'phoenix': _discoro_phoenix, 'serve': _discoro_serve,
+                        'quit_auth': _discoro_quit_auth, 'quit_event': _discoro_quit_event})
+    del hashlib, os, _discoro_serve, _discoro_phoenix
+    _discoro_quit_event.wait()
+    _discoro_coro.send({'req': 'quit', 'auth': _discoro_quit_auth})
     _discoro_scheduler.finish()
 
 
@@ -400,6 +426,11 @@ if __name__ == '__main__':
                         help='file containing SSL key')
     parser.add_argument('--serve', dest='serve', default=-1, type=int,
                         help='number of clients to serve before exiting')
+    parser.add_argument('--daemon', action='store_true', dest='daemon', default=False,
+                        help='if given, input is not read from terminal')
+    parser.add_argument('--phoenix', action='store_true', dest='phoenix', default=False,
+                        help='if given, server processes from previous run will be killed '
+                        'and new server process started')
     parser.add_argument('-d', '--debug', action='store_true', dest='loglevel', default=False,
                         help='if given, debug messages are printed')
     _discoro_config = vars(parser.parse_args(sys.argv[1:]))
@@ -427,70 +458,53 @@ if __name__ == '__main__':
         if not _discoro_name:
             _discoro_name = 'discoro_server'
 
-    _discoro_serve = _discoro_config['serve']
-    del _discoro_config['serve']
+    daemon = _discoro_config.pop('daemon', False)
 
-    _discoro_queue = multiprocessing.Queue()
     _discoro_servers = []
-    for _discoro_server_id in range(1, _discoro_cpus):
+    _discoro_quit_events = []
+    for _discoro_server_id in range(1, _discoro_cpus+1):
         _discoro_config['name'] = _discoro_name + '-%s' % _discoro_server_id
+        _discoro_quit_event = multiprocessing.Event()
+        _discoro_quit_events.append(_discoro_quit_event)
         _discoro_servers.append(multiprocessing.Process(target=_discoro_process,
-                                                        args=(_discoro_config, _discoro_queue)))
+                                                        args=(_discoro_config, _discoro_quit_event)))
         _discoro_servers[-1].start()
         time.sleep(0.05)
 
+    if not daemon:
+        try:
+            if os.getpgrp() != os.tcgetpgrp(sys.stdin.fileno()):
+                daemon = True
+        except:
+            pass
+
     # delete modules not needed anymore
-    del parser, time, logging, argparse, multiprocessing, socket
+    del parser, time, logging, argparse, multiprocessing, socket, os
 
-    _discoro_server_id = _discoro_cpus
-    _discoro_config['name'] = _discoro_name + '-%s' % _discoro_server_id
-    _discoro_scheduler = asyncoro.AsynCoro(**_discoro_config)
-    _discoro_coro = asyncoro.Coro(discoro_proc)
+    if not daemon:
+        import threading
 
-    if hasattr(os, 'getpgrp') and hasattr(os, 'tcgetpgrp'):
-        if os.getpgrp() == os.tcgetpgrp(sys.stdin.fileno()):
-            def read_stdin(coro=None):
-                coro.set_daemon()
-                _discoro_thread_pool = asyncoro.AsyncThreadPool(1)
-                while True:
-                    sys.stdout.write('Enter "quit" or "exit" to terminate discoronode: ')
-                    sys.stdout.flush()
-                    try:
-                        _discoro_cmd = yield _discoro_thread_pool.async_task(input)
-                    except:
-                        continue
+        def read_stdin():
+            while True:
+                try:
+                    _discoro_cmd = input('Enter "quit" or "exit" to terminate discoronode: ')
                     _discoro_cmd = _discoro_cmd.strip().lower()
                     if _discoro_cmd in ('quit', 'exit'):
+                        asyncoro.logger.debug('terminating servers')
+                        for _discoro_quit_event in _discoro_quit_events:
+                            _discoro_quit_event.set()
                         break
-                _discoro_coro.send({'req': 'quit'})
-            asyncoro.Coro(read_stdin)
+                except:
+                    pass
+        stdin_reader = threading.Thread(target=read_stdin)
+        stdin_reader.daemon = True
+        stdin_reader.start()
     else:
-        while True:
-            try:
-                _discoro_cmd = input('Enter "quit" or "exit" to terminate discoronode: ')
-                _discoro_cmd = _discoro_cmd.strip().lower()
-                if _discoro_cmd in ('quit', 'exit'):
-                    break
-            except:
-                pass
-        _discoro_coro.send({'req': 'quit'})
+        stdin_reader = None
 
-    _discoro_coro.value()
-
-    # make sure all servers quit; otherwise, multiple keyboard interrupts can
-    # leave servers hanging, with unpredictable behavior
-    while True:
-        try:
-            asyncoro.logger.debug('terminating servers')
-            while not _discoro_queue.empty():
-                asyncoro.unserialize(_discoro_queue.get()).send({'req': 'quit'})
-            for _discoro_server_id, _discoro_server in enumerate(_discoro_servers, start=1):
-                if _discoro_server.is_alive():
-                    asyncoro.logger.info('  -- waiting for server %s to finish' %
-                                         _discoro_server_id)
-                    _discoro_server.join()
-            break
-        except KeyboardInterrupt:
-            print('waiting for servers to quit')
-            continue
+    for _discoro_server_id, _discoro_server in enumerate(_discoro_servers, start=1):
+        if _discoro_server.is_alive():
+            asyncoro.logger.info('  -- waiting for server %s to finish' %
+                                 _discoro_server_id)
+            _discoro_server.join()
     exit(0)
