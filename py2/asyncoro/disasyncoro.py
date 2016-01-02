@@ -761,18 +761,21 @@ class AsynCoro(asyncoro.AsynCoro):
                 continue
             try:
                 ping_info = unserialize(msg[len('ping:'):])
-                assert ping_info['version'] == __version__
-                req_peer = ping_info['location']
-                if self._secret is None:
-                    auth_code = None
-                else:
-                    auth_code = hashlib.sha1(ping_info['signature'] + self._secret).hexdigest()
-                if ping_info['location'] == self._location:
-                    continue
-                peer = _Peer.peers.get((req_peer.addr, req_peer.port), None)
-                if peer and peer.auth == auth_code:
-                    continue
             except:
+                continue
+            req_peer = ping_info['location']
+            if req_peer == self._location:
+                continue
+            if ping_info['version'] != __version__:
+                logger.warning('Peer %s version %s is not %s' %
+                               (req_peer, ping_info['version'], __version__))
+                continue
+            if self._secret is None:
+                auth_code = None
+            else:
+                auth_code = hashlib.sha1(ping_info['signature'] + self._secret).hexdigest()
+            peer = _Peer.peers.get((req_peer.addr, req_peer.port), None)
+            if peer and peer.auth == auth_code:
                 continue
 
             req = _NetRequest('ping',
@@ -1016,8 +1019,8 @@ class AsynCoro(asyncoro.AsynCoro):
             elif req.name == 'ping':
                 peer_loc = req.kwargs.get('location', None)
                 if req.kwargs.get('version', None) != __version__:
-                    logger.warning('Invalid asyncoro version: %s / %s; ignoring %s' %
-                                   (req.kwargs.get('version', None), __version__, peer_loc))
+                    logger.warning('Peer %s version %s is not %s' %
+                                   (peer_loc, req.kwargs.get['version'], __version__))
                     break
                 try:
                     assert req.kwargs['name']
@@ -1087,8 +1090,8 @@ class AsynCoro(asyncoro.AsynCoro):
             elif req.name == 'pong':
                 peer_loc = req.kwargs.get('location', None)
                 if req.kwargs.get('version', None) != __version__:
-                    logger.warning('Invalid asyncoro version: %s / %s; ignoring %s' %
-                                   (req.kwargs.get('version', None), __version__, peer_loc))
+                    logger.warning('Peer %s version %s is not %s' %
+                                   (peer_loc, req.kwargs.get['version'], __version__))
                     break
                 try:
                     assert req.kwargs['name']

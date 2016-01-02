@@ -471,8 +471,8 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 self._signature = None
                 self._auth_code = None
             else:
-                self._signature = ''.join(hex(x)[2:] for x in os.urandom(20))
-                self._auth_code = hashlib.sha1(bytes(self._signature + secret, 'ascii')).hexdigest()
+                self._signature = ''.join(hex(_)[2:] for _ in os.urandom(20))
+                self._auth_code = hashlib.sha1((self._signature + secret).encode()).hexdigest()
             self._stream_peers = {}
             self._rcoros = {}
             self._rchannels = {}
@@ -760,19 +760,21 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 continue
             try:
                 ping_info = unserialize(msg[len(b'ping:'):])
-                assert ping_info['version'] == __version__
-                req_peer = ping_info['location']
-                if self._secret is None:
-                    auth_code = None
-                else:
-                    auth_code = hashlib.sha1(bytes(ping_info['signature'] + self._secret,
-                                                   'ascii')).hexdigest()
-                if ping_info['location'] == self._location:
-                    continue
-                peer = _Peer.peers.get((req_peer.addr, req_peer.port), None)
-                if peer and peer.auth == auth_code:
-                    continue
             except:
+                continue
+            req_peer = ping_info['location']
+            if req_peer == self._location:
+                continue
+            if ping_info['version'] != __version__:
+                logger.warning('Peer %s version %s is not %s' %
+                               (req_peer, ping_info['version'], __version__))
+                continue
+            if self._secret is None:
+                auth_code = None
+            else:
+                auth_code = hashlib.sha1((ping_info['signature'] + self._secret).encode()).hexdigest()
+            peer = _Peer.peers.get((req_peer.addr, req_peer.port), None)
+            if peer and peer.auth == auth_code:
                 continue
 
             req = _NetRequest('ping',
@@ -1016,16 +1018,16 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             elif req.name == 'ping':
                 peer_loc = req.kwargs.get('location', None)
                 if req.kwargs.get('version', None) != __version__:
-                    logger.warning('Invalid asyncoro version: %s / %s; ignoring %s' %
-                                   (req.kwargs.get('version', None), __version__, peer_loc))
+                    logger.warning('Peer %s version %s is not %s' %
+                                   (peer_loc, req.kwargs.get['version'], __version__))
                     break
                 try:
                     assert req.kwargs['name']
                     if self._secret is None:
                         auth_code = None
                     else:
-                        auth_code = hashlib.sha1(bytes(req.kwargs['signature'] + self._secret,
-                                                       'ascii')).hexdigest()
+                        auth_code = hashlib.sha1((req.kwargs['signature'] +
+                                                  self._secret).encode()).hexdigest()
                 except:
                     # logger.debug(traceback.format_exc())
                     break
@@ -1088,16 +1090,16 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             elif req.name == 'pong':
                 peer_loc = req.kwargs.get('location', None)
                 if req.kwargs.get('version', None) != __version__:
-                    logger.warning('Invalid asyncoro version: %s / %s; ignoring %s' %
-                                   (req.kwargs.get('version', None), __version__, peer_loc))
+                    logger.warning('Peer %s version %s is not %s' %
+                                   (peer_loc, req.kwargs.get['version'], __version__))
                     break
                 try:
                     assert req.kwargs['name']
                     if self._secret is None:
                         auth_code = None
                     else:
-                        auth_code = hashlib.sha1(bytes(req.kwargs['signature'] + self._secret,
-                                                       'ascii')).hexdigest()
+                        auth_code = hashlib.sha1((req.kwargs['signature'] +
+                                                  self._secret).encode()).hexdigest()
                     # assert peer_loc == req.src
                     peer = _Peer.peers.get((peer_loc.addr, peer_loc.port), None)
                     if peer and peer.auth == auth_code:
