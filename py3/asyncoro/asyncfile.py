@@ -43,18 +43,22 @@ if platform.system() == 'Windows':
     import pywintypes
     import msvcrt
 
+    # pywin32 doesn't define FILE_FLAG_FIRST_PIPE_INSTANCE
+    FILE_FLAG_FIRST_PIPE_INSTANCE = 0x00080000
     _pipe_id = itertools.count()
 
     def pipe(bufsize=8192):
         """Creates overlapped (asynchronous) pipe.
         """
         name = r'\\.\pipe\asyncoro-pipe-%d-%d' % (os.getpid(), next(_pipe_id))
+        openmode = (win32pipe.PIPE_ACCESS_INBOUND | win32file.FILE_FLAG_OVERLAPPED |
+                    FILE_FLAG_FIRST_PIPE_INSTANCE)
+        pipemode = (win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE)
         rh = wh = None
         try:
             rh = win32pipe.CreateNamedPipe(
-                name, win32pipe.PIPE_ACCESS_INBOUND | win32file.FILE_FLAG_OVERLAPPED,
-                win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE,
-                1, bufsize, bufsize, win32pipe.NMPWAIT_USE_DEFAULT_WAIT, None)
+                name, openmode, pipemode, 1, bufsize, bufsize,
+                win32pipe.NMPWAIT_USE_DEFAULT_WAIT, None)
 
             wh = win32file.CreateFile(
                 name, win32file.GENERIC_WRITE | winnt.FILE_READ_ATTRIBUTES, 0, None,
