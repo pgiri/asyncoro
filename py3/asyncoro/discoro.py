@@ -50,58 +50,51 @@ _DiscoroFunction = collections.namedtuple('_DiscoroFunction', ['name', 'code', '
 
 
 class Computation(object):
-    """Packages components to distribute to remote asyncoro schedulers
-    to create (remote) coroutines.
+    """Packages components to distribute to remote asyncoro schedulers to create
+    (remote) coroutines.
     """
 
     def __init__(self, components, status_coro=None, timeout=MsgTimeout,
-                 pulse_interval=None, zombie_period=None):
-        """'components' should be a list, each element of which is
-        either a module, a (generator or normal) function, path name
-        of a file, a class or an object (in which case the code for
-        its class is sent).
+                 pulse_interval=(2*MinPulseInterval), zombie_period=(10*MaxPulseInterval)):
+        """'components' should be a list, each element of which is either a
+        module, a (generator or normal) function, path name of a file, a class
+        or an object (in which case the code for its class is sent).
 
-        'status_coro', if not None, should be a coroutine. The
-        scheduler sends status messages indicating when a remote
-        server process has been initialized (so it is ready to run
-        jobs), closed etc., and exit status of remote coroutines. See
-        'discoro_client*.py' files in examples directory.
+        'status_coro', if not None, should be a coroutine. The scheduler sends
+        status messages indicating when a remote server process has been
+        initialized (so it is ready to run jobs), closed etc., and exit status
+        of remote coroutines. See 'discoro_client*.py' files in examples
+        directory.
 
-        'timeout' is maximum number of seconds to complete a
-        communication (transfer of messages). If client / scheduler /
-        remote servers couldn't send / receive a message within this
-        period, the operation is aborted. Bigger values may be used
-        when communicating over slower connections.
+        'timeout' is maximum number of seconds to complete a communication
+        (transfer of messages). If client / scheduler / remote servers couldn't
+        send / receive a message within this period, the operation is
+        aborted. Bigger values may be used when communicating over slower
+        connections.
 
-        'pulse_interval' is interval (number of seconds) used for
-        heart beat messages to check if client / scheduler / server
-        is alive. If the other side doesn't reply to 5 heart beat
-        messages, it is treated as dead.
+        'pulse_interval' is interval (number of seconds) used for heart beat
+        messages to check if client / scheduler / server is alive. If the other
+        side doesn't reply to 5 heart beat messages, it is treated as dead.
 
-        'zombie_period' is maximum number of seconds a server process
-        stays idle (i.e., no coroutines running on that server)
-        before the computation is automatically closed (on that
-        server). Once closed, the computation can't use that server
-        anymore. This discards unused clients so other pending
-        (queued) computations can use compute resources. If
-        'zombie_period' is None, the servers don't check for idle
-        period and don't close computation (until the user program
-        explicitly closes it). When scheduler is shared (run as
-        separate program), 'zombie_period' is set to 10 *
-        MaxPulseInterval.
+        'zombie_period' is maximum number of seconds a server process stays idle
+        (i.e., no coroutines running on that server) before the computation is
+        automatically closed (on that server). Once closed, the computation
+        can't use that server anymore. This discards unused clients so other
+        pending (queued) computations can use compute resources. If
+        'zombie_period' is None, the servers don't check for idle period and
+        don't close computation (until the user program explicitly closes
+        it). Default 'zombie_period' is set to 10 * MaxPulseInterval.
         """
 
-        if not pulse_interval:
-            pulse_interval = 2 * MinPulseInterval
-        elif pulse_interval < MinPulseInterval or pulse_interval > MaxPulseInterval:
-            raise Exception('"pulse_interval" must be at least %s and at most %s' %
-                            (MinPulseInterval, MaxPulseInterval))
+        if status_coro is not None and not isinstance(status_coro, Coro):
+            raise Exception('"status_coro" must be coroutine')
         if timeout < 1 or timeout > MaxPulseInterval:
             raise Exception('"timeout" must be at least 1 and at most %s' % MaxPulseInterval)
-        if status_coro is not None and not isinstance(status_coro, Coro):
-            raise Exception('status_coro must be coroutine')
-        if zombie_period and zombie_period < MaxPulseInterval:
-            raise Exception('zombie_period must be >= %s' % MaxPulseInterval)
+        if pulse_interval < MinPulseInterval or pulse_interval > MaxPulseInterval:
+            raise Exception('"pulse_interval" must be at least %s and at most %s' %
+                            (MinPulseInterval, MaxPulseInterval))
+        if (not isinstance(zombie_period, (int, float)) or zombie_period < MaxPulseInterval):
+            raise Exception('"zombie_period" must be either 0 or >= %s' % MaxPulseInterval)
 
         if not isinstance(components, list):
             components = [components]
@@ -155,18 +148,17 @@ class Computation(object):
         # check code can be compiled
         compile(self._code, '<string>', 'exec')
         # Under Windows discoro server may send objects with '__mp_main__'
-        # scope, so make an alias to '__main__'.
-        # TODO: Make alias even if client is not Windows? It is possible the
-        # client is not Windows, but a node is.
-        if os.name == 'nt' and '__mp_main__' not in sys.modules:
+        # scope, so make an alias to '__main__'.  Do so even if scheduler is not
+        # running on Windows; it is possible the client is not Windows, but a
+        # node is.
+        if '__mp_main__' not in sys.modules:
             sys.modules['__mp_main__'] = sys.modules['__main__']
 
     def schedule(self, location=None, timeout=None):
-        """Schedule computation for execution. Must be used with
-        'yield' as 'result = yield compute.schedule()'. If scheduler
-        is executing other computations, this will block until
-        scheduler processes them (computations are processed in the
-        order submitted).
+        """Schedule computation for execution. Must be used with 'yield' as
+        'result = yield compute.schedule()'. If scheduler is executing other
+        computations, this will block until scheduler processes them
+        (computations are processed in the order submitted).
         """
 
         if self._auth is not None:
@@ -215,21 +207,19 @@ class Computation(object):
         yield Coro(_schedule, self).finish()
 
     def run_at(self, where, gen, *args, **kwargs):
-        """Run given generator function 'gen' with arguments 'args'
-        and 'kwargs' at 'where'.  If the request is successful,
-        'rcoro' will be a (remote) coroutine; check result with
-        'isinstance(rcoro, asyncoro.Coro)'. Must be used with 'yield'
-        as 'rcoro = yield compute.run_at(loc, genf, ...)'.
+        """Run given generator function 'gen' with arguments 'args' and 'kwargs'
+        at 'where'.  If the request is successful, 'rcoro' will be a (remote)
+        coroutine; check result with 'isinstance(rcoro, asyncoro.Coro)'. Must be
+        used with 'yield' as 'rcoro = yield compute.run_at(loc, genf, ...)'.
 
-        If 'where' is a string, it is assumed to be IP address of a
-        node, in which case the coroutine is scheduled at that node on
-        a server with least load (i.e., server with least number of
-        pending coroutines). If 'where' is a Location instance, it is
-        assumed to be server location in which case the coroutine is
-        scheduled at that server.
+        If 'where' is a string, it is assumed to be IP address of a node, in
+        which case the coroutine is scheduled at that node on a server with
+        least load (i.e., server with least number of pending coroutines). If
+        'where' is a Location instance, it is assumed to be server location in
+        which case the coroutine is scheduled at that server.
 
-        'gen' must be generator function, as it is used to run
-        coroutine at remote location.
+        'gen' must be generator function, as it is used to run coroutine at
+        remote location.
         """
         if isinstance(gen, str):
             name = gen
@@ -259,17 +249,16 @@ class Computation(object):
         yield Coro(_run, self).finish()
 
     def run_each(self, where, gen, *args, **kwargs):
-        """Run given generator function 'gen' with arguments 'args'
-        and 'kwargs' at each node or server.  If the request is
-        successful, 'rcoro' will be a (remote) coroutine; check result
-        with 'isinstance(rcoro, asyncoro.Coro)'. Must be used with
-        'yield' as 'rcoros = yield compute.run_each(loc, genf, ...)'.
+        """Run given generator function 'gen' with arguments 'args' and 'kwargs'
+        at each node or server.  If the request is successful, 'rcoro' will be a
+        (remote) coroutine; check result with 'isinstance(rcoro,
+        asyncoro.Coro)'. Must be used with 'yield' as 'rcoros = yield
+        compute.run_each(loc, genf, ...)'.
 
-        If 'where' is 'node', the function is scheduled at every node,
-        if 'where' is 'server', the function is scheduled at every
-        server (on every node); otherwise, 'where' must be IP address,
-        in which case the function is scheduled at every server at
-        that node.
+        If 'where' is 'node', the function is scheduled at every node, if
+        'where' is 'server', the function is scheduled at every server (on every
+        node); otherwise, 'where' must be IP address, in which case the function
+        is scheduled at every server at that node.
         """
         if isinstance(gen, str):
             name = gen
@@ -305,44 +294,40 @@ class Computation(object):
         yield Coro(_run, self).finish()
 
     def run(self, gen, *args, **kwargs):
-        """Run given generator function 'gen' with arguments 'args'
-        and 'kwargs' at a server with least load at a node with least
-        load.
+        """Run given generator function 'gen' with arguments 'args' and 'kwargs'
+        at a server with least load at a node with least load.
 
-        Must be used with 'yield' as 'rcoro = yield compute.run(genf,
-        ...)'. If the request is successful, 'rcoro' will be a
-        (remote) coroutine.
+        Must be used with 'yield' as 'rcoro = yield compute.run(genf, ...)'. If
+        the request is successful, 'rcoro' will be a (remote) coroutine.
         """
         yield self.run_at(None, gen, *args, **kwargs)
 
     def run_nodes(self, gen, *args, **kwargs):
-        """Run given generator function 'gen' with arguments 'args'
-        and 'kwargs' at a server with least load at every node.
+        """Run given generator function 'gen' with arguments 'args' and 'kwargs'
+        at a server with least load at every node.
 
-        Must be used with 'yield' as 'rcoros = yield
-        compute.run_nodes(genf, ...)'. 'rcoros' will be a list of
-        (remote) coroutines.
+        Must be used with 'yield' as 'rcoros = yield compute.run_nodes(genf,
+        ...)'. 'rcoros' will be a list of (remote) coroutines.
         """
         yield self.run_each('node', gen, *args, **kwargs)
 
     def run_servers(self, gen, *args, **kwargs):
-        """Run given generator function 'gen' with arguments 'args'
-        and 'kwargs' at every server (at every node).
+        """Run given generator function 'gen' with arguments 'args' and 'kwargs'
+        at every server (at every node).
 
-        Must be used with 'yield' as 'rcoros = yield
-        compute.run_servers(genf, ...)'. 'rcoros' will be a list of
-        (remote) coroutines.
+        Must be used with 'yield' as 'rcoros = yield compute.run_servers(genf,
+        ...)'. 'rcoros' will be a list of (remote) coroutines.
         """
         yield self.run_each('server', gen, *args, **kwargs)
 
     def run_node_servers(self, host, gen, *args, **kwargs):
-        """Run given generator function 'gen' with arguments 'args'
-        and 'kwargs' at every server at given node at 'host'. 'host'
-        must IP address or host name of that node.
+        """Run given generator function 'gen' with arguments 'args' and 'kwargs'
+        at every server at given node at 'host'. 'host' must IP address or host
+        name of that node.
 
         Must be used with 'yield' as 'rcoros = yield
-        compute.run_node_servers(host, genf, ...)'. 'rcoros' will be a
-        list of (remote) coroutines scheduled at servers on that node.
+        compute.run_node_servers(host, genf, ...)'. 'rcoros' will be a list of
+        (remote) coroutines scheduled at servers on that node.
         """
         if isinstance(host, str) and len(host) > 0:
             # if host starts with digit, assume IP address
@@ -356,9 +341,8 @@ class Computation(object):
     # (e.g., list of tuples)
 
     def nodes(self):
-        """Get list of addresses of nodes initialized for this
-        computation. Must be used with 'yield' as 'yield
-        compute.nodes()'.
+        """Get list of addresses of nodes initialized for this computation. Must
+        be used with 'yield' as 'yield compute.nodes()'.
         """
 
         def _nodes_list(self, coro=None):
@@ -371,9 +355,8 @@ class Computation(object):
         yield Coro(_nodes_list, self).finish()
 
     def servers(self):
-        """Get list of Location instances of servers initialized for
-        this computation. Must be used with 'yield' as 'yield
-        compute.servers()'.
+        """Get list of Location instances of servers initialized for this
+        computation. Must be used with 'yield' as 'yield compute.servers()'.
         """
 
         def _servers_list(self, coro=None):
@@ -441,9 +424,9 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
     ComputationScheduled = 23
     ComputationClosed = 25
 
-    """This class is for use by Computation class (see below) only.
-    Other than the status indications above, none of its attributes
-    are to be accessed directly.
+    """This class is for use by Computation class (see below) only.  Other than
+    the status indications above, none of its attributes are to be accessed
+    directly.
     """
 
     class _Node(object):
@@ -633,30 +616,37 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
                            self._cur_computation.status_coro):
                             self._cur_computation.status_coro.send(node_status)
 
-                elif msg.get('status', None) == 'ServerClosed':
+                elif msg.get('status', None) in ('ServerClosed', 'ServerTerminated'):
                     location = msg.get('location', None)
                     asyncoro.logger.debug('Server %s closed' % location)
                     if isinstance(location, asyncoro.Location):
                         node = self._nodes.get(location.addr, None)
-                        if node:
+                    else:
+                        node = None
+                    if node:
+                        if msg['status'] == 'ServerTermiated':
+                            server = node.servers.pop(location, None)
+                        else:
                             server = node.servers.get(location, None)
-                            if server:
-                                yield self.__close_server(server)
-                                if all(p.status != Scheduler.ServerInitialized
-                                       for p in node.servers.values()):
-                                    node.status = Scheduler.NodeClosed
-                                    if self._cur_computation and \
-                                       self._cur_computation.status_coro:
-                                        self._cur_computation.status_coro.send(
-                                            DiscoroStatus(Scheduler.NodeClosed, node.addr))
-                                    if all(n.status != Scheduler.NodeInitialized
-                                           for n in self._nodes.values()):
-                                        if self._cur_computation and \
-                                           self._cur_computation.status_coro:
-                                            self._cur_computation.status_coro.send(
-                                                DiscoroStatus(Scheduler.ComputationClosed,
-                                                              coro.location))
-                                        Coro(self.__close_computation)
+                    else:
+                        server = None
+                    if server:
+                        yield self.__close_server(server)
+                        if all(p.status != Scheduler.ServerInitialized
+                               for p in node.servers.values()):
+                            node.status = Scheduler.NodeClosed
+                            if self._cur_computation and \
+                               self._cur_computation.status_coro:
+                                self._cur_computation.status_coro.send(
+                                    DiscoroStatus(Scheduler.NodeClosed, node.addr))
+                            if all(n.status != Scheduler.NodeInitialized
+                                   for n in self._nodes.values()):
+                                if self._cur_computation and \
+                                   self._cur_computation.status_coro:
+                                    self._cur_computation.status_coro.send(
+                                        DiscoroStatus(Scheduler.ComputationClosed,
+                                                      coro.location))
+                                Coro(self.__close_computation)
 
             if (now - client_pulse) > self.__pulse_interval and self._cur_computation:
                 if self._cur_computation._pulse_coro.send('pulse') == 0:
@@ -1061,11 +1051,10 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
 
 
 if __name__ == '__main__':
-    """The scheduler can be started either within a client program (if
-    no other client programs use the nodes simultaneously), or can be
-    run on a node with the options described below (usually no options
-    are necessary, so the scheduler can be strated with just
-    'discoro.py')
+    """The scheduler can be started either within a client program (if no other
+    client programs use the nodes simultaneously), or can be run on a node with
+    the options described below (usually no options are necessary, so the
+    scheduler can be strated with just 'discoro.py')
     """
 
     import logging
@@ -1092,7 +1081,8 @@ if __name__ == '__main__':
                         help='file containing SSL key')
     parser.add_argument('--node', action='append', dest='nodes', default=[],
                         help='additional remote nodes (names or IP address) to use')
-    parser.add_argument('--zombie_period', dest='zombie_period', type=int, default=1800,
+    parser.add_argument('--zombie_period', dest='zombie_period', type=int,
+                        default=(10 * MaxPulseInterval),
                         help='maximum time in seconds computation is idle')
     parser.add_argument('-d', '--debug', action='store_true', dest='loglevel', default=False,
                         help='if given, debug messages are printed')

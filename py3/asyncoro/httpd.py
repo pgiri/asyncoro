@@ -403,10 +403,12 @@ class HTTPServer(object):
                     if isinstance(msg.info, DiscoroNodeInfo):
                         if msg.info.memory:
                             node.cpu_info = {'total': msg.info.cpus, 'use': msg.info.cpus_use}
-                            node.memory_info = {'total': '{:,.0f} M'.format(msg.info.memory.total / 1e6),
-                                                'use': msg.info.memory.percent}
-                            node.disk_info = {'total': '{:,.0f} G'.format(msg.info.disk.total / 1e9),
-                                              'use': msg.info.disk.percent}
+                            node.memory_info = {'total': '{:,.0f} M'.format(
+                                                        msg.info.memory.get('total', 0) / 1e6),
+                                                'use': msg.info.memory.get('percent', 0)}
+                            node.disk_info = {'total': '{:,.0f} G'.format(
+                                                       msg.info.disk.get('total', 0) / 1e9),
+                                              'use': msg.info.disk.get('percent', 0)}
                         else:
                             node.cpu_info = {'total': -1, 'use': -1}
                             node.memory_info = {'total': -1, 'use': -1}
