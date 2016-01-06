@@ -2261,8 +2261,8 @@ class Coro(object):
                                   dst=self._location, timeout=timeout)
             request.reply = -1
             reply = yield Coro._asyncoro._sync_reply(request, alarm_value=0)
-            if reply < 0:
-                logger.warning('remote coro at %s may not be valid', self._location)
+            # if reply < 0:
+            #     logger.warning('remote coro at %s may not be valid', self._location)
         raise StopIteration(reply)
 
     def receive(self, timeout=None, alarm_value=None):
@@ -2456,7 +2456,7 @@ class Coro(object):
         if self._location:
             return hash(str(self))
         else:
-            return hash(self)
+            return hash(id(self))
 
 
 class Location(object):
@@ -2808,9 +2808,9 @@ class Channel(object):
                                   dst=self._location, timeout=timeout)
             request.reply = -1
             reply = yield Channel._asyncoro._sync_reply(request, alarm_value=0)
-            if reply < 0:
-                logger.warning('remote channel "%s" at %s may have gone away!',
-                               self._name, self._location)
+            # if reply < 0:
+            #     logger.warning('remote channel "%s" at %s may have gone away!',
+            #                    self._name, self._location)
             raise StopIteration(reply)
 
     def close(self):
