@@ -394,7 +394,7 @@ def _discoro_proc():
             os.remove(_discoro_var)
     if os.path.isfile(_discoro_pid_path):
         os.remove(_discoro_pid_path)
-    _discoro_config['mp_queue'].put(None)
+    _discoro_config['mp_queue'].put(_discoro_config['auth'])
     asyncoro.logger.debug('discoro server %s quit' % _discoro_coro.location)
 
 
@@ -424,7 +424,7 @@ def _discoro_process(_discoro_config, _discoro_name, _discoro_server_id, _discor
     _discoro_coro.send({'req': 'config', 'id': _discoro_server_id,
                         'phoenix': _discoro_phoenix, 'serve': _discoro_serve,
                         'auth': _discoro_auth, 'mp_queue': _discoro_mp_queue})
-    del hashlib, os, _discoro_serve, _discoro_phoenix
+    del hashlib, logging, os, _discoro_serve, _discoro_phoenix
     req_queue, _discoro_mp_queue = _discoro_mp_queue, None
 
     while True:
@@ -445,11 +445,13 @@ def _discoro_process(_discoro_config, _discoro_name, _discoro_server_id, _discor
             time.sleep(1)
             _discoro_coro.send({'req': 'terminate', 'auth': _discoro_auth})
             break
-        else:
-            if isinstance(req, str):
-                asyncoro.logger.warning('Ignoring invalid request: "%s"' % req)
+        elif isinstance(req, str):
+            if req == _discoro_auth:
+                break
             else:
-                asyncoro.logger.warning('Ignoring invalid request: "%s"' % type(req))
+                asyncoro.logger.warning('Ignoring invalid request: "%s"' % req)
+        else:
+            asyncoro.logger.warning('Ignoring invalid request: "%s"' % type(req))
 
     _discoro_scheduler.finish()
 
