@@ -84,7 +84,7 @@ def client_proc(computation, data_file, coro=None):
     # execute 10 jobs (coroutines) and get their results. Note that
     # number of jobs created can be more than number of server
     # processes available; the scheduler will use as many processes as
-    # necessary/available, running one job at a server process
+    # necessary/available, running one job at a server process at a time
     algs = ['md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512']
     jobs = [asyncoro.Coro(exec_proc, compute, algs[i % len(algs)], random.uniform(1, 3))
             for i in range(10)]

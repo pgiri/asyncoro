@@ -24,10 +24,10 @@ def server_proc(coro=None):
             msg = 'says: %s' % msg
         return (msg, client_id)
 
-    channel = asyncoro.Channel('channel', transform=txfm_msgs)
+    channel = asyncoro.Channel('chat_channel', transform=txfm_msgs)
     channel.register()
     coro.set_daemon()
-    coro.register('server')
+    coro.register('chat_server')
     client_id = 1
     while True:
         cmd, who = yield coro.receive()

@@ -19,12 +19,12 @@ def send_proc(coro=None):
     # if server is in a remote network, use 'peer' as (optionally
     # enabling streaming for efficiency):
     # yield asyncoro.AsynCoro.instance().peer('server node/ip')
-    server = yield asyncoro.Coro.locate('server')
-    yield server.send(('join', coro))
+    server = yield asyncoro.Coro.locate('chat_server')
+    server.send(('join', coro))
     client_id = yield coro.receive()
     
     # channel is at same location as server coroutine
-    channel = yield asyncoro.Channel.locate('channel', server.location)
+    channel = yield asyncoro.Channel.locate('chat_channel', server.location)
     recv_coro = asyncoro.Coro(recv_proc, client_id)
     yield channel.subscribe(recv_coro)
     # since readline is synchronous (blocking) call, use async thread
@@ -37,7 +37,7 @@ def send_proc(coro=None):
         try:
             line = yield async_threads.async_task(read_input)
             line = line.strip()
-            if line in ('quit', 'exit'):
+            if line.lower() in ('quit', 'exit'):
                 break
         except:
             break
