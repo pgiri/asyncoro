@@ -96,7 +96,7 @@ class _AsyncSocket(object):
                  '_timeout_id', '_read_coro', '_read_task', '_read_result', '_write_coro',
                  '_write_task', '_write_result', '_asyncoro', '_notifier', 'recvall', 'sendall',
                  'recv_msg', 'send_msg', '_blocking', 'recv', 'send', 'recvfrom', 'sendto',
-                 'accept', 'connect')
+                 'accept', 'connect', 'ssl_server_ctx')
 
     _default_timeout = None
 
@@ -135,6 +135,7 @@ class _AsyncSocket(object):
             self._write_task = None
             self._write_result = None
             self._notifier = None
+            self.ssl_server_ctx = None
 
             self.recvall = None
             self.sendall = None
@@ -562,6 +563,11 @@ class _AsyncSocket(object):
             self._notifier.unregister(self)
 
             if self._certfile:
+                if not self.ssl_server_ctx:
+                    self.ssl_server_ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+                    self.ssl_server_ctx.load_cert_chain(certfile=self._certfile,
+                                                        keyfile=self._keyfile)
+
                 def _ssl_handshake(conn, addr):
                     try:
                         conn._rsock.do_handshake()
@@ -581,15 +587,19 @@ class _AsyncSocket(object):
                         coro._proceed_((conn, addr))
                 conn = AsyncSocket(conn, blocking=False, keyfile=self._keyfile,
                                    certfile=self._certfile, ssl_version=self._ssl_version)
-                conn._rsock = ssl.wrap_socket(conn._rsock, keyfile=self._keyfile,
-                                              certfile=self._certfile, server_side=True,
-                                              do_handshake_on_connect=False,
-                                              ssl_version=self._ssl_version)
-                conn._read_task = conn._write_task = functools.partial(_ssl_handshake, conn, addr)
-                conn._read_coro = conn._write_coro = self._read_coro
-                self._read_coro = None
-                conn._notifier.add(conn, _AsyncPoller._Read | _AsyncPoller._Write)
-                conn._read_task()
+                try:
+                    conn._rsock = self.ssl_server_ctx.wrap_socket(conn._rsock, server_side=True,
+                                                                  do_handshake_on_connect=False)
+                except:
+                    coro, self._read_coro = self._read_coro, None
+                    conn.close()
+                    coro.throw(*sys.exc_info())
+                else:
+                    conn._read_task = conn._write_task = functools.partial(_ssl_handshake, conn, addr)
+                    conn._read_coro = conn._write_coro = self._read_coro
+                    self._read_coro = None
+                    conn._notifier.add(conn, _AsyncPoller._Read | _AsyncPoller._Write)
+                    conn._read_task()
             else:
                 coro, self._read_coro = self._read_coro, None
                 conn = AsyncSocket(conn, blocking=False)
@@ -633,13 +643,20 @@ class _AsyncSocket(object):
                         self._read_coro = None
                         coro._proceed_(0)
 
-                self._rsock = ssl.wrap_socket(self._rsock, keyfile=self._keyfile,
-                                              certfile=self._certfile, server_side=False,
-                                              do_handshake_on_connect=False)
-                self._read_task = self._write_task = functools.partial(_ssl_handshake, self)
-                self._read_coro = self._write_coro
-                self._notifier.add(self, _AsyncPoller._Read)
-                self._write_task()
+                try:
+                    self._rsock = ssl.wrap_socket(self._rsock, keyfile=self._keyfile,
+                                                  certfile=self._certfile, server_side=False,
+                                                  do_handshake_on_connect=False,
+                                                  ssl_version=self._ssl_version)
+                except:
+                    coro, self._write_coro = self._write_coro, None
+                    self.close()
+                    coro.throw(*sys.exc_info())
+                else:
+                    self._read_task = self._write_task = functools.partial(_ssl_handshake, self)
+                    self._read_coro = self._write_coro
+                    self._notifier.add(self, _AsyncPoller._Read)
+                    self._write_task()
             else:
                 self._write_task = None
                 coro, self._write_coro = self._write_coro, None
