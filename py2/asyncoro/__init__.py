@@ -17,7 +17,7 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "3.6.6"
+__version__ = "3.6.7"
 
 __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
@@ -572,14 +572,17 @@ class _AsyncSocket(object):
                     try:
                         conn._rsock.do_handshake()
                     except ssl.SSLError as err:
-                        if err.args[0] in (ssl.SSL_ERROR_WANT_READ, ssl.SSL_ERROR_WANT_WRITE):
+                        if (err.args[0] == ssl.SSL_ERROR_WANT_READ or
+                           err.args[0] == ssl.SSL_ERROR_WANT_WRITE):
                             pass
                         else:
-                            conn._read_task = conn._write_task = None
-                            coro, conn._read_coro = conn._read_coro, None
-                            conn._write_coro = None
-                            conn.close()
-                            coro.throw(*sys.exc_info())
+                            raise
+                    except:
+                        conn._read_task = conn._write_task = None
+                        coro, conn._read_coro = conn._read_coro, None
+                        conn._write_coro = None
+                        conn.close()
+                        coro.throw(*sys.exc_info())
                     else:
                         conn._read_task = conn._write_task = None
                         coro, conn._read_coro = conn._read_coro, None
@@ -627,15 +630,17 @@ class _AsyncSocket(object):
                     try:
                         self._rsock.do_handshake()
                     except ssl.SSLError as err:
-                        if err.args[0] in (ssl.SSL_ERROR_WANT_READ, ssl.SSL_ERROR_WANT_WRITE):
+                        if (err.args[0] == ssl.SSL_ERROR_WANT_READ or
+                           err.args[0] == ssl.SSL_ERROR_WANT_WRITE):
                             pass
                         else:
-                            self._notifier.unregister(self)
-                            self._read_task = self._write_task = None
-                            coro, self._write_coro = self._write_coro, None
-                            self._read_coro = None
-                            self.close()
-                            coro.throw(*sys.exc_info())
+                            raise
+                    except:
+                        self._read_task = self._write_task = None
+                        coro, self._write_coro = self._write_coro, None
+                        self._read_coro = None
+                        self.close()
+                        coro.throw(*sys.exc_info())
                     else:
                         self._notifier.clear(self)
                         self._read_task = self._write_task = None
@@ -644,10 +649,11 @@ class _AsyncSocket(object):
                         coro._proceed_(0)
 
                 try:
-                    self._rsock = ssl.wrap_socket(self._rsock, keyfile=self._keyfile,
-                                                  certfile=self._certfile, server_side=False,
-                                                  do_handshake_on_connect=False,
-                                                  ssl_version=self._ssl_version)
+                    # TODO: provide 'ca_certs' as special parameter to 'accept'?
+                    # For now this setup wrks for self-signed certs
+                    self._rsock = ssl.wrap_socket(self._rsock, ca_certs=self._certfile,
+                                                  cert_reqs=ssl.CERT_REQUIRED, server_side=False,
+                                                  do_handshake_on_connect=False)
                 except:
                     coro, self._write_coro = self._write_coro, None
                     self.close()
