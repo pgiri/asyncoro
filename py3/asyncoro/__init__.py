@@ -317,8 +317,13 @@ class _AsyncSocket(object):
             try:
                 buf = self._rsock.recv(bufsize, *args)
             except ssl.SSLError as err:
-                if err.args[0] != ssl.SSL_ERROR_WANT_READ:
-                    raise socket.error(err)
+                if err.args[0] == ssl.SSL_ERROR_WANT_READ:
+                    pass
+                else:
+                    self._notifier.clear(self, _AsyncPoller._Read)
+                    self._read_task = None
+                    coro, self._read_coro = self._read_coro, None
+                    coro.throw(*sys.exc_info())
             except:
                 self._notifier.clear(self, _AsyncPoller._Read)
                 self._read_task = None
@@ -363,8 +368,14 @@ class _AsyncSocket(object):
             try:
                 recvd = self._rsock.recv_into(view, len(view), *args)
             except ssl.SSLError as err:
-                if err.args[0] != ssl.SSL_ERROR_WANT_READ:
-                    raise socket.error(err)
+                if err.args[0] == ssl.SSL_ERROR_WANT_READ:
+                    pass
+                else:
+                    view.release()
+                    self._notifier.clear(self, _AsyncPoller._Read)
+                    self._read_task = self._read_result = None
+                    coro, self._read_coro = self._read_coro, None
+                    coro.throw(*sys.exc_info())
             except:
                 view.release()
                 self._notifier.clear(self, _AsyncPoller._Read)
@@ -470,6 +481,14 @@ class _AsyncSocket(object):
         def _send(self, *args):
             try:
                 sent = self._rsock.send(*args)
+            except ssl.SSLError as err:
+                if err.args[0] == ssl.SSL_ERROR_WANT_WRITE:
+                    pass
+                else:
+                    self._notifier.clear(self, _AsyncPoller._Write)
+                    self._write_task = None
+                    coro, self._write_coro = self._write_coro, None
+                    coro.throw(*sys.exc_info())
             except:
                 self._notifier.clear(self, _AsyncPoller._Write)
                 self._write_task = None
@@ -523,7 +542,20 @@ class _AsyncSocket(object):
             try:
                 sent = self._rsock.send(self._write_result)
                 if sent < 0:
-                    raise socket.error('hangup')
+                    self._write_result.release()
+                    self._notifier.clear(self, _AsyncPoller._Write)
+                    self._write_task = self._write_result = None
+                    coro, self._write_coro = self._write_coro, None
+                    coro.throw(*sys.exc_info())
+            except ssl.SSLError as err:
+                if err.args[0] == ssl.SSL_ERROR_WANT_WRITE:
+                    pass
+                else:
+                    self._write_result.release()
+                    self._notifier.clear(self, _AsyncPoller._Write)
+                    self._write_task = self._write_result = None
+                    coro, self._write_coro = self._write_coro, None
+                    coro.throw(*sys.exc_info())
             except:
                 self._write_result.release()
                 self._notifier.clear(self, _AsyncPoller._Write)
@@ -707,7 +739,9 @@ class _AsyncSocket(object):
         try:
             self._rsock.connect(*args)
         except socket.error as e:
-            if e.args[0] not in [EINPROGRESS, EWOULDBLOCK]:
+            if e.args[0] == EINPROGRESS or e.args[0] == EWOULDBLOCK:
+                pass
+            else:
                 raise
 
     def _async_send_msg(self, data):
@@ -938,7 +972,8 @@ if platform.system() == 'Windows':
                         events[fid] = events.get(fid, 0) | _AsyncPoller._Error
 
                     self._lock.acquire()
-                    events = [(self._fds.get(fid, None), event) for (fid, event) in events.items()]
+                    events = [(self._fds.get(fid, None), event)
+                              for (fid, event) in events.items()]
                     self._lock.release()
                     iocp_notify = False
                     for fd, event in events:
@@ -2567,7 +2602,7 @@ class Location(object):
     __slots__ = ('addr', 'port')
 
     def __init__(self, host, tcp_port):
-        if re.match(r'\d+[\.\d]+$', host):
+        if re.match(r'^\d+[\.\d]+$', host):
             self.addr = host
         else:
             self.addr = socket.gethostbyname(host)
