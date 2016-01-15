@@ -45,8 +45,6 @@ def _discoro_proc():
         def __init__(self, **kwargs):
             self.__dict__.update(kwargs)
 
-    global _discoro_process, _discoro_proc
-    _discoro_process = _discoro_proc = None
     _discoro_coro = asyncoro.AsynCoro.cur_coro()
     _discoro_config = yield _discoro_coro.receive()
     assert _discoro_config['req'] == 'config'
@@ -389,10 +387,6 @@ def _discoro_process(_discoro_config, _discoro_name, _discoro_server_id,
     import logging
     import asyncoro.disasyncoro as asyncoro
 
-    # delete variables created in main
-    global _discoro_server_infos, _discoro_server_info, _discoro_daemon
-    del _discoro_server_infos, _discoro_server_info, _discoro_daemon
-
     _discoro_serve = _discoro_config.pop('serve', -1)
     _discoro_phoenix = _discoro_config.pop('phoenix', False)
     _discoro_auth = hashlib.sha1(os.urandom(10).encode('hex')).hexdigest()
@@ -406,6 +400,11 @@ def _discoro_process(_discoro_config, _discoro_name, _discoro_server_id,
 
     _discoro_scheduler = asyncoro.AsynCoro(**_discoro_config)
     _discoro_coro = asyncoro.Coro(_discoro_proc)
+    # delete variables created in main
+    for _discoro_var in globals().keys():
+        if _discoro_var.startswith('_discoro_'):
+            globals().pop(_discoro_var)
+
     _discoro_coro.send({'req': 'config', 'id': _discoro_server_id,
                         'phoenix': _discoro_phoenix, 'serve': _discoro_serve,
                         'auth': _discoro_auth, 'mp_queue': _discoro_mp_queue})
@@ -550,7 +549,6 @@ if __name__ == '__main__':
         _discoro_name = socket.gethostname()
         if not _discoro_name:
             _discoro_name = 'discoro_server'
-
 
     _discoro_daemon = _discoro_config.pop('daemon', False)
     if not _discoro_daemon:
