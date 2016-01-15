@@ -398,21 +398,23 @@ def _discoro_proc():
     asyncoro.logger.debug('discoro server %s quit' % _discoro_coro.location)
 
 
-def _discoro_process(_discoro_config, _discoro_name, _discoro_server_id, _discoro_mp_queue):
+def _discoro_process(_discoro_config, _discoro_name, _discoro_server_id,
+                     _discoro_tcp_port, _discoro_mp_queue):
     import os
     import hashlib
     import time
     import logging
     import asyncoro.disasyncoro as asyncoro
 
-    # hide variables created in main
-    global _discoro_server_infos, _discoro_server_info, _discoro_daemon, stdin_reader
-    _discoro_server_infos = _discoro_server_info = _discoro_daemon = stdin_reader = None
+    # delete variables created in main
+    global _discoro_server_infos, _discoro_server_info, _discoro_daemon
+    del _discoro_server_infos, _discoro_server_info, _discoro_daemon
 
     _discoro_serve = _discoro_config.pop('serve', -1)
     _discoro_phoenix = _discoro_config.pop('phoenix', False)
     _discoro_auth = hashlib.sha1(''.join(hex(_)[2:] for _ in os.urandom(10)).encode()).hexdigest()
     _discoro_config['name'] = '%s-%s' % (_discoro_name, _discoro_server_id)
+    _discoro_config['tcp_port'] = _discoro_tcp_port
     if _discoro_config['loglevel']:
         asyncoro.logger.setLevel(logging.DEBUG)
     else:
@@ -482,6 +484,10 @@ if __name__ == '__main__':
     import socket
     import os
     import collections
+    try:
+        import readline
+    except:
+        pass
 
     try:
         import psutil
@@ -500,6 +506,8 @@ if __name__ == '__main__':
                         help='External IP address to use (needed in case of NAT firewall/gateway)')
     parser.add_argument('-u', '--udp_port', dest='udp_port', type=int, default=51350,
                         help='UDP port number to use')
+    parser.add_argument('--tcp_ports', dest='tcp_ports', action='append', default=[],
+                        help='TCP port numbers to use')
     parser.add_argument('-n', '--name', dest='name', default=None,
                         help='(symbolic) name given to AsynCoro schdulers on this node')
     parser.add_argument('--dest_path', dest='dest_path', default=None,
@@ -534,6 +542,26 @@ if __name__ == '__main__':
         _discoro_cpus += _discoro_config['cpus']
     del _discoro_config['cpus']
 
+    _discoro_tcp_ports = set()
+    tcp_port = tcp_ports = None
+    for tcp_port in _discoro_config.pop('tcp_ports', []):
+        tcp_ports = tcp_port.split('-')
+        if len(tcp_ports) == 1:
+            _discoro_tcp_ports.add(int(tcp_ports[0]))
+        elif len(tcp_ports) == 2:
+            _discoro_tcp_ports = _discoro_tcp_ports.union(range(int(tcp_ports[0]),
+                                                                int(tcp_ports[1]) + 1))
+        else:
+            raise Exception('Invalid TCP port range "%s"' % tcp_ports)
+    _discoro_tcp_ports = sorted(_discoro_tcp_ports)
+
+    if _discoro_tcp_ports:
+        for tcp_port in range(_discoro_tcp_ports[-1] + 1,
+                              _discoro_tcp_ports[-1] + 1 + _discoro_cpus - len(_discoro_tcp_ports)):
+            _discoro_tcp_ports.append(tcp_port)
+    else:
+        _discoro_tcp_ports = [0] * _discoro_cpus
+
     _discoro_name = _discoro_config['name']
     if not _discoro_name:
         _discoro_name = socket.gethostname()
@@ -556,11 +584,14 @@ if __name__ == '__main__':
         _discoro_server_info = _discoro_ServerInfo(
             multiprocessing.Process(target=_discoro_process,
                                     args=(_discoro_config, _discoro_name, _discoro_server_id,
-                                          _discoro_mp_queue)), _discoro_mp_queue)
+                                          _discoro_tcp_ports[_discoro_server_id - 1],
+                                          _discoro_mp_queue)),
+            _discoro_mp_queue)
         _discoro_server_infos.append(_discoro_server_info)
 
     # delete variables not needed anymore
-    del _discoro_mp_queue, parser, argparse, multiprocessing, socket, collections, os
+    del _discoro_mp_queue, _discoro_tcp_ports, tcp_port, tcp_ports
+    del parser, argparse, multiprocessing, socket, collections, os
 
     for _discoro_server_info in _discoro_server_infos:
         _discoro_server_info.Proc.start()
@@ -569,9 +600,9 @@ if __name__ == '__main__':
     if not _discoro_daemon:
         import threading
 
-        def read_stdin():
+        def _discoro_cmd_reader():
             while True:
-                time.sleep(0.5)
+                time.sleep(0.25)
                 try:
                     _discoro_cmd = input(
                         '\nEnter "status" to get status\n'
@@ -600,11 +631,11 @@ if __name__ == '__main__':
                     for _discoro_server_info in _discoro_server_infos:
                         _discoro_server_info.Queue.put('close')
 
-        stdin_reader = threading.Thread(target=read_stdin)
-        stdin_reader.daemon = True
-        stdin_reader.start()
+        _discoro_cmd = threading.Thread(target=_discoro_cmd_reader)
+        _discoro_cmd.daemon = True
+        _discoro_cmd.start()
     else:
-        stdin_reader = None
+        _discoro_cmd = None
 
     while True:
         try:
