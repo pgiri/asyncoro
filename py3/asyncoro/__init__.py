@@ -1938,7 +1938,10 @@ class Lock(object):
                 start = _time()
             self._waitlist.append(coro)
             if (yield coro._await_(timeout)) is None:
-                self._waitlist.remove(coro)
+                try:
+                    self._waitlist.remove(coro)
+                except ValueError:
+                    pass
             if timeout is not None:
                 timeout -= (_time() - start)
         self._owner = coro
@@ -1983,7 +1986,10 @@ class RLock(object):
                 start = _time()
             self._waitlist.append(coro)
             if (yield coro._await_(timeout)) is None:
-                self._waitlist.remove(coro)
+                try:
+                    self._waitlist.remove(coro)
+                except ValueError:
+                    pass
             if timeout is not None:
                 timeout -= (_time() - start)
         assert self._depth == 0
@@ -2035,7 +2041,10 @@ class Condition(object):
                 start = _time()
             self._waitlist.append(coro)
             if (yield coro._await_(timeout)) is None:
-                self._waitlist.remove(coro)
+                try:
+                    self._waitlist.remove(coro)
+                except ValueError:
+                    pass
             if timeout is not None:
                 timeout -= (_time() - start)
         assert self._depth == 0
@@ -2087,7 +2096,10 @@ class Condition(object):
         self._notifylist.append(coro)
         start = _time()
         if (yield coro._await_(timeout)) is None:
-            self._notifylist.remove(coro)
+            try:
+                self._notifylist.remove(coro)
+            except ValueError:
+                pass
             raise StopIteration(False)
         while self._owner is not None:
             self._waitlist.insert(0, coro)
@@ -2097,7 +2109,10 @@ class Condition(object):
                     raise StopIteration(False)
                 start = _time()
             if (yield coro._await_(timeout)) is None:
-                self._waitlist.remove(coro)
+                try:
+                    self._waitlist.remove(coro)
+                except ValueError:
+                    pass
                 raise StopIteration(False)
         assert self._depth == 0
         self._owner = coro
@@ -2143,7 +2158,10 @@ class Event(object):
                 raise StopIteration(False)
         self._waitlist.append(coro)
         if (yield coro._await_(timeout)) is None:
-            self._waitlist.remove(coro)
+            try:
+                self._waitlist.remove(coro)
+            except ValueError:
+                pass
             raise StopIteration(False)
         else:
             raise StopIteration(True)
