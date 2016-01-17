@@ -12,15 +12,14 @@ import asyncoro
 
 def process(conn, coro=None):
     global n
-    data = ''
     if sys.version_info.major >= 3:
-        data = bytes(data, 'ascii')
+        eol = ord('/')
+    else:
+        eol = '/'
+    data = ''.encode()
     while True:
         data += yield conn.recv(128)
-        if sys.version_info.major >= 3:
-            if chr(data[-1]) == '/':
-                break
-        elif data[-1] == b'/':
+        if data[-1] == eol:
             break
     conn.close()
     n += 1

@@ -9,7 +9,7 @@
 import logging, random
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
-from asyncoro.discoro_schedulers import ProcScheduler
+from asyncoro.discoro_schedulers import RemoteCoroScheduler
 import asyncoro.httpd
 
 
@@ -27,7 +27,7 @@ def client_proc(computation, coro=None):
         coro.set_daemon()
         while True:
             msg = yield coro.receive()
-            # send message to ProcScheduler's status_proc:
+            # send message to RemoteCoroScheduler's status_proc:
             job_scheduler.status_coro.send(msg)
             # and to httpd's status_coro:
             httpd.status_coro.send(msg)
@@ -39,7 +39,7 @@ def client_proc(computation, coro=None):
                     # (keep track of submitted rcoro, args and kwargs)
                     print('%s failed: %s' % (msg.args[0], msg.args[1][1]))
 
-    job_scheduler = ProcScheduler(computation)
+    job_scheduler = RemoteCoroScheduler(computation)
     computation.status_coro = asyncoro.Coro(status_proc)
 
     if (yield computation.schedule()):

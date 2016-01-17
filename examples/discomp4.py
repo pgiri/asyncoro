@@ -42,33 +42,23 @@ def proc_setup(client, coro=None):
 # coroutines there. Note that compute_proc and proc_setup run in the
 # same process (and share same address space), so global variables are
 # shared (updates in one coroutine are visible in other coroutnies in
-# the same process). Unlike in 'discomp3.py', here the result is sent
-# to client's results coroutine as messages from thread function, to
-# illustrate messages can be sent from thread function. However,
-# messages can't be received in thread function.
-def compute_proc(client, n, coro=None):
+# the same process).
+def compute_proc(n, coro=None):
     def thread_proc(): # executed in a thread
         time.sleep(n)
-        client.send((coro.location, n))
-        return 0
+        return (coro.location, n)
 
     yield thread_pool.async_task(thread_proc)
+    # return value from thread_proc is sent as result with MonitorException
 
 def client_proc(computation, njobs, coro=None):
-    cleanup_rcoros = set() # processes used are kept track to cleanup when done
+    proc_setup_coros = set() # processes used are kept track to cleanup when done
     status = {'submitted': 0, 'done': 0}
-
-    def results_proc(coro=None):
-        coro.set_daemon()
-        while True:
-            result = yield coro.receive()
-            print('result from %s: %s' % (result[0], result[1]))
 
     # submit job at given location
     def submit_job(where, coro=None):
         if status['submitted'] < njobs:
-            rcoro = yield computation.run_at(where, compute_proc,
-                                             results_coro, random.uniform(10, 20))
+            rcoro = yield computation.run_at(where, compute_proc, random.uniform(5, 10))
             if isinstance(rcoro, asyncoro.Coro):
                 status['submitted'] += 1
 
@@ -79,7 +69,7 @@ def client_proc(computation, njobs, coro=None):
             # wait till coroutine has read data in to memory
             msg = yield coro.receive()
             if msg == 'ready':
-                cleanup_rcoros.add(rcoro) # this will be cleaned up at the end
+                proc_setup_coros.add(rcoro) # this will be cleaned up at the end
                 asyncoro.Coro(submit_job, rcoro.location)
         else:
             print('Setup of %s failed' % where)
@@ -88,15 +78,15 @@ def client_proc(computation, njobs, coro=None):
     if (yield computation.schedule()):
         raise Exception('Failed to schedule computation')
 
-    results_coro = asyncoro.Coro(results_proc)
     while True:
         msg = yield coro.receive()
         if isinstance(msg, asyncoro.MonitorException):
             # a process finished job
             rcoro = msg.args[0]
-            if msg.args[1][0] != StopIteration:
-                asyncoro.logger.warning('%s terminated with "%s"' %
-                                        (rcoro.location, str(msg.args[1])))
+            if msg.args[1][0] == StopIteration and len(msg.args[1][1]) == 2:
+                print('result: %s' % str(msg.args[1][1]))
+            else:
+                print('%s failed: %s' % (rcoro.location, str(msg.args[1])))
             status['done'] += 1
             if status['done'] == njobs:
                 break
@@ -112,7 +102,7 @@ def client_proc(computation, njobs, coro=None):
             asyncoro.logger.debug('Ignoring status message %s' % str(msg))
 
     # cleanup processes
-    for rcoro in cleanup_rcoros:
+    for rcoro in proc_setup_coros:
         if (yield rcoro.deliver('cleanup', timeout=5)) != 1:
             print('cleanup failed for %s' % rcoro)
     yield computation.close()

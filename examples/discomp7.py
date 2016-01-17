@@ -8,7 +8,7 @@
 # client (which is sent to the program) and to send output from the
 # program back to the client.
 
-import logging, random, sys
+import logging, random, sys, os
 from asyncoro.discoro import DiscoroStatus
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
@@ -63,8 +63,8 @@ def rcoro_proc(client, program, coro=None):
     raise StopIteration(pipe.poll())
 
 def client_proc(computation, n, coro=None):
-    # use ProcScheduler to run one discomp7_proc.py at a server
-    job_scheduler = asyncoro.discoro_schedulers.ProcScheduler(computation)
+    # use RemoteCoroScheduler to run one discomp7_proc.py at a server
+    job_scheduler = asyncoro.discoro_schedulers.RemoteCoroScheduler(computation)
     if (yield computation.schedule()):
         raise Exception('schedule failed')
 
@@ -116,5 +116,6 @@ if __name__ == '__main__':
     # start private scheduler:
     discoro.Scheduler()
     # send rcoro_proc and discomp7_proc.py
-    computation = discoro.Computation([rcoro_proc, 'discomp7_proc.py'])
+    computation = discoro.Computation([rcoro_proc, os.path.join(os.path.dirname(sys.argv[0]),
+                                                                'discomp7_proc.py')])
     asyncoro.Coro(client_proc, computation, n).value()

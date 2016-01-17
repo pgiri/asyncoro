@@ -4,8 +4,8 @@
 # Distributed computing example where this client sends computation to
 # remote discoro process to run as remote coroutines. At any time at
 # most one computation coroutine is scheduled at a process (due to
-# ProcScheduler). This example shows how to use 'execute' method of
-# ProcScheduler to submit comutations and get their results easily.
+# RemoteCoroScheduler). This example shows how to use 'execute' method of
+# RemoteCoroScheduler to submit comutations and get their results easily.
 
 # This example can be combined with in-memory processing (see
 # 'discoro_client5.py') and streaming (see 'discoro_client6.py') for
@@ -14,7 +14,7 @@
 import logging, random
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
-from asyncoro.discoro_schedulers import ProcScheduler
+from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
 # 'proc_setup' is executed at remote server process to read the data in
 # given file (transferred by client, see below) in to memory (global
@@ -74,9 +74,9 @@ def client_proc(computation, data_file, coro=None):
             raise StopIteration(0) # indicate server initialized with exit value 0
         raise StopIteration(-1)
 
-    # Use ProcScheduler to run at most one coroutine at a server process
+    # Use RemoteCoroScheduler to run at most one coroutine at a server process
     # This should be created before scheduling computation
-    job_scheduler = ProcScheduler(computation, status_proc)
+    job_scheduler = RemoteCoroScheduler(computation, status_proc)
 
     if (yield computation.schedule()):
         raise Exception('schedule failed')

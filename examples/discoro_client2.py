@@ -1,9 +1,10 @@
 # Run 'discoronode.py' program to start processes to execute
 # computations sent by this client, along with this program.
 
-# Example where this client sends computation to remote discoro
-# process to run as remote coroutines. Remote coroutines and client
-# can use message passing to exchange data.
+# Example where this client sends computation to remote discoro process to run
+# as remote coroutines. Computations are scheduled with custom scheduler
+# (without using RemoteCoroScheduler). Remote coroutines and client can use
+# message passing to exchange data.
 
 import logging, random
 import asyncoro.discoro as discoro
@@ -28,62 +29,50 @@ def compute(obj, client, coro=None):
     import math
     # this coroutine and client can use message passing; client sends
     # data to this coro as a message
-    n = yield coro.receive()
-    print('process at %s received: %s' % (coro.location, n))
-    obj.n = math.sqrt(n)
+    print('process at %s received: %s' % (coro.location, obj.n))
     yield coro.sleep(obj.n)
+    obj.n = math.sqrt(obj.n)
     # send result back to client
     yield client.deliver(obj, timeout=5)
 
 
 # status messages indicating nodes, processes as well as remote
 # coroutines finish status are sent to this coroutine
-def status_proc(client, coro=None):
-    procs_ready = 0
+def status_proc(computation, njobs, client, coro=None):
     coro.set_daemon()
+
     while True:
         msg = yield coro.receive()
         if isinstance(msg, asyncoro.MonitorException):
+            rcoro = msg.args[0]
             if msg.args[1][0] != StopIteration:
                 print('rcoro %s failed: %s / %s' % (msg.args[0], msg.args[1][0], msg.args[1][1]))
+            if njobs > 0: # submit another job
+                c = C(njobs)
+                c.n = random.uniform(5, 10)
+                rcoro = yield computation.run_at(rcoro.location, compute, c, client)
+                if isinstance(rcoro, asyncoro.Coro):
+                    njobs -= 1
         elif isinstance(msg, DiscoroStatus):
-            if msg.status == discoro.Scheduler.ServerInitialized:
-                # wait until 2 processes ready
-                procs_ready += 1
-                if procs_ready == 2:
-                    client.send('processes ready')
+            print('Status: %s / %s' % (msg.info, msg.status))
+            if msg.status == discoro.Scheduler.ServerInitialized and njobs > 0: # submit a job
+                c = C(njobs)
+                c.n = random.uniform(5, 10)
+                rcoro = yield computation.run_at(msg.info, compute, c, client)
+                if isinstance(rcoro, asyncoro.Coro):
+                    njobs -= 1
 
 
-def client_proc(computation, coro=None):
+def client_proc(computation, njobs, coro=None):
     # scheduler sends node / process status messages to status_coro
-    computation.status_coro = asyncoro.Coro(status_proc, coro)
+    computation.status_coro = asyncoro.Coro(status_proc, computation, njobs, coro)
 
     # distribute computation to server
     if (yield computation.schedule()):
         raise Exception('schedule failed')
 
-    # wait until processes are initialized; alternately, create
-    # coroutines from 'status_proc' itself
-    msg = yield coro.receive()
-    assert msg == 'processes ready'
-
-    rcoros = []
-    # create remote coroutines
-    for i in range(3):
-        c = C(i)
-        rcoro = yield computation.run(compute, c, coro)
-        if isinstance(rcoro, asyncoro.Coro):
-            rcoros.append(rcoro)
-        else:
-            print('failed to create remote coroutine for %s: %s' % (c, rcoro))
-
-    # yield coro.sleep(10)
-    # send data to remote coroutines (as messages)
-    for rcoro in rcoros:
-        rcoro.send(random.uniform(5, 20))
-
     # remote coroutines send replies as messages to this coro
-    for rcoro in rcoros:
+    for i in range(njobs):
         reply = yield coro.receive()
         print('reply: %s' % (reply))
 
@@ -98,7 +87,5 @@ if __name__ == '__main__':
     # send generator function and class C (as the computation uses
     # objects of C)
     computation = discoro.Computation([compute, C])
-    # call '.value()' of coroutine created here, otherwise main thread
-    # may finish (causing interpreter to start cleanup) before asyncoro
-    # scheduler gets a chance to start
-    asyncoro.Coro(client_proc, computation).value()
+    # create 10 remote coroutines (jobs)
+    asyncoro.Coro(client_proc, computation, 10).value()

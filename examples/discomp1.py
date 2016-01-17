@@ -11,7 +11,7 @@
 import logging, random
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
-from asyncoro.discoro_schedulers import ProcScheduler
+from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
 
 # this generator function is sent to remote discoro servers to run
@@ -30,7 +30,7 @@ def client_proc(computation, coro=None):
             result = yield coro.receive()
             print('result: %s' % result)
 
-    job_scheduler = ProcScheduler(computation)
+    job_scheduler = RemoteCoroScheduler(computation)
     results_coro = asyncoro.Coro(results_proc)
 
     if (yield computation.schedule()):

@@ -12,8 +12,7 @@ def client(host, port, n, coro=None):
     sock = asyncoro.AsyncSocket(sock)
     yield sock.connect((host, port))
     msg = '%d: ' % n + '-' * random.randint(100,300) + '/'
-    if sys.version_info.major >= 3:
-        msg = bytes(msg, 'ascii')
+    msg = msg.encode()
     yield sock.sendall(msg)
     sock.close()
 

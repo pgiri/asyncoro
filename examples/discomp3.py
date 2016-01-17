@@ -1,15 +1,16 @@
-# This example uses status messages and message passing to run 'setup'
-# coroutine at remote process to prepare it for processing jobs.
+# This example uses status messages and message passing to run 'setup' coroutine
+# at remote process to prepare it for processing jobs.
 
 # DiscoroStatus must be imported in global scope as below; otherwise,
 # unserializing status messages fails (if external scheduler is used)
 from asyncoro.discoro import DiscoroStatus
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
+from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
 
-# This function sends message to client when the setup is done and
-# then waits for (client's) message to cleanup.
+# This function sends message to client when the setup is done and then waits
+# for (client's) message to cleanup.
 def proc_setup(client, coro=None):
     global time, thread_pool # 'thread_pool' used in rcoro_proc
     import time
@@ -24,85 +25,76 @@ def proc_setup(client, coro=None):
     del time, thread_pool
 
 
-# discoronode expects user computations to be generator functions (to
-# create coroutines) that will 'yield' within pulse_interval (default
-# 10 seconds). Otherwise, the daemon coroutine that sends pulse
-# messages to scheduler will not get a chance to do so, causing
-# scheduler to assume the node may be unreachable and abandon the
-# computation. In this example, user computations are executed in
-# threads, using AsyncThreadPool. The computation is simulated with
-# 'time.sleep'. (Note that 'time.sleep' shouldn't be used in
-# coroutines, as this will block entire asyncoro framework.)
+# discoronode expects user computations to be generator functions (to create
+# coroutines) that will 'yield' within pulse_interval (default 10
+# seconds). Otherwise, the daemon coroutine that sends pulse messages to
+# scheduler will not get a chance to do so, causing scheduler to assume the node
+# may be unreachable and abandon the computation. In this example, user
+# computations are executed in threads, using AsyncThreadPool. The computation
+# is simulated with 'time.sleep'. (Note that 'time.sleep' shouldn't be used in
+# coroutines, as this will block entire asyncoro framework.) The thread function
+# can send messages, but can't receive messages.
 
-# This generator function is sent to remote discoro process to run
-# coroutines there. Note that compute_proc and proc_setup run in the
-# same process (and share same address space), so global variables are
-# shared (updates in one coroutine are visible in other coroutnies in
-# the same process).
-def compute_proc(n, coro=None):
+# This generator function is sent to remote discoro process to run coroutines
+# there. Note that compute_proc and proc_setup run in the same process (and
+# share same address space), so global variables are shared (updates in one
+# coroutine are visible in other coroutnies in the same process).
+def compute_proc(n, client, coro=None):
     # execute 'time.sleep' with thread_pool initialized in proc_setup
     def thread_proc():
         time.sleep(n)
-        return n # result
+        client.send((coro.location, time.asctime()))
+        return
 
     yield thread_pool.async_task(thread_proc)
-    # return value from thread_proc is sent as result (with MonitorException)
 
 def client_proc(computation, njobs, coro=None):
-    cleanup_rcoros = set() # processes used are kept track to cleanup when done
-    status = {'submitted': 0, 'done': 0}
+    proc_setup_coros = set() # processes used are kept track to cleanup when done
 
-    # client coroutine to setup a remote process (with proc_setup coroutine)
-    # then submits a job
-    def init_proc(where, coro=None):
-        rcoro = yield computation.run_at(where, proc_setup, coro)
+    # coroutine receives status messages from rcoro_scheduler. If the status is
+    # ServerInitialized, send the file to server and wait for initialization
+    def status_proc(status, info, coro=None):
+        if status != discoro.Scheduler.ServerInitialized:
+            raise StopIteration(0)
+        rcoro = yield rcoro_scheduler.submit_at(info, proc_setup, coro)
         if isinstance(rcoro, asyncoro.Coro):
-            # wait till coroutine has read data in to memory
             msg = yield coro.receive()
-            assert msg == 'ready'
-            cleanup_rcoros.add(rcoro) # this will be cleaned up at the end
-            if status['submitted'] < njobs:
-                rcoro = yield computation.run_at(rcoro.location, compute_proc, random.uniform(1, 5))
-                if isinstance(rcoro, asyncoro.Coro):
-                    status['submitted'] += 1
+            if msg == 'ready':
+                proc_setup_coros.add(rcoro)
+                raise StopIteration(0) # success indicated with 0
+            else:
+                raise StopIteration(-1) # scheduler won't use this server
         else:
-            print('Setup of %s failed' % where)
+            print('Setup of %s failed' % info)
+            raise StopIteration(-1) # scheduler won't use this server
 
-    computation.status_coro = coro
+    # use RemoteCoroScheduler to start coroutines at servers
+    rcoro_scheduler = RemoteCoroScheduler(computation, status_proc)
     if (yield computation.schedule()):
         raise Exception('Failed to schedule computation')
-    while True:
-        msg = yield coro.receive()
-        if isinstance(msg, asyncoro.MonitorException):
-            # a process finished job
-            rcoro = msg.args[0]
-            if msg.args[1][0] == StopIteration:
-                result = msg.args[1][1]
-                print('%s: %s computed: %s' % (status['done'], rcoro.location, result))
-            else:
-                asyncoro.logger.warning('%s terminated with "%s"' %
-                                        (rcoro.location, str(msg.args[1])))
-            status['done'] += 1
-            if status['done'] == njobs:
-                break
-            if status['submitted'] < njobs:
-                # schedule another job at this process
-                rcoro = yield computation.run_at(rcoro.location, compute_proc, random.uniform(1, 5))
-                if isinstance(rcoro, asyncoro.Coro):
-                    status['submitted'] += 1
-        elif isinstance(msg, DiscoroStatus):
-            # asyncoro.logger.debug('Node/Server status: %s, %s' % (msg.status, msg.info))
-            if msg.status == discoro.Scheduler.ServerInitialized and status['submitted'] < njobs:
-                # a new process is available; initialize it
-                asyncoro.Coro(init_proc, msg.info)
-        else:
-            asyncoro.logger.debug('Ignoring status message %s' % str(msg))
 
+    # remote coroutines send results to this coroutine
+    def results_proc(coro=None):
+        done = 0
+        while done < njobs:
+            msg = yield coro.receive()
+            if isinstance(msg, tuple) and len(msg) == 2:
+                print('result from %s: %s' % (msg[0], msg[1]))
+                done += 1
+    results_coro = asyncoro.Coro(results_proc)
+
+    submitted = 0
+    while submitted < njobs:
+        rcoro = yield rcoro_scheduler.schedule(compute_proc, random.uniform(5, 10), results_coro)
+        if isinstance(rcoro, asyncoro.Coro):
+            submitted += 1
+
+    # wait for results to be received
+    yield results_coro.finish()
     # cleanup processes
-    for rcoro in cleanup_rcoros:
-        if (yield rcoro.deliver('cleanup', timeout=5)) != 1:
-            asyncoro.logger.warning('cleanup failed for %s' % rcoro)
-    yield computation.close()
+    for proc_setup_coro in proc_setup_coros:
+        yield proc_setup_coro.deliver('cleanup', timeout=5)
+    yield rcoro_scheduler.finish(close=True)
 
 
 if __name__ == '__main__':

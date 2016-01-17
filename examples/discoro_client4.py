@@ -28,6 +28,33 @@ class C(object):
         self.client = client
 
 
+# this generator function is sent to remote server to run
+# coroutines there
+def rcoro_proc(coro=None):
+    import os
+    # receive object from client_proc coroutine
+    cobj = yield coro.receive()
+    if not cobj:
+        raise StopIteration
+    # Input file is already copied at where this rcoro is running (by client).
+    # For given input file, create an output file with each line in the output
+    # file computed as length of corresponding line in input file
+    inp_file = 'input%s.dat' % cobj.i
+    out_file = 'output%s.dat' % cobj.i
+    with open(inp_file, 'r') as inp_fd:
+        with open(out_file, 'w') as out_fd:
+            for lineno, line in enumerate(inp_fd, start=1):
+                out_fd.write('%d: %d\n' % (lineno, len(line)-1))
+    # 'sleep' to simulate computing
+    yield coro.sleep(cobj.n)
+    # transfer the output file to client's asyncoro
+    result = yield asyncoro.AsynCoro().send_file(cobj.client.location, out_file, overwrite=True,
+                                                 timeout=30)
+    cobj.client.send(result)
+    os.remove(inp_file)
+    os.remove(out_file)
+
+
 # this generator function is used to create local coroutine (at the
 # client) to communicate with a remote coroutine
 def client_proc(job_id, rcoro, coro=None):
@@ -36,6 +63,8 @@ def client_proc(job_id, rcoro, coro=None):
     if (yield asyncoro.AsynCoro().send_file(rcoro.location, 'input%s.dat' % job_id,
                                             timeout=30)) < 0:
         print('Could not send input data to %s' % rcoro.location)
+        # terminate remote coro
+        rcoro.send(None)
         raise StopIteration(-1)
     # send info about input
     obj = C(job_id, random.uniform(5, 8), coro)
@@ -52,31 +81,7 @@ def client_proc(job_id, rcoro, coro=None):
     output = os.path.join(asyncoro.AsynCoro().dest_path, 'output%s.dat' % obj.i)
     # if necessary, move file to os.getcwd()
     # os.rename(output, os.getcwd())
-    print('%s processed' % (obj.i))
-
-
-# this generator function is sent to remote server to run
-# coroutines there
-def rcoro_proc(coro=None):
-    import os
-    # receive object from client_proc coroutine
-    cobj = yield coro.receive()
-    # for given input file, create an output file with each line in
-    # the output file computed as length of corresponding line in input file
-    inp_file = 'input%s.dat' % cobj.i
-    out_file = 'output%s.dat' % cobj.i
-    with open(inp_file, 'r') as inp_fd:
-        with open(out_file, 'w') as out_fd:
-            for lineno, line in enumerate(inp_fd, start=1):
-                out_fd.write('%d: %d\n' % (lineno, len(line)-1))
-    # 'sleep' to simulate computing
-    yield coro.sleep(cobj.n)
-    # transfer the output file to client's asyncoro
-    result = yield asyncoro.AsynCoro().send_file(cobj.client.location, out_file, overwrite=True,
-                                                 timeout=30)
-    cobj.client.send(result)
-    os.remove(inp_file)
-    os.remove(out_file)
+    print('job %s processed' % (obj.i))
 
 
 def submit_jobs_proc(computation, njobs, coro=None):
@@ -123,8 +128,5 @@ if __name__ == '__main__':
     # instead, it is sent each time a job is submitted,
     # which is a bit inefficient
     computation = discoro.Computation([C])
-    # call '.value()' of coroutine created here, otherwise main thread
-    # may finish (causing interpreter to start cleanup) before asyncoro
-    # scheduler gets a chance to start
     # run 10 jobs
     asyncoro.Coro(submit_jobs_proc, computation, 10).value()

@@ -1,130 +1,119 @@
-Example files in this directory are meant to illustrate features of
-asyncoro framework. They are not necessarily efficient versions, nor
-very useful. The descriptions below are sorted on the names of files,
-so some examples at the beginning use advanced features, whereas later
-files (especially files that start with 'tut_') may be easier to
-follow.
+Example files in this directory are meant to illustrate features of asyncoro
+framework. They are not necessarily efficient versions, nor very useful. The
+descriptions below are sorted on the names of files, so some examples at the
+beginning use advanced features, whereas later files (especially files that
+start with 'tut_') may be easier to follow.
 
-dispy project (http://dispy.sourceforge.net) uses asyncoro to
-implement Python framework for distributed and parallel computing.
+dispy project (http://dispy.sourceforge.net) uses asyncoro to implement Python
+framework for distributed and parallel computing.
 
-* chat_chan_client.py and chat_chan_server.py use broadcasting over
-  a channel to send messages to all participants to implement a
-  simple chat (message) service.  To use this and other 'chat' examples
-  below, run the server, and multiple clients (either on same machine
-  or other machines in local network). Messages typed in one client
-  show up at other clients.
+* chat_chan_client.py and chat_chan_server.py use broadcasting over a channel to
+  send messages to all participants to implement a simple chat (message)
+  service.  To use this and other 'chat' examples below, run the server, and
+  multiple clients (either on same machine or other machines in local
+  network). Messages typed in one client show up at other clients.
 
 * chat_sock_client.py and chat_sock_server.py use asynchronous network
-  programming, coroutines and message passing to implement a chat
-  (message) server that is used by clients to broadcast messages.
+  programming, coroutines and message passing to implement a chat (message)
+  server that is used by clients to broadcast messages.
 
-* discomp1.py illustrates how to use discoro and ProcScheduler for
-  distributed computing. The computations are assumed to CPU intensive
-  so at most one computation would be running at a (local or remote)
-  server process (to use all available local or remote CPUs), similar
-  to using 'dispy' (http://dispy.sourceforge.net) project.
+* discomp1.py illustrates how to use discoro and RemoteCoroScheduler for
+  distributed computing. The computations are assumed to CPU intensive so at
+  most one computation would be running at a (local or remote) server process
+  (to use all available local or remote CPUs), similar to using 'dispy'
+  (http://dispy.sourceforge.net) project.
 
 * discomp2.py is another example of distributed computing, similar to
-  discomp1.py. It shows how to relay status messages from discoro
-  scheduler to ProcScheduler and httpd concurrently.
+  discomp1.py. It shows how to relay status messages from discoro scheduler to
+  RemoteCoroScheduler and httpd concurrently.
 
 * discomp3.py and discomp4.py demonstrate using AsyncThreadPool to run
-  synchronous tasks (i.e., computations without 'yield' statements) in
-  remote processes.
+  synchronous tasks (i.e., computations without 'yield' statements) in remote
+  processes.
 
-* discomp5.py uses 'execute' method of ProcScheduler to issue
-  computation jobs and get their results.
+* discomp5.py uses 'execute' method of RemoteCoroScheduler to issue computation
+  jobs and get their results.
 
-* discomp6.py uses 'execute_at' method of ProcScheduler to initialize
-  server processes for in-memory processing, issue computation jobs
-  and get their results.
+* discomp6.py uses 'execute_at' method of RemoteCoroScheduler to initialize
+  server processes for in-memory processing, issue computation jobs and get
+  their results.
 
-* discomp7.py runs an external program, discomp7_proc.py, at remote
-  servers. The program reads from standard input and writes to
-  standard output. Asynchronous pipes and message passing are used to
-  send input from client to this program executing on remote servers,
-  and get the output back to client.
+* discomp7.py runs an external program, discomp7_proc.py, at remote servers. The
+  program reads from standard input and writes to standard output. Asynchronous
+  pipes and message passing are used to send input from client to this program
+  executing on remote servers, and get the output back to client.
 
-* discoro_client1.py uses discoro (server) to distribute a computation
-  (and its dependencies) and execute remote coroutines. The client and
-  remote coroutines use message passing to exhcange data.
+* discoro_client1.py uses discoro (server) to distribute a computation (and its
+  dependencies) and execute remote coroutines. The client and remote coroutines
+  use message passing to exhcange data.
 
-* discoro_client2.py is similar to discoro_client1.py, except that it
-  uses status messages from scheduler to distribute computations.
+* discoro_client2.py is similar to discoro_client1.py, except that it uses
+  status messages from scheduler to distribute computations.
 
-* discoro_client3.py is a variation of discoro_client2.py where a
-  certain number of jobs are submitted whenever a process becomes
-  available.
+* discoro_client3.py is a variation of discoro_client2.py that uses
+  MonitorException status to get computation results.
 
-* discoro_client4.py is another example of using discoro. It sends
-  files at the client to remote process to execute computations that
-  process those files and the remote process in turn sends the results
-  in files back to the client.
+* discoro_client4.py is another example of using discoro. It sends files at the
+  client to remote process to execute computations that process those files and
+  the remote process in turn sends the results in files back to the client.
 
-* discoro_client5.py shows how to use remote servers for in-memory
-  processing. It uses status messages to initialize (setup) a process
-  to read the data in a file into a global variable, which is later
-  used to efficiently execute job processes (to use data in global
-  variable instead of reading from file each time).
+* discoro_client5.py shows how to use remote servers for in-memory processing,
+  using RemoteCoroScheduler. It uses status messages to initialize (setup) a
+  process to read the data in a file into a global variable, which is later used
+  to efficiently execute job processes (to use data in global variable instead
+  of reading from file each time).
 
-* discoro_client6.py uses streaming of data to remote coroutines for
-  efficient communication.
+* discoro_client6.py uses streaming of data to remote coroutines for efficient
+  communication.
 
-* hotswap.py and hotswap_funcs.py illustrate how a running coroutine
-  function can be swapped with a new function. The currently running
-  function checks/validates the function being replaced, any
-  unprocessed messages in the coroutine are processed with new
-  functionality.
+* hotswap.py and hotswap_funcs.py illustrate how a running coroutine function
+  can be swapped with a new function. The currently running function
+  checks/validates the function being replaced, any unprocessed messages in the
+  coroutine are processed with new functionality.
 
-* pipe_csum.py uses asynchronous pipes to write data to and read data
-  from a system program (that computes checksum of data).
+* pipe_csum.py uses asynchronous pipes to write data to and read data from a
+  system program (that computes checksum of data).
 
-* pipe_grep.py uses chained pipes with asynchronous read and write
-  interface to count number of lines matching a pattern.
+* pipe_grep.py uses chained pipes with asynchronous read and write interface to
+  count number of lines matching a pattern.
 
-* rci_monitor_client.py and rci_monitor_server.py illustrate another
-  approach to execute remote coroutines: The server registers a
-  function and client requests to execute coroutine with that
-  function. Compare this to discoro_client.py where the client sends
-  the computation itself to the remote server, so the client can
-  execute arbitrary functions, whereas with RCI only registered
+* rci_monitor_client.py and rci_monitor_server.py illustrate another approach to
+  execute remote coroutines: The server registers a function and client requests
+  to execute coroutine with that function. Compare this to discoro_client.py
+  where the client sends the computation itself to the remote server, so the
+  client can execute arbitrary functions, whereas with RCI only registered
   functions can be executed by clients.
 
-* remote_channel_client.py and remote_channel_server.py use
-  broadcasting channels to exchange messages among a sender and
-  local/remote recipients.
+* remote_channel_client.py and remote_channel_server.py use broadcasting
+  channels to exchange messages among a sender and local/remote recipients.
 
-* remote_coro_client.py and remote_coro_server.py exchange messages
-  with one-to-one message passing to exchange messages between two
-  remote coroutines.
+* remote_coro_client.py and remote_coro_server.py exchange messages with
+  one-to-one message passing to exchange messages between two remote coroutines.
 
-* socket_afile.py creates a server and a client connected with a
-  socket, which is then converted to asynchronous file. The server and
-  client exchange data with asynchronous file interface. This example
-  doesn't work in Windows, as sockets in Windows don't have underlying
-  file.
+* socket_afile.py creates a server and a client connected with a socket, which
+  is then converted to asynchronous file. The server and client exchange data
+  with asynchronous file interface. This example doesn't work in Windows, as
+  sockets in Windows don't have underlying file.
 
-* tut_channel.py is another example illustrating usage of broadcasting
-  channel to exchange messages in local coroutines.
+* tut_channel.py is another example illustrating usage of broadcasting channel
+  to exchange messages in local coroutines.
 
-* tut_client.py and tut_server.py show message passing between remote
-  client and server coroutines.
+* tut_client.py and tut_server.py show message passing between remote client and
+  server coroutines.
 
-* tut_client_server.py shows message passing between local client and
-  server coroutines. The remote version and local version are similar,
-  except that remote versions register/locate coroutines.
+* tut_client_server.py shows message passing between local client and server
+  coroutines. The remote version and local version are similar, except that
+  remote versions register/locate coroutines.
 
-* tut_coros.py creates a number of coroutines that each suspend
-  execution for a brief period. The number of coroutines created can
-  be increased to thousands or tens of thousands to show asyncoro can
-  scale well.
+* tut_coros.py creates a number of coroutines that each suspend execution for a
+  brief period. The number of coroutines created can be increased to thousands
+  or tens of thousands to show asyncoro can scale well.
 
 * tut_sock_client.py and tut_sock_server.py use asynchronous network
   programmming to communicate.
 
-* udp.py creates client server coroutines that communicate using
-  asynchronous UDP sockets.
+* udp.py creates client server coroutines that communicate using asynchronous
+  UDP sockets.
 
-* webserver.py is an impelementation of "Ping Pong" benchmark server
-  described at http://nichol.as/asynchronous-servers-in-python.
+* webserver.py is an impelementation of "Ping Pong" benchmark server described
+  at http://nichol.as/asynchronous-servers-in-python.
