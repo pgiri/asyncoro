@@ -1187,13 +1187,16 @@ if platform.system() == 'Windows':
                 if self._notifier:
                     self._notifier.unregister(self)
                     if self._rsock.type & socket.SOCK_STREAM:
-                        if (self._read_overlap and self._read_overlap.object) or \
-                           (self._write_overlap and self._write_overlap.object):
+                        if ((self._read_overlap and self._read_overlap.object) or
+                           (self._write_overlap and self._write_overlap.object)):
                             def _cleanup_(self, rc, n):
                                 self._read_overlap.object = self._write_overlap.object = None
-                                self._read_overlap = self._write_overlap = None
-                                self._notifier = None
-                                if rc != winerror.ERROR_OPERATION_ABORTED:
+                                if rc == winerror.ERROR_OPERATION_ABORTED:
+                                    self._read_result = self._write_result = None
+                                    self._read_coro = self._write_coro = None
+                                    self._read_overlap = self._write_overlap = None
+                                    self._notifier = None
+                                else:
                                     logger.warning('CancelIo failed?: %x' % rc)
                             if self._read_overlap and self._read_overlap.object:
                                 self._read_overlap.object = functools.partial(_cleanup_, self)
@@ -1202,9 +1205,9 @@ if platform.system() == 'Windows':
                             win32file.CancelIo(self._fileno)
                         else:
                             self._read_overlap = self._write_overlap = None
+                            self._read_result = self._write_result = None
+                            self._read_coro = self._write_coro = None
                             self._notifier = None
-                        self._read_result = self._write_result = None
-                        self._read_coro = self._write_coro = None
                     else:
                         self._notifier = None
 
