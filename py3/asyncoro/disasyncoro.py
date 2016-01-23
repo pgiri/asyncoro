@@ -651,16 +651,15 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
         """Must be used with 'yield' as
         'val = yield scheduler.send_file(location, "file1")'.
 
-        Transfer 'file' to peer at 'location'. If 'dir' is not None,
-        it must be a relative path (not absolute path), in which case,
-        file will be saved at peer's dest_path + dir. Returns -1 in
-        case of error, 0 if the file is transferred, 1 if the same
-        file is already at the destination with same size, timestamp
-        and permissions (so file is not transferred) and os.stat
-        structure if a file with same name is at the destination with
-        different size/timestamp/permissions, but 'overwrite' is
-        False. If return value is 0, the sender may want to delete
-        file with 'del_file' later.
+        Transfer 'file' to peer at 'location'. If 'dir' is not None, it must be
+        a relative path (not absolute path), in which case, file will be saved
+        at peer's dest_path + dir. Returns -1 in case of error, 0 if the file is
+        transferred, 1 if the same file is already at the destination with same
+        size, timestamp and permissions (so file is not transferred) and os.stat
+        structure if a file with same name is at the destination with different
+        size/timestamp/permissions, but 'overwrite' is False. 'timeout' is max
+        seconds to transfer 1MB of data. If return value is 0, the sender may
+        want to delete file with 'del_file' later.
         """
         try:
             stat_buf = os.stat(file)
@@ -688,22 +687,23 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             yield sock.connect((location.addr, location.port))
             req.auth = peer.auth
             yield sock.send_msg(serialize(req))
-            reply = yield sock.recv_msg()
-            reply = unserialize(reply)
-            if reply == 0:
-                fd = open(file, 'rb')
-                while True:
-                    data = fd.read(10240000)
-                    if not data:
-                        break
-                    yield sock.sendall(data)
-                fd.close()
-                resp = yield sock.recv_msg()
-                resp = unserialize(resp)
-                if resp == 0:
-                    reply = 0
-                else:
-                    reply = -1
+            recvd = yield sock.recv_msg()
+            recvd = unserialize(recvd)
+            sent = 0
+            fd = open(file, 'rb')
+            while sent == recvd:
+                data = fd.read(1024000)
+                if not data:
+                    break
+                yield sock.sendall(data)
+                sent += len(data)
+                recvd = yield sock.recv_msg()
+                recvd = unserialize(recvd)
+            fd.close()
+            if recvd == stat_buf.st_size:
+                reply = 0
+            else:
+                reply = -1
         except socket.error as exc:
             reply = -1
             logger.debug('could not send "%s" to %s', req.name, location)
@@ -1221,9 +1221,9 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                     if abs(stat_buf.st_mtime - sbuf.st_mtime) <= 1 and \
                        stat_buf.st_size == sbuf.st_size and \
                        stat.S_IMODE(stat_buf.st_mode) == stat.S_IMODE(sbuf.st_mode):
-                        resp = 1
+                        resp = stat_buf.st_size
                     elif not req.kwargs['overwrite']:
-                        resp = sbuf
+                        resp = -1
 
                 if resp == 0:
                     try:
@@ -1233,28 +1233,26 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                     except:
                         logger.debug('failed to create "%s" : %s', tgt, traceback.format_exc())
                         resp = -1
-                yield conn.send_msg(serialize(resp))
                 if resp == 0:
-                    n = 0
+                    recvd = 0
                     try:
-                        while n < stat_buf.st_size:
-                            data = yield conn.recvall(min(stat_buf.st_size-n, 10240000))
+                        while recvd < stat_buf.st_size:
+                            data = yield conn.recvall(min(stat_buf.st_size-recvd, 1024000))
                             if not data:
                                 break
                             fd.write(data)
-                            n += len(data)
+                            recvd += len(data)
+                            yield conn.send_msg(serialize(recvd))
                     except:
                         logger.warning('copying file "%s" failed', tgt)
                     fd.close()
-                    if n < stat_buf.st_size:
-                        os.remove(tgt)
-                        resp = -1
-                    else:
-                        resp = 0
-                        logger.debug('saved file %s', tgt)
+                    if recvd == stat_buf.st_size:
                         os.utime(tgt, (stat_buf.st_atime, stat_buf.st_mtime))
                         os.chmod(tgt, stat.S_IMODE(stat_buf.st_mode))
-                    yield conn.send_msg(serialize(resp))
+                    else:
+                        os.remove(tgt)
+                        resp = -1
+                yield conn.send_msg(serialize(resp))
             elif req.name == 'del_file':
                 # synchronous message
                 assert req.src is None
