@@ -683,6 +683,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                            keyfile=self._keyfile, certfile=self._certfile)
         if timeout:
             sock.settimeout(timeout)
+        fd = open(file, 'rb')
         try:
             yield sock.connect((location.addr, location.port))
             req.auth = peer.auth
@@ -690,7 +691,6 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             recvd = yield sock.recv_msg()
             recvd = unserialize(recvd)
             sent = 0
-            fd = open(file, 'rb')
             while sent == recvd:
                 data = fd.read(1024000)
                 if not data:
@@ -699,7 +699,6 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 sent += len(data)
                 recvd = yield sock.recv_msg()
                 recvd = unserialize(recvd)
-            fd.close()
             if recvd == stat_buf.st_size:
                 reply = 0
             else:
@@ -710,12 +709,11 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             if len(exc.args) == 1 and exc.args[0] == 'hangup':
                 logger.warning('peer "%s" not reachable' % location)
                 # TODO: remove peer?
-        except socket.timeout:
-            raise StopIteration(-1)
         except:
             reply = -1
         finally:
             sock.close()
+            fd.close()
         raise StopIteration(reply)
 
     def del_file(self, location, file, dir=None, timeout=None):
@@ -1237,18 +1235,19 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                     recvd = 0
                     try:
                         while recvd < stat_buf.st_size:
+                            yield conn.send_msg(serialize(recvd))
                             data = yield conn.recvall(min(stat_buf.st_size-recvd, 1024000))
                             if not data:
                                 break
                             fd.write(data)
                             recvd += len(data)
-                            yield conn.send_msg(serialize(recvd))
                     except:
                         logger.warning('copying file "%s" failed', tgt)
                     fd.close()
                     if recvd == stat_buf.st_size:
                         os.utime(tgt, (stat_buf.st_atime, stat_buf.st_mtime))
                         os.chmod(tgt, stat.S_IMODE(stat_buf.st_mode))
+                        resp = recvd
                     else:
                         os.remove(tgt)
                         resp = -1
