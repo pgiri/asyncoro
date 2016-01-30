@@ -1,9 +1,9 @@
 # This example uses status messages and message passing to run 'setup'
 # coroutine at remote process to prepare it for processing jobs.
 
-# This example is a variation of discomp4.py; it uses message passing to get
-# stream of requests from client to be processed in a thread (not a coroutine,
-# but regular Python function) and send results back to client.
+# This example uses message passing to get stream of requests from client to be
+# processed in a thread (not a coroutine, but regular Python function) and send
+# results back to client.
 
 # DiscoroStatus must be imported in global scope as below; otherwise,
 # unserializing status messages fails (if external scheduler is used)
@@ -11,28 +11,6 @@ from asyncoro.discoro import DiscoroStatus
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro_schedulers import RemoteCoroScheduler
-
-
-# This coroutine is executed to initialize remote server so it can process jobs.
-def proc_setup(coro=None):
-    global time, queue, math, thread_pool
-    import time, math, sys
-    if sys.version_info.major >= 3:
-        import queue
-    else:
-        import Queue as queue
-    # in this case at most one computation (compute_proc) runs, so pool
-    # is created with 1 thread
-    thread_pool = asyncoro.AsyncThreadPool(1)
-    yield 0
-
-
-# This coroutine is executed to cleanup a process when all jobs are done
-def proc_cleanup(coro=None):
-    global time, thread_pool, queue
-    thread_pool.terminate()
-    del time, queue, thread_pool
-    yield 0
 
 # discoronode expects user computations to be generator functions (to
 # create coroutines) that will 'yield' within pulse_interval (default
@@ -51,13 +29,22 @@ def proc_cleanup(coro=None):
 # shared (updates in one coroutine are visible in other coroutnies in the same
 # process).
 def compute_proc(client, coro=None):
+    import threading, math, time, sys
+    if sys.version_info.major >= 3:
+        import queue
+    else:
+        import Queue as queue
+
     # requests from client are received by the coroutine and sent to thread with
     # Queue. Thread can't receive from client, as message passing is not
     # available in threads.
     thread_queue = queue.Queue()
+    # thread process sets thread_done asyncoro event that the compute_proc waits
+    # for (setting the event and sending messages are regular functions, so they
+    # can be used in thread)
+    thread_done = asyncoro.Event()
 
     def thread_proc(): # executed in a thread
-        n = 0
         while True:
             req = thread_queue.get()
             if req is None:  # end of requests
@@ -65,14 +52,10 @@ def compute_proc(client, coro=None):
                 break
             time.sleep(req)
             client.send(math.sqrt(req))  # send sqrt of input as result
-            n += 1
-        return n
+        thread_done.set()
 
-    # async_task blocks until thread function is finished, so execute it in
-    # another coroutine
-    def async_task(coro=None):
-        yield thread_pool.async_task(thread_proc)
-    thread_coro = asyncoro.Coro(async_task)
+    thread = threading.Thread(target=thread_proc)
+    thread.start()
 
     # receive requests from client and put them in thread_queue so thread can
     # process them
@@ -82,34 +65,13 @@ def compute_proc(client, coro=None):
         if req is None:
             break
 
-    n = yield thread_coro.finish()
-    # to illustrate async_task result is what thread_proc returned, number of
-    # inputs processed is shown; this message appears on server process
-    print('%s processed %s requests' % (coro.location, n))
+    yield thread_done.wait()
 
 
 def client_proc(computation, njobs, coro=None):
-    used_servers = {} # keep track of which servers to cleanup
-
-    # use status coroutine to initialize remote server processes
-    def status_proc(status, info, coro=None):
-        # this coroutine is executed with status (either
-        # ServerInitialized or ServerClosed) and location of server
-        # print('status: %s / %s' % (status, str(info)))
-        if status != discoro.Scheduler.ServerInitialized:
-            raise StopIteration(0)
-        # print('server %s is available' % info)
-        # run 'proc_setup' to read file in to memory
-        if (yield job_scheduler.execute_at(info, proc_setup)) != 0:
-            print('Could not setup %s' % (info))
-            raise StopIteration(-1)
-        # print('server %s is ready' % info)
-        used_servers[info] = info
-        raise StopIteration(0) # indicate server initialized with exit value 0
-
     # RemoteCoroScheduler is used to run at most one coroutine at a server
     # process This should be created before scheduling computation
-    job_scheduler = RemoteCoroScheduler(computation, status_proc)
+    job_scheduler = RemoteCoroScheduler(computation)
 
     if (yield computation.schedule()):
         raise Exception('schedule failed')
@@ -131,7 +93,8 @@ def client_proc(computation, njobs, coro=None):
                 break
             print('job %s result: %s' % (i, result))
 
-    # create remote jobs
+    # create coroutines to send requests, receive results and remote coroutine
+    # to process requests
     def create_job(i, coro=None):
         # first create reader to get results
         results_coro = asyncoro.Coro(get_results, i)
@@ -150,11 +113,6 @@ def client_proc(computation, njobs, coro=None):
 
     # create njobs jobs
     for job in [asyncoro.Coro(create_job, i) for i in range(1, njobs+1)]:
-        yield job.finish()
-
-    # cleanup servers
-    for job in [asyncoro.Coro(job_scheduler.execute_at, loc, proc_cleanup)
-                for loc in used_servers.values()]:
         yield job.finish()
 
     yield job_scheduler.finish(close=True)

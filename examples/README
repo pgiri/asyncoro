@@ -25,7 +25,8 @@ framework for distributed and parallel computing.
 
 * discomp2.py is another example of distributed computing, similar to
   discomp1.py. It shows how to relay status messages from discoro scheduler to
-  RemoteCoroScheduler and httpd concurrently.
+  RemoteCoroScheduler and httpd concurrently. Computation prograss can be
+  monitored in a web browser.
 
 * discomp3.py and discomp4.py demonstrate using AsyncThreadPool to run
   synchronous tasks (i.e., computations without 'yield' statements) in remote
@@ -38,10 +39,14 @@ framework for distributed and parallel computing.
   server processes for in-memory processing, issue computation jobs and get
   their results.
 
-* discomp7.py runs an external program, discomp7_proc.py, at remote servers. The
+* discomp7.py runs an external program (discomp7_proc.py) at remote servers. The
   program reads from standard input and writes to standard output. Asynchronous
   pipes and message passing are used to send input from client to this program
   executing on remote servers, and get the output back to client.
+
+* discomp8.py example illustrates how compute-intensive thread functions on
+  remote servers can process stream of requests sent by client and results
+  received by client, using message passing.
 
 * discoro_client1.py uses discoro (server) to distribute a computation (and its
   dependencies) and execute remote coroutines. The client and remote coroutines
