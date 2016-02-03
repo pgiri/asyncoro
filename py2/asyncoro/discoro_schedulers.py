@@ -45,7 +45,7 @@ class RemoteCoroScheduler(object):
     scheduler is not aware of those.
     """
 
-    def __init__(self, computation, proc_status=None):
+    def __init__(self, computation, proc_status=None, proc_available=None, proc_close=None):
         """'computation' should be an instance of discoro.Computation
 
         'proc_status' if not None should be a generator function that is called
@@ -54,19 +54,53 @@ class RemoteCoroScheduler(object):
         the server is ignored; i.e., jobs scheduled with 'schedule' or 'execute'
         will not use that server. 'execute_at' will use any given server,
         though.
+
+        'proc_available' if not None should be a generator function that is
+        called (as coroutine) with the location of a server process when it
+        becomes available (after all 'depends' of computation have been
+        transferred). The coroutine runs at the client; it can create remote
+        coroutine(s) at the server process, perhaps to setup, such as
+        initializing global variables, transfer additional files etc. The
+        coroutine should exit with 0 to indicate successful setup; any other
+        value is interpretted as failure and not used by scheduler.
+
+        'proc_close' if not None should be a generator function that is called
+        (as coroutine) with the status and location of server process when
+        server is about to be closed, or already closed. The coroutine runs at
+        the client; it can create remote coroutine(s) at server process to
+        cleanup, such as delete global variables, transfer files back to client
+        etc. The coroutine is called with two parameters: 'status', which is
+        either 'discoro.Scheduler.ServerInitialized' when server is about to be
+        closed (i.e., server is still available, and remote coroutines can be
+        executed), or 'discoro.Scheduler.ServerClosed' when server is already
+        closed (e.g., due to zombie_period time elapsed without communication,
+        or server was manually closed with command-line etc.), and 'location' of
+        server process.
         """
 
         if proc_status:
             if not inspect.isgeneratorfunction(proc_status):
                 asyncoro.logger.warning('Invalid proc_status ignored')
                 proc_status = None
+        if proc_available:
+            if not inspect.isgeneratorfunction(proc_available):
+                asyncoro.logger.warning('Invalid proc_available ignored')
+                proc_available = None
+        if proc_close:
+            if not inspect.isgeneratorfunction(proc_close):
+                asyncoro.logger.warning('Invalid proc_close ignored')
+                proc_close = None
+
+        self._proc_status = proc_status
+        self._proc_available = proc_available
+        self._proc_close = proc_close
+        self._setup_servers = {}
 
         self.computation = computation
         self.computation_sign = None
         self.status_coro = Coro(self._status_proc)
         if not computation.status_coro:
             computation.status_coro = self.status_coro
-        self._proc_status = proc_status
         self._rcoros = {}
         self._rcoros_done = asyncoro.Event()
         self._servers = {}
@@ -169,6 +203,15 @@ class RemoteCoroScheduler(object):
         Must be used with 'yield' as 'yield job_scheduler.finish()'.
         """
 
+        if close:
+            if self._proc_close:
+                coros = [Coro(self._proc_close, discoro.Scheduler.ServerInitialized, location)
+                         for location in self._setup_servers]
+                self._setup_servers = {}
+                for coro in coros:
+                    yield coro.finish()
+            else:
+                self._setup_servers = {}
         if self._rcoros:
             self._rcoros_done.clear()
             yield self._rcoros_done.wait()
@@ -220,7 +263,14 @@ class RemoteCoroScheduler(object):
 
             elif isinstance(msg, DiscoroStatus):
                 if msg.status == discoro.Scheduler.ServerInitialized:
-                    if self._proc_status:
+                    if self._proc_available:
+                        def setup_proc(self, msg, coro=None):
+                            if (yield Coro(self._proc_available, msg.info).finish()) == 0:
+                                self._setup_servers[msg.info] = msg.info
+                                self._servers[msg.info] = msg.info
+                                self._server_avail.set()
+                        Coro(setup_proc, self, msg)
+                    elif self._proc_status:
                         def status_proc(self, msg, coro=None):
                             if (yield Coro(self._proc_status, msg.status, msg.info).finish()) == 0:
                                 self._servers[msg.info] = msg.info
@@ -229,9 +279,14 @@ class RemoteCoroScheduler(object):
                     else:
                         self._servers[msg.info] = msg.info
                         self._server_avail.set()
+
                 elif msg.status == discoro.Scheduler.ServerClosed:
                     self._servers.pop(msg.info, None)
-                    if self._proc_status:
+                    if self._setup_servers.pop(msg.info, None) and self._proc_close:
+                        def close_proc(self, msg, coro=None):
+                            yield Coro(self._proc_close, msg.status, msg.info).finish()
+                        Coro(close_proc, self, msg)
+                    elif self._proc_status:
                         Coro(self._proc_status, msg.status, msg.info)
                 elif msg.status == discoro.Scheduler.ComputationScheduled:
                     self.computation_sign = msg.info
