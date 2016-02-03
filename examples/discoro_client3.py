@@ -1,5 +1,9 @@
-# This program uses status message notifications to submit jobs to
-# discoro processes.
+# Run 'discoronode.py' program to start processes to execute
+# computations sent by this client, along with this program.
+
+# This program is similar to 'discoro_client1.py', but instead of using
+# RemoteCoroScheduler, it uses status message notifications from discoro
+# scheduler to submit jobs at remote discoronode processes.
 
 # DiscoroStatus must be imported in global scope as below; otherwise,
 # unserializing status messages fails (if external scheduler is used)
@@ -7,57 +11,52 @@ from asyncoro.discoro import DiscoroStatus
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
 
-
-# this generator function is sent to remote server to run
-# coroutines there
+# this generator function is sent to remote server to run coroutines there
 def rcoro_proc(n, coro=None):
     yield coro.sleep(n)
     raise StopIteration(n)
 
 
-def client_proc(computation, njobs, coro=None):
-    status = {'submitted': 0, 'done': 0}
+# Instead of using RemoteCoroScheduler (which is easier), in this example status
+# messages from discoro scheduler are used to start remote coroutines and get
+# their exit status
+def status_proc(computation, njobs, coro=None):
+    npending = njobs
 
-    def submit_job(where, coro=None):
-        arg = random.uniform(5, 10)
-        rcoro = yield computation.run_at(where, rcoro_proc, arg)
-        if isinstance(rcoro, asyncoro.Coro):
-            print('%s processing %s' % (rcoro.location, arg))
-        else:
-            print('Job %s failed: %s' % (status['submitted'], str(rcoro)))
-        status['submitted'] += 1
-
-    computation.status_coro = coro
-    if (yield computation.schedule()):
-        raise Exception('Failed to schedule computation')
-    # job submitter assumes that one process can run one coroutine at a time
     while True:
         msg = yield coro.receive()
         if isinstance(msg, asyncoro.MonitorException):
-            # a process finished job
             rcoro = msg.args[0]
             if msg.args[1][0] == StopIteration:
-                print('Remote coroutine %s finished with %s' % (rcoro.location, msg.args[1][1]))
+                print('  rcoro_proc at %s finished with %s' % (rcoro.location, msg.args[1][1]))
             else:
-                asyncoro.logger.warning('Remote coroutine %s terminated with "%s"' %
-                                        (rcoro.location, str(msg.args[1])))
-            status['done'] += 1
-            # because jobs are submitted with 'yield' with coroutines,
-            # and 'submitted' is incremented after 'yield', it is
-            # likely that more than 'njobs' are submitted
-            if status['done'] >= njobs and status['done'] == status['submitted']:
+                print('  rcoro_proc at %s failed: %s / %s' %
+                      (rcoro.location, msg.args[1][0], msg.args[1][1]))
+
+            npending -= 1
+            if npending == 0:
                 break
-            if status['submitted'] < njobs:
-                # schedule another job at this process
-                asyncoro.Coro(submit_job, rcoro.location)
+            if njobs > 0: # submit another job
+                n = random.uniform(5, 10)
+                rcoro = yield computation.run_at(rcoro.location, rcoro_proc, n)
+                if isinstance(rcoro, asyncoro.Coro):
+                    print('rcoro_proc started at %s with %s' % (rcoro.location, n))
+                    njobs -= 1
         elif isinstance(msg, DiscoroStatus):
-            asyncoro.logger.debug('Node/Server status: %s, %s' % (msg.status, msg.info))
-            if msg.status == discoro.Scheduler.ServerInitialized:
-                # a new process is ready (if special initialization is
-                # required for preparing process, schedule it)
-                asyncoro.Coro(submit_job, msg.info)
-        else:
-            asyncoro.logger.debug('Ignoring status message %s' % str(msg))
+            # print('Status: %s / %s' % (msg.info, msg.status))
+            if msg.status == discoro.Scheduler.ServerInitialized and njobs > 0: # submit a job
+                n = random.uniform(5, 10)
+                rcoro = yield computation.run_at(msg.info, rcoro_proc, n)
+                if isinstance(rcoro, asyncoro.Coro):
+                    print('rcoro_proc started at %s with %s' % (rcoro.location, n))
+                    njobs -= 1
+
+def client_proc(computation, njobs, coro=None):
+    computation.status_coro = asyncoro.Coro(status_proc, computation, njobs)
+    if (yield computation.schedule()):
+        raise Exception('Failed to schedule computation')
+    # wait for jobs to be created and finished
+    yield computation.status_coro.finish()
     yield computation.close()
 
 

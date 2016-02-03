@@ -27,7 +27,7 @@ def compute(n, coro=None):
 
 def client_proc(computation, n, coro=None):
 
-    # coroutine to (concurrently) execute computations
+    # coroutine to call RemoteCoroScheduler's "execute" method
     def exec_proc(gen, *args, **kwargs):
         # execute computation; result of computation is result of
         # 'yield' which is also result of this coroutine (obtained

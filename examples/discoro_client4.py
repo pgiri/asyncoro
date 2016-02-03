@@ -13,12 +13,9 @@
 # Note that the objective is to illustrate features, so implementation
 # is not ideal. Error checking is skipped at a few places for brevity.
 
-# DiscoroStatus must be imported in global scope as below; otherwise,
-# unserializing status messages fails (if external scheduler is used)
-from asyncoro.discoro import DiscoroStatus
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
-
+from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
 # objects of C are sent by a client to remote coroutine
 class C(object):
@@ -58,8 +55,8 @@ def rcoro_proc(coro=None):
 # this generator function is used to create local coroutine (at the
 # client) to communicate with a remote coroutine
 def client_proc(job_id, rcoro, coro=None):
-    # send input file; this will be saved to where discoro process is
-    # (i.e., rcoro.location)
+    # send input file to rcoro.location; this will be saved to discoro process's
+    # working directory
     if (yield asyncoro.AsynCoro().send_file(rcoro.location, 'input%s.dat' % job_id,
                                             timeout=30)) < 0:
         print('Could not send input data to %s' % rcoro.location)
@@ -76,7 +73,7 @@ def client_proc(job_id, rcoro, coro=None):
     if result < 0:
         print('Processing %s failed' % obj.i)
         raise StopIteration(-1)
-    # rcoro uses 'send_file'; this saves the file in asyncoro's
+    # rcoro saves results file at this client, which is saved in asyncoro's
     # dest_path, not current working directory!
     output = os.path.join(asyncoro.AsynCoro().dest_path, 'output%s.dat' % obj.i)
     # if necessary, move file to os.getcwd()
@@ -85,36 +82,21 @@ def client_proc(job_id, rcoro, coro=None):
 
 
 def submit_jobs_proc(computation, njobs, coro=None):
-    computation.status_coro = coro
+    # use RemoteCoroScheduler to schedule/submit coroutines; scheduler must be
+    # created before computation is scheduled (next step below)
+    job_scheduler = RemoteCoroScheduler(computation)
+
     if (yield computation.schedule()):
         raise Exception('Failed to schedule computation')
-    submitted = 0
-    done = 0
-    while True:
-        msg = yield coro.receive()
-        if isinstance(msg, asyncoro.MonitorException):
-            # a job is done
-            rcoro = msg.args[0]
-            done += 1
-            if done >= njobs and submitted == done:
-                break
-            if submitted < njobs:
-                # submit another job
-                rcoro = yield computation.run_at(rcoro.location, rcoro_proc)
-                if isinstance(rcoro, asyncoro.Coro):
-                    asyncoro.Coro(client_proc, submitted, rcoro)
-                submitted += 1
-        elif isinstance(msg, DiscoroStatus):
-            # asyncoro.logger.debug('Node/Server status: %s, %s' % (msg.status, msg.info))
-            if msg.status == discoro.Scheduler.ServerInitialized and submitted < njobs:
-                # a new process found; submit a job
-                rcoro = yield computation.run_at(msg.info, rcoro_proc)
-                if isinstance(rcoro, asyncoro.Coro):
-                    asyncoro.Coro(client_proc, submitted, rcoro)
-                submitted += 1
-        else:
-            asyncoro.logger.debug('Ignoring status message %s' % str(msg))
-    yield computation.close()
+
+    for i in range(njobs):
+        # create remote coroutine
+        rcoro = yield job_scheduler.schedule(rcoro_proc)
+        if isinstance(rcoro, asyncoro.Coro):
+            # create local coroutine to send input file and data to rcoro
+            asyncoro.Coro(client_proc, i, rcoro)
+
+    yield job_scheduler.finish(close=True)
 
 
 if __name__ == '__main__':

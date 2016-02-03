@@ -11,6 +11,13 @@ from asyncoro.discoro import DiscoroStatus
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
 
+# This implementation uses (more unnecessarily than in other examples!) various
+# features for illustrative purposes: In other examples RemoteCoroScheduler is
+# used to easily create remote coroutines, whereas in this example, status
+# messages from discoro scheduler are used to create coroutines, as well as get
+# their exit status, asynchronous thread pools are used to create threads so
+# coroutine can wait for tasks to finish, etc. See 'discomp3.py', 'discomp8.py'
+# for simpler ways.
 
 # This function sends message to client when the setup is done and
 # then waits for (client's) message to cleanup.

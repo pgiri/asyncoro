@@ -9,67 +9,36 @@ import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
 
-# This function sends message to client when the setup is done and then waits
-# for (client's) message to cleanup.
-def proc_setup(client, coro=None):
-    global time, thread_pool # 'thread_pool' used in rcoro_proc
-    import time
-    # in this case at most one computation (rcoro_proc) runs, so pool
-    # is created with 1 thread
-    thread_pool = asyncoro.AsyncThreadPool(1)
-    if (yield client.deliver('ready', timeout=10)) == 1:
-        # data will be kept in memory until 'cleanup' is received
-        msg = yield coro.receive()
-        # assert msg == 'cleanup'
-    thread_pool.terminate()
-    del time, thread_pool
-
-
 # discoronode expects user computations to be generator functions (to create
 # coroutines) that will 'yield' within pulse_interval (default 10
 # seconds). Otherwise, the daemon coroutine that sends pulse messages to
 # scheduler will not get a chance to do so, causing scheduler to assume the node
 # may be unreachable and abandon the computation. In this example, user
-# computations are executed in threads, using AsyncThreadPool. The computation
-# is simulated with 'time.sleep'. (Note that 'time.sleep' shouldn't be used in
-# coroutines, as this will block entire asyncoro framework.) The thread function
-# can send messages, but can't receive messages.
+# computations are executed in threads. The computation is simulated with
+# 'time.sleep'. (Note that 'time.sleep' shouldn't be used in coroutines, as this
+# will block entire asyncoro framework.) The thread function can send messages,
+# but can't receive messages.
 
-# This generator function is sent to remote discoro process to run coroutines
-# there. Note that compute_proc and proc_setup run in the same process (and
-# share same address space), so global variables are shared (updates in one
-# coroutine are visible in other coroutnies in the same process).
 def compute_proc(n, client, coro=None):
-    # execute 'time.sleep' with thread_pool initialized in proc_setup
-    def thread_proc():
+    import threading
+    # 'thread_proc' is executed with thread, so it is a regular Python function,
+    # where 'time.sleep' is used to simulate computation; note that asynchronous
+    # methods in asyncoro can't be used in thread function.
+    def thread_proc(thread_done):
         time.sleep(n)
         client.send((coro.location, time.asctime()))
+        thread_done.set()
         return
 
-    yield thread_pool.async_task(thread_proc)
+    # thread process sets thread_done asyncoro event that the compute_proc waits
+    # for (setting the event and sending messages are regular functions, so they
+    # can be used in thread)
+    thread_done = asyncoro.Event()
+    thread = threading.Thread(target=thread_proc, args=(thread_done,))
+    thread.start()
+    yield thread_done.wait()
 
 def client_proc(computation, njobs, coro=None):
-    proc_setup_coros = set() # processes used are kept track to cleanup when done
-
-    # coroutine receives status messages from rcoro_scheduler. If the status is
-    # ServerInitialized, send the file to server and wait for initialization
-    def status_proc(status, info, coro=None):
-        if status != discoro.Scheduler.ServerInitialized:
-            raise StopIteration(0)
-        rcoro = yield rcoro_scheduler.submit_at(info, proc_setup, coro)
-        if isinstance(rcoro, asyncoro.Coro):
-            msg = yield coro.receive()
-            if msg == 'ready':
-                proc_setup_coros.add(rcoro)
-                raise StopIteration(0) # success indicated with 0
-            else:
-                raise StopIteration(-1) # scheduler won't use this server
-        else:
-            print('Setup of %s failed' % info)
-            raise StopIteration(-1) # scheduler won't use this server
-
-    # use RemoteCoroScheduler to start coroutines at servers
-    rcoro_scheduler = RemoteCoroScheduler(computation, status_proc)
     if (yield computation.schedule()):
         raise Exception('Failed to schedule computation')
 
@@ -91,9 +60,6 @@ def client_proc(computation, njobs, coro=None):
 
     # wait for results to be received
     yield results_coro.finish()
-    # cleanup processes
-    for proc_setup_coro in proc_setup_coros:
-        yield proc_setup_coro.deliver('cleanup', timeout=5)
     yield rcoro_scheduler.finish(close=True)
 
 
@@ -104,8 +70,11 @@ if __name__ == '__main__':
     # start it (private scheduler):
     discoro.Scheduler()
     computation = discoro.Computation([compute_proc])
+    # run 10 jobs
+    client = asyncoro.Coro(client_proc, computation, 10)
+    # use RemoteCoroScheduler to start coroutines at servers
+    rcoro_scheduler = RemoteCoroScheduler(computation)
     # call '.value()' of coroutine created here, otherwise main thread
     # may finish (causing interpreter to start cleanup) before asyncoro
     # scheduler gets a chance to start
-    # run 10 jobs
-    asyncoro.Coro(client_proc, computation, 10).value()
+    client.value()

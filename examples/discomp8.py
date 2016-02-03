@@ -93,8 +93,8 @@ def client_proc(computation, njobs, coro=None):
                 break
             print('job %s result: %s' % (i, result))
 
-    # create coroutines to send requests, receive results and remote coroutine
-    # to process requests
+    # create two local coroutines, one to send requests and one to receive results,
+    # and a remote coroutine to process requests
     def create_job(i, coro=None):
         # first create reader to get results
         results_coro = asyncoro.Coro(get_results, i)

@@ -1,5 +1,8 @@
-# This program uses status message notifications to submit jobs to
-# discoro processes.
+# Run 'discoronode.py' program to start processes to execute
+# computations sent by this client, along with this program.
+
+# This program sends 'rcoro_proc' to remote server processes to execute
+# coroutines on them for distributed and parallel execution.
 
 import asyncoro.disasyncoro as asyncoro
 import asyncoro.discoro as discoro

@@ -1,11 +1,9 @@
 # This example uses status messages and message passing to run remote
 # coroutines to process streaming data in real time.
 
-# DiscoroStatus must be imported in global scope as below; otherwise,
-# unserializing status messages fails (if external scheduler is used)
-from asyncoro.discoro import DiscoroStatus
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
+from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
 
 # This generator function is sent to remote discoro to analyze data
@@ -24,9 +22,9 @@ def rcoro_avg_proc(threshold, trend_coro, window_size, coro=None):
         cumsum += (n - data[0])
         avg = (cumsum / window_size)
         if avg > threshold:
-            trend_coro.send((i, 'high', avg))
+            trend_coro.send((i, 'high', float(avg)))
         elif avg < -threshold:
-            trend_coro.send((i, 'low', avg))
+            trend_coro.send((i, 'low', float(avg)))
         data = np.roll(data, -1)
         data[-1] = n
     raise StopIteration(0)
@@ -48,7 +46,7 @@ def rcoro_save_proc(coro=None):
 
 
 # This process runs locally. It sends (random) data to remote coroutines.
-def client_proc(count, rcoro_avg, rcoro_save, coro=None):
+def data_proc(count, rcoro_avg, rcoro_save, coro=None):
     import random
     # if data is sent frequently (say, many times a second), enable
     # streaming data to remote peer; this is more efficient as
@@ -85,47 +83,28 @@ def trend_proc(coro=None):
         print('trend signal at % 4d: %s / %.2f' % (trend[0], trend[1], trend[2]))
 
 
-# This process runs locally. It processes status messages to start
-# coroutines, watches for (remote) coroutine finish status so
-# computation can be terminated.
-def status_proc(computation, coro=None):
-    computation.status_coro = coro
-    if (yield computation.schedule()):
-        raise Exception('Failed to schedule computation')
-    rcoro_avg = None
-    rcoro_save = None
-    trend_coro = asyncoro.Coro(trend_proc)
-    while True:
-        msg = yield coro.receive()
-        if isinstance(msg, asyncoro.MonitorException):
-            # a process finished job
-            rcoro = msg.args[0]
-            if msg.args[1][0] == StopIteration:
-                if str(rcoro) == str(rcoro_avg):
-                    rcoro_avg = None
-                elif str(rcoro) == str(rcoro_save):
-                    rcoro_save = None
-                if rcoro_avg is None and rcoro_save is None:
-                    break
-            else:
-                asyncoro.logger.warning('%s terminated with "%s"' %
-                                        (rcoro.location, str(msg.args[1])))
-        elif isinstance(msg, DiscoroStatus):
-            asyncoro.logger.debug('Node/Server status: %s, %s' % (msg.status, msg.info))
-            if msg.status == discoro.Scheduler.ServerInitialized:
-                # a new process is available
-                if rcoro_avg is None:
-                    # run average process with threshold 0.4, window size 10
-                    rcoro_avg = yield computation.run_at(msg.info, rcoro_avg_proc,
-                                                         0.4, trend_coro, 10)
-                elif rcoro_save is None:
-                    rcoro_save = yield computation.run_at(msg.info, rcoro_save_proc)
-                    # run client process for 1000 (random) data items
-                    asyncoro.Coro(client_proc, 1000, rcoro_avg, rcoro_save)
-        else:
-            asyncoro.logger.debug('Ignoring status message %s' % str(msg))
+# This process runs locally. It creates two remote coroutines at two discoronode
+# server processes, two local coroutines, one to receive trend signal from one
+# of the remote coroutines, and another to send data to two remote coroutines
+def client_proc(computation, coro=None):
+    # use RemoteCoroScheduler to schedule/submit coroutines; scheduler must be
+    # created before computation is scheduled (next step below)
+    job_scheduler = RemoteCoroScheduler(computation)
 
-    yield computation.close()
+    # distribute computation to server
+    if (yield computation.schedule()):
+        raise Exception('schedule failed')
+
+    trend_coro = asyncoro.Coro(trend_proc)
+
+    rcoro_avg = yield job_scheduler.schedule(rcoro_avg_proc, 0.4, trend_coro, 10)
+    assert isinstance(rcoro_avg, asyncoro.Coro)
+    rcoro_save = yield job_scheduler.schedule(rcoro_save_proc)
+    assert isinstance(rcoro_save, asyncoro.Coro)
+
+    asyncoro.Coro(data_proc, 1000, rcoro_avg, rcoro_save)
+
+    yield job_scheduler.finish(close=True)
 
 
 if __name__ == '__main__':
@@ -139,4 +118,4 @@ if __name__ == '__main__':
     # call '.value()' of coroutine created here, otherwise main thread
     # may finish (causing interpreter to start cleanup) before asyncoro
     # scheduler gets a chance to start
-    asyncoro.Coro(status_proc, computation).value()
+    asyncoro.Coro(client_proc, computation).value()
