@@ -665,13 +665,16 @@ class AsynCoro(asyncoro.AsynCoro):
         try:
             stat_buf = os.stat(file)
         except:
+            logger.warning('send_file: File "%s" is not valid' % file)
             raise StopIteration(-1)
         if not ((stat.S_IMODE(stat_buf.st_mode) & stat.S_IREAD) and stat.S_ISREG(stat_buf.st_mode)):
+            logger.warning('send_file: File "%s" is not valid' % file)
             raise StopIteration(-1)
-        if isinstance(dir, str) and dir:
+        if dir and isinstance(dir, str):
             dir = dir.strip()
             # reject absolute path for dir
             if os.path.join(os.sep, dir) == dir:
+                logger.warning('send_file: Absolute path for dir "%s" is not allowed' % dir)
                 raise StopIteration(-1)
         peer = _Peer.peers.get((location.addr, location.port), None)
         if peer is None:
@@ -711,6 +714,7 @@ class AsynCoro(asyncoro.AsynCoro):
                 logger.warning('peer "%s" not reachable' % location)
                 # TODO: remove peer?
         except:
+            logger.warning('send_file: Could not send "%s" to %s', file, location)
             reply = -1
         finally:
             sock.close()
