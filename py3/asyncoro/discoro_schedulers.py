@@ -52,8 +52,7 @@ class RemoteCoroScheduler(object):
         (as coroutine) with the status and info, as received by status_coro. If
         status is ServerInitialized and this function returns non-zero value,
         the server is ignored; i.e., jobs scheduled with 'schedule' or 'execute'
-        will not use that server. 'execute_at' will use any given server,
-        though.
+        will not use that server.
 
         'proc_available' if not None should be a generator function that is
         called (as coroutine) with the location of a server process when it
@@ -94,7 +93,7 @@ class RemoteCoroScheduler(object):
         self._proc_status = proc_status
         self._proc_available = proc_available
         self._proc_close = proc_close
-        self._setup_servers = {}
+        self._close_servers = {}
 
         self.computation = computation
         self.computation_sign = None
@@ -206,12 +205,12 @@ class RemoteCoroScheduler(object):
         if close:
             if self._proc_close:
                 coros = [Coro(self._proc_close, discoro.Scheduler.ServerInitialized, location)
-                         for location in self._setup_servers]
-                self._setup_servers = {}
+                         for location in self._close_servers]
+                self._close_servers = {}
                 for coro in coros:
                     yield coro.finish()
             else:
-                self._setup_servers = {}
+                self._close_servers = {}
         if self._rcoros:
             self._rcoros_done.clear()
             yield self._rcoros_done.wait()
@@ -266,7 +265,7 @@ class RemoteCoroScheduler(object):
                     if self._proc_available:
                         def setup_proc(self, msg, coro=None):
                             if (yield Coro(self._proc_available, msg.info).finish()) == 0:
-                                self._setup_servers[msg.info] = msg.info
+                                self._close_servers[msg.info] = msg.info
                                 self._servers[msg.info] = msg.info
                                 self._server_avail.set()
                         Coro(setup_proc, self, msg)
@@ -282,10 +281,8 @@ class RemoteCoroScheduler(object):
 
                 elif msg.status == discoro.Scheduler.ServerClosed:
                     self._servers.pop(msg.info, None)
-                    if self._setup_servers.pop(msg.info, None) and self._proc_close:
-                        def close_proc(self, msg, coro=None):
-                            yield Coro(self._proc_close, msg.status, msg.info).finish()
-                        Coro(close_proc, self, msg)
+                    if self._close_servers.pop(msg.info, None) and self._proc_close:
+                        Coro(self._proc_close, msg.status, msg.info)
                     elif self._proc_status:
                         Coro(self._proc_status, msg.status, msg.info)
                 elif msg.status == discoro.Scheduler.ComputationScheduled:
