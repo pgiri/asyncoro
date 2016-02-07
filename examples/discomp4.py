@@ -63,7 +63,7 @@ def rcoro_proc(client, program, coro=None):
     raise StopIteration(pipe.poll())
 
 def client_proc(computation, n, coro=None):
-    # use RemoteCoroScheduler to run one discomp7_proc.py at a server
+    # use RemoteCoroScheduler to run one discomp4_proc.py at a server
     job_scheduler = asyncoro.discoro_schedulers.RemoteCoroScheduler(computation)
     if (yield computation.schedule()):
         raise Exception('schedule failed')
@@ -90,9 +90,9 @@ def client_proc(computation, n, coro=None):
         # create reader and send to rcoro so it can send messages to reader
         client_reader = asyncoro.Coro(get_output, i)
         # schedule rcoro on (available) remote server
-        rcoro = yield job_scheduler.schedule(rcoro_proc, client_reader, 'discomp7_proc.py')
+        rcoro = yield job_scheduler.schedule(rcoro_proc, client_reader, 'discomp4_proc.py')
         if isinstance(rcoro, asyncoro.Coro):
-            print('  job %s processed by %s' % (i, rcoro))
+            print('  job %s processed by %s' % (i, rcoro.location))
             # sender sends input data to rcoro
             asyncoro.Coro(send_input, rcoro)
             # wait for all data to be received
@@ -110,12 +110,12 @@ def client_proc(computation, n, coro=None):
 
 if __name__ == '__main__':
     asyncoro.logger.setLevel(logging.DEBUG)
-    # run n (defailt 5) instances of discomp7_proc.py
+    # run n (defailt 5) instances of discomp4_proc.py
     n = int(sys.argv[1]) if len(sys.argv) == 2 else 5
     # if scheduler is not already running (on a node as a program),
     # start private scheduler:
     discoro.Scheduler()
-    # send rcoro_proc and discomp7_proc.py
+    # send rcoro_proc and discomp4_proc.py
     computation = discoro.Computation([rcoro_proc, os.path.join(os.path.dirname(sys.argv[0]),
-                                                                'discomp7_proc.py')])
+                                                                'discomp4_proc.py')])
     asyncoro.Coro(client_proc, computation, n).value()
