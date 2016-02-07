@@ -56,6 +56,9 @@ def client_proc(computation, njobs, coro=None):
     for i in range(njobs):
         cobj = C(i)
         cobj.n = random.uniform(5, 10)
+        # as noted in 'discoro_client1.py', 'schedule' method is used to run
+        # jobs sequentially; use 'submit' to run multiple jobs on one server
+        # concurrently
         rcoro = yield rcoro_scheduler.schedule(compute, cobj, results_coro)
         if not isinstance(rcoro, asyncoro.Coro):
             print('failed to create rcoro %s: %s' % (i, rcoro))

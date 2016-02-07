@@ -1,129 +1,121 @@
-# This example uses status messages and message passing to run 'setup'
-# coroutine at remote process to prepare it for processing jobs.
+# Run 'discoronode.py' program to start processes to execute
+# computations sent by this client, along with this program.
 
-# This example is a variation of discomp3.py; it shows computations
-# executed with AsyncThreadPool can send messages (in this case, to
-# the client).
+# This example runs a program (discomp7_proc.py) on a remote
+# server. The program reads from standard input and writes to standard
+# output. Subprocess and asynchronous pipes are used to write / read
+# data from the program, and message passing is used to get data from
+# client (which is sent to the program) and to send output from the
+# program back to the client.
 
-# DiscoroStatus must be imported in global scope as below; otherwise,
-# unserializing status messages fails (if external scheduler is used)
+import logging, random, sys, os
 from asyncoro.discoro import DiscoroStatus
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
+import asyncoro.discoro_schedulers
 
-# This implementation uses (more unnecessarily than in other examples!) various
-# features for illustrative purposes: In other examples RemoteCoroScheduler is
-# used to easily create remote coroutines, whereas in this example, status
-# messages from discoro scheduler are used to create coroutines, as well as get
-# their exit status, asynchronous thread pools are used to create threads so
-# coroutine can wait for tasks to finish, etc. See 'discomp3.py', 'discomp8.py'
-# for simpler ways.
+# rcoro_proc is sent to remote server to execute discomp7_proc.py
+# program. It uses message passing to get data from client that is
+# written to pipe and read output from program that is sent back to
+# client.
+def rcoro_proc(client, program, coro=None):
+    import sys
+    import os
+    import subprocess
+    import asyncoro.asyncfile
 
-# This function sends message to client when the setup is done and
-# then waits for (client's) message to cleanup.
-def proc_setup(client, coro=None):
-    global time, thread_pool # 'time' and 'thread_pool' used in compute_proc
-    import time
-    # in this case at most one computation (compute_proc) runs, so pool
-    # is created with 1 thread
-    thread_pool = asyncoro.AsyncThreadPool(1)
-    if (yield client.deliver('ready', timeout=10)) == 1:
-        # data will be kept in memory until 'cleanup' is received
-        msg = yield coro.receive()
-        # assert msg == 'cleanup'
-    thread_pool.terminate()
-    del time, thread_pool
+    if program.endswith('.py'):
+        program = [sys.executable, program]
+    # start program as a subprocess (to read from and write to pipe)
+    # create pipe with asyncfile under Windows
+    if os.name == 'nt':
+        pipe = asyncoro.asyncfile.Popen(program, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    else:
+        pipe = subprocess.Popen(program, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    # convert to asynchronous pipe
+    pipe = asyncoro.asyncfile.AsyncPipe(pipe)
 
-
-# discoronode expects user computations to be generator functions (to
-# create coroutines) that will 'yield' within pulse_interval (default
-# 10 seconds). Otherwise, the daemon coroutine that sends pulse
-# messages to scheduler will not get a chance to do so, causing
-# scheduler to assume the node may be unreachable and abandon the
-# computation. In this example, user computations are executed in
-# threads, using AsyncThreadPool. The computation is simulated with
-# 'time.sleep'. (Note that 'time.sleep' shouldn't be used in
-# coroutines, as this will block entire asyncoro framework.)
-
-# This generator function is sent to remote discoro process to run
-# coroutines there. Note that compute_proc and proc_setup run in the
-# same process (and share same address space), so global variables are
-# shared (updates in one coroutine are visible in other coroutnies in
-# the same process).
-def compute_proc(n, coro=None):
-    def thread_proc(): # executed in a thread
-        time.sleep(n)
-        return (coro.location, n)
-
-    yield thread_pool.async_task(thread_proc)
-    # return value from thread_proc is sent as result with MonitorException
-
-def client_proc(computation, njobs, coro=None):
-    proc_setup_coros = set() # processes used are kept track to cleanup when done
-    status = {'submitted': 0, 'done': 0}
-
-    # submit job at given location
-    def submit_job(where, coro=None):
-        if status['submitted'] < njobs:
-            rcoro = yield computation.run_at(where, compute_proc, random.uniform(5, 10))
-            if isinstance(rcoro, asyncoro.Coro):
-                status['submitted'] += 1
-
-    # client coroutine to setup a remote process (with proc_setup coroutine)
-    def init_proc(where, coro=None):
-        rcoro = yield computation.run_at(where, proc_setup, coro)
-        if isinstance(rcoro, asyncoro.Coro):
-            # wait till coroutine has read data in to memory
-            msg = yield coro.receive()
-            if msg == 'ready':
-                proc_setup_coros.add(rcoro) # this will be cleaned up at the end
-                asyncoro.Coro(submit_job, rcoro.location)
-        else:
-            print('Setup of %s failed' % where)
-
-    computation.status_coro = coro
-    if (yield computation.schedule()):
-        raise Exception('Failed to schedule computation')
-
-    while True:
-        msg = yield coro.receive()
-        if isinstance(msg, asyncoro.MonitorException):
-            # a process finished job
-            rcoro = msg.args[0]
-            if msg.args[1][0] == StopIteration and len(msg.args[1][1]) == 2:
-                print('result: %s' % str(msg.args[1][1]))
-            else:
-                print('%s failed: %s' % (rcoro.location, str(msg.args[1])))
-            status['done'] += 1
-            if status['done'] == njobs:
+    # reader reads (output) from pipe and sends to client as messages
+    def reader_proc(coro=None):
+        while True:
+            line = yield pipe.readline()
+            if not line:
                 break
-            if status['submitted'] < njobs:
-                # schedule another job at this process
-                asyncoro.Coro(submit_job, rcoro.location)
-        elif isinstance(msg, DiscoroStatus):
-            # asyncoro.logger.debug('Node/Server status: %s, %s' % (msg.status, msg.info))
-            if msg.status == discoro.Scheduler.ServerInitialized and status['submitted'] < njobs:
-                # a new process is available; initialize it
-                asyncoro.Coro(init_proc, msg.info)
-        else:
-            asyncoro.logger.debug('Ignoring status message %s' % str(msg))
+            # send output to client
+            client.send(line)
+        pipe.stdout.close()
+        if os.name == 'nt':
+            pipe.close()
+        client.send(None)
 
-    # cleanup processes
-    for rcoro in proc_setup_coros:
-        if (yield rcoro.deliver('cleanup', timeout=5)) != 1:
-            print('cleanup failed for %s' % rcoro)
-    yield computation.close()
+    reader = asyncoro.Coro(reader_proc)
+
+    # writer gets messages from client and writes them (input) to pipe
+    while True:
+        data = yield coro.receive()
+        if not data:
+            break
+        # write data as lines to program
+        yield pipe.write(data + '\n'.encode(), full=True)
+    pipe.stdin.close()
+    # wait for all data to be read (subprocess to end)
+    yield reader.finish()
+    raise StopIteration(pipe.poll())
+
+def client_proc(computation, n, coro=None):
+    # use RemoteCoroScheduler to run one discomp7_proc.py at a server
+    job_scheduler = asyncoro.discoro_schedulers.RemoteCoroScheduler(computation)
+    if (yield computation.schedule()):
+        raise Exception('schedule failed')
+
+    # send 10 random numbers to remote process (rcoro_proc)
+    def send_input(rcoro, coro=None):
+        for i in range(10):
+            # encode strings so works with both Python 2.7 and 3
+            rcoro.send(('%.2f' % random.uniform(0, 5)).encode())
+            # assume delay in input availability
+            yield coro.sleep(random.uniform(0, 2))
+        # end of input is indicated with None
+        rcoro.send(None)
+
+    # read output (messages sent by 'reader_proc' on remote process)
+    def get_output(i, coro=None):
+        while True:
+            line = yield coro.receive()
+            if not line: # end of output
+                break
+            print('job %s output: %s' % (i, line.strip().decode()))
+
+    def create_job(i, coro=None):
+        # create reader and send to rcoro so it can send messages to reader
+        client_reader = asyncoro.Coro(get_output, i)
+        # schedule rcoro on (available) remote server
+        rcoro = yield job_scheduler.schedule(rcoro_proc, client_reader, 'discomp7_proc.py')
+        if isinstance(rcoro, asyncoro.Coro):
+            print('  job %s processed by %s' % (i, rcoro))
+            # sender sends input data to rcoro
+            asyncoro.Coro(send_input, rcoro)
+            # wait for all data to be received
+            yield client_reader.finish()
+            print('  job %s done' % i)
+        else:  # failed to schedule
+            client_reader.terminate()
+
+    # create n jobs
+    for job in [asyncoro.Coro(create_job, i) for i in range(1, n+1)]:
+        yield job.finish()
+
+    yield job_scheduler.finish(close=True)
 
 
 if __name__ == '__main__':
-    import logging, random, sys
     asyncoro.logger.setLevel(logging.DEBUG)
+    # run n (defailt 5) instances of discomp7_proc.py
+    n = int(sys.argv[1]) if len(sys.argv) == 2 else 5
     # if scheduler is not already running (on a node as a program),
-    # start it (private scheduler):
+    # start private scheduler:
     discoro.Scheduler()
-    computation = discoro.Computation([compute_proc])
-    # call '.value()' of coroutine created here, otherwise main thread
-    # may finish (causing interpreter to start cleanup) before asyncoro
-    # scheduler gets a chance to start
-    # run 10 jobs
-    asyncoro.Coro(client_proc, computation, 10).value()
+    # send rcoro_proc and discomp7_proc.py
+    computation = discoro.Computation([rcoro_proc, os.path.join(os.path.dirname(sys.argv[0]),
+                                                                'discomp7_proc.py')])
+    asyncoro.Coro(client_proc, computation, n).value()
