@@ -63,6 +63,7 @@ def proc_close(status, location, coro=None):
         global hashlib, data
         del hashlib, data
         yield 0  # generator functions should have at least one 'yield'
+
     if status == discoro.Scheduler.ServerInitialized:
         yield job_scheduler.execute_at(location, cleanup_server)
 

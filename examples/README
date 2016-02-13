@@ -76,6 +76,10 @@ framework for distributed and parallel computing.
   by reading data in files in to global variables (memory) for processing that
   data in comptations efficiently (i.e., in-memory processing).
 
+* discoro_ssh_ec2.py is same as discoro_client8.py, but the setup is for using
+  ssh port forwarding to work with Amazon EC2 cloud computing; i.e., the client
+  runs locally and discoronode runs on remote Amazon EC2 cloud infrastructure.
+
 * hotswap.py and hotswap_funcs.py illustrate how a running coroutine function
   can be swapped with a new function. The currently running function
   checks/validates the function being replaced, any unprocessed messages in the
