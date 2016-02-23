@@ -17,7 +17,7 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "3.6.9"
+__version__ = "3.6.11"
 
 __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
@@ -2262,7 +2262,7 @@ class Coro(object):
         self._monitors = set()
         self._swap_generator = None
         self._hot_swappable = False
-        if Coro._asyncoro is None:
+        if not Coro._asyncoro:
             Coro._asyncoro = AsynCoro.instance()
         self._location = Coro._asyncoro._location
         Coro._asyncoro._add(self)
@@ -2292,30 +2292,21 @@ class Coro(object):
         be used to exchange messages, monitor etc. (those methods
         explicitly marked as callable on remote coroutines).
         """
-        if Coro._asyncoro is None:
+        if not Coro._asyncoro:
             Coro._asyncoro = AsynCoro.instance()
-        if location is None or location == Coro._asyncoro._location:
+        if not location or location == Coro._asyncoro._location:
             rcoro = Coro._asyncoro._rcoros.get(name, None)
-            if rcoro is not None or location == Coro._asyncoro._location:
+            if rcoro or location == Coro._asyncoro._location:
                 raise StopIteration(rcoro)
-        if location is None:
-            req = _NetRequest('locate_coro', kwargs={'name': name},
-                              src=Coro._asyncoro._location, timeout=timeout)
-            req.id = id(req)
-            Coro._asyncoro._requests[req.id] = req
-            req.event = Event()
-            for (addr, port), peer in list(_Peer.peers.items()):
-                if req.event.is_set():
-                    break
-                yield Coro._asyncoro._async_reply(req, peer, dst=Location(addr, port))
-            else:
-                if (yield req.event.wait(timeout)) is False:
-                    Coro._asyncoro._requests.pop(req.id, None)
-                    req.reply = None
-            rcoro = req.reply
-        else:
-            req = _NetRequest('locate_coro', kwargs={'name': name}, dst=location, timeout=timeout)
-            rcoro = yield Coro._asyncoro._sync_reply(req)
+        req = _NetRequest('locate_coro', kwargs={'name': name}, dst=location, timeout=timeout)
+        req_id = id(req)
+        req.event = Event()
+        Coro._asyncoro._pending_reqs[req_id] = req
+        _Peer.send_req_to(req, location)
+        if (yield req.event.wait(timeout)) is False:
+            req.reply = None
+        Coro._asyncoro._pending_reqs.pop(req_id, None)
+        rcoro = req.reply
         raise StopIteration(rcoro)
 
     def register(self, name=None):
@@ -2669,7 +2660,7 @@ class Channel(object):
         to the message.
         """
 
-        if Channel._asyncoro is None:
+        if not Channel._asyncoro:
             Channel._asyncoro = AsynCoro.instance()
         self._name = name
         self._location = Channel._asyncoro._location
@@ -2715,26 +2706,21 @@ class Channel(object):
         Returns Channel instance to registered channel at remote peers
         so it can be used to send/deliver messages..
         """
-        if Channel._asyncoro is None:
+        if not Channel._asyncoro:
             Channel._asyncoro = AsynCoro.instance()
-        if location is None:
-            req = _NetRequest('locate_channel', kwargs={'name': name},
-                              src=Channel._asyncoro._location, timeout=None)
-            req.event = Event()
-            req.id = id(req)
-            Channel._asyncoro._requests[req.id] = req
-            for (addr, port), peer in list(_Peer.peers.items()):
-                if req.event.is_set():
-                    break
-                yield Channel._asyncoro._async_reply(req, peer, dst=Location(addr, port))
-            else:
-                if (yield req.event.wait(timeout)) is False:
-                    Channel._asyncoro._requests.pop(req.id, None)
-                    req.reply = None
-            rchannel = req.reply
-        else:
-            req = _NetRequest('locate_channel', kwargs={'name': name}, dst=location, timeout=timeout)
-            rchannel = yield Channel._asyncoro._sync_reply(req)
+        if not location or location == Channel._asyncoro._location:
+            rchannel = Channel._asyncoro._channels.get(name, None)
+            if rchannel or location == Channel._asyncoro._location:
+                raise StopIteration(rchannel)
+        req = _NetRequest('locate_channel', kwargs={'name': name}, dst=location, timeout=timeout)
+        req.event = Event()
+        req_id = id(req)
+        Channel._asyncoro._pending_reqs[req_id] = req
+        _Peer.send_req_to(req, location)
+        if (yield req.event.wait(timeout)) is False:
+            req.reply = None
+        Channel._asyncoro._pending_reqs.pop(req_id, None)
+        rchannel = req.reply
         raise StopIteration(rchannel)
 
     def register(self):
@@ -3595,18 +3581,12 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 self._lock.release()
 
             self._complete.wait()
-
             if self._location:
-                def _close(self, peer, coro=None):
-                    req = _NetRequest('peer_closed', kwargs={'location': self._location},
-                                      dst=peer.location, timeout=2)
-                    yield self._sync_reply(req)
-                for peer in list(_Peer.peers.values()):
-                    Coro(_close, self, peer)
+                _Peer.quit(timeout=2)
                 self._complete.wait()
+
             self._quit = True
             self._notifier.interrupt()
-            self._complete.wait()
 
     def finish(self):
         """Wait until all non-daemon coroutines finish and then

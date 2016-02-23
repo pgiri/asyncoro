@@ -438,14 +438,11 @@ def _discoro_process(_discoro_config, _discoro_name, _discoro_server_id,
             _discoro_coro.send({'req': 'status', 'auth': _discoro_auth})
         elif req == 'quit':
             _discoro_coro.send({'req': 'quit', 'auth': _discoro_auth})
-            break
         elif req == 'close':
             _discoro_coro.send({'req': 'close', 'auth': _discoro_auth})
         elif req == 'terminate':
             _discoro_coro.send({'req': 'quit', 'auth': _discoro_auth})
-            time.sleep(1)
             _discoro_coro.send({'req': 'terminate', 'auth': _discoro_auth})
-            break
         elif isinstance(req, str):
             if req == _discoro_auth:
                 break
