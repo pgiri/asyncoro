@@ -30,3 +30,4 @@ if __name__ == '__main__':
     server_coro = asyncoro.Coro(server_proc, n, sock)
     for i in range(n):
         asyncoro.Coro(client_proc, host, port)
+    server_coro.value()

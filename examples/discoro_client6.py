@@ -1,5 +1,7 @@
-# This example uses status messages and message passing to run remote
-# coroutines to process streaming data in real time.
+# This example uses status messages and message passing to run remote coroutines
+# to process streaming data for live/real-time analysis. This example uses numpy
+# module (although not necessary, and circular buffer can be implemented with
+# 'deque' instead).
 
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro

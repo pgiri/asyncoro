@@ -16,5 +16,6 @@ def client_proc(n, coro=None):
 msg_id = 0
 asyncoro.logger.setLevel(logging.DEBUG)
 scheduler = asyncoro.AsynCoro(udp_port=0)
-for i in range(1):
+# create 10 clients; each client sends 3 messages
+for i in range(10):
     asyncoro.Coro(client_proc, i)

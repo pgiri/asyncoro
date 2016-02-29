@@ -1,5 +1,14 @@
-# Run 'discoronode.py' program to start processes to execute
-# computations sent by this client, along with this program.
+# Run 'discoronode.py' program on Amazon EC2 cloud computing
+# and run this program on local computer.
+
+# in this example, ssh is used for port forwarding
+# make sure EC2 instance allows inbound TCP port 51347 (and any additional ports,
+# depending on how many CPUs are used by discoronode)
+# assume '54.204.242.185' is external IP address of EC2 instance;
+# login to that node with the PEM key:
+# 'ssh -i my-key.pem 4567:127.0.0.1:4567 54.204.242.185'
+# run discoronode on EC2 at port (starting with) 51347 with:
+# 'discoronode.py -d --ext_ip_addr 54.204.242.185 --tcp_ports 51347'
 
 # Distributed computing example where this client sends computation to
 # remote discoro process to run as remote coroutines. At any time at
@@ -62,14 +71,6 @@ def client_proc(computation, n, coro=None):
 if __name__ == '__main__':
     import sys
     asyncoro.logger.setLevel(logging.DEBUG)
-    # in this example, ssh is used for port forwarding
-    # make sure EC2 instance allows inbound TCP port 51347 (and any additional ports,
-    # depending on how many CPUs are used by discoronode)
-    # assume '54.204.242.185' is external IP address of EC2 instance;
-    # login to that node with:
-    # ssh -i my-key.pem 4567:127.0.0.1:4567 54.204.242.185
-    # run discoronode on EC2 at port (starting with) 51347 with:
-    # 'discoronode.py -d --ext_ip_addr 54.204.242.185 --tcp_ports 51347'
     asyncoro.AsynCoro(node='127.0.0.1', tcp_port=4567)
     n = 10 if len(sys.argv) == 1 else int(sys.argv[1])
     # if scheduler is not already running (on a node as a program),

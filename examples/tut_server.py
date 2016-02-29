@@ -9,10 +9,9 @@ import asyncoro.disasyncoro as asyncoro
 def server_proc(coro=None):
     coro.set_daemon()
     coro.register('server_coro')
-    for x in range(10):
+    while True:
         msg = yield coro.receive()
         print('processing %s' % (msg))
-    coro.unregister('server_coro')
 
 asyncoro.logger.setLevel(logging.DEBUG)
 scheduler = asyncoro.AsynCoro(udp_port=0)

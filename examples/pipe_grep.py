@@ -14,7 +14,6 @@ def writer(apipe, inp, coro=None):
     apipe.stdin.close()
 
 def line_reader(apipe, coro=None):
-    nlines = 0
     while True:
         try:
             line = yield apipe.readline()
@@ -25,8 +24,6 @@ def line_reader(apipe, coro=None):
         if not line:
             break
         print('%s' % line),
-        nlines += 1
-    print('lines: %s' % nlines)
     raise StopIteration(nlines)
 
 # asyncoro.logger.setLevel(logging.DEBUG)
@@ -46,7 +43,7 @@ else:
     p1 = subprocess.Popen(['grep', '-i', 'error'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     p2 = subprocess.Popen(['wc'], stdin=p1.stdout, stdout=subprocess.PIPE)
     async_pipe = asyncoro.asyncfile.AsyncPipe(p1, p2)
-    asyncoro.Coro(writer, async_pipe, '/var/log/kern.log')
+    asyncoro.Coro(writer, async_pipe, '/var/log/syslog')
     asyncoro.Coro(line_reader, async_pipe)
 
     # alternate example:

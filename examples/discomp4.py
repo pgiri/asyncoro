@@ -62,6 +62,7 @@ def rcoro_proc(client, program, coro=None):
     yield reader.finish()
     raise StopIteration(pipe.poll())
 
+# client (local) coroutine submits computations
 def client_proc(computation, n, coro=None):
     # use RemoteCoroScheduler to run one discomp4_proc.py at a server
     job_scheduler = asyncoro.discoro_schedulers.RemoteCoroScheduler(computation)

@@ -56,8 +56,8 @@ def custom_feeder(input, coro=None):
 # asyncoro.logger.setLevel(logging.DEBUG)
 
 # simpler version using 'communicate'
-coro = asyncoro.Coro(communicate, sys.argv[1])
+coro = asyncoro.Coro(communicate, sys.argv[1] if len(sys.argv) > 1 else sys.argv[0])
 coro.value() # wait for it to finish
 
 # alternate version with custom read and write processes
-asyncoro.Coro(custom_feeder, sys.argv[1])
+asyncoro.Coro(custom_feeder, sys.argv[1] if len(sys.argv) > 1 else sys.argv[0])

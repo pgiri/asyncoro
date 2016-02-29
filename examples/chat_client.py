@@ -24,7 +24,7 @@ def client_send(conn, coro=None):
                 break
         except:
             break
-        yield conn.send_msg(line[:-1].encode())
+        yield conn.send_msg(line.encode())
 
 if __name__ == '__main__':
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

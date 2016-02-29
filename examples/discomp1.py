@@ -8,7 +8,6 @@ import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
-
 # discoronode expects user computations to be generator functions (to create
 # coroutines) that will 'yield' within pulse_interval (default 10
 # seconds). Otherwise, the daemon coroutine that sends pulse messages to
@@ -39,6 +38,7 @@ def compute_coro(n, client, coro=None):
     thread.start()
     yield thread_done.wait()
 
+# client (local) coroutine submits computations
 def client_proc(computation, njobs, coro=None):
     if (yield computation.schedule()):
         raise Exception('Failed to schedule computation')

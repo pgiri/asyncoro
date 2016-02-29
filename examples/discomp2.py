@@ -1,9 +1,8 @@
-# This example uses status messages and message passing to run 'setup'
-# coroutine at remote process to prepare it for processing jobs.
+# Run 'discoronode.py' program to start processes to execute
+# computations sent by this client, along with this program.
 
-# This example is a variation of discomp3.py; it shows computations
-# executed with AsyncThreadPool can send messages (in this case, to
-# the client).
+# The remote servers are initialized (to create AsyncThreadPool) with a setup
+# coroutine and that pool is later used to execute computations.
 
 # DiscoroStatus must be imported in global scope as below; otherwise,
 # unserializing status messages fails (if external scheduler is used)
@@ -61,6 +60,7 @@ def compute_coro(n, coro=None):
     yield thread_pool.async_task(compute_func, n, coro)
     # return value from thread_proc is sent as result with MonitorException
 
+# client (local) coroutine submits computations
 def client_proc(computation, njobs, coro=None):
     cleanup_coros = set() # processes used are kept track to cleanup when done
     status = {'submitted': 0, 'done': 0}

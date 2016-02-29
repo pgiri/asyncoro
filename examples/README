@@ -63,7 +63,11 @@ framework for distributed and parallel computing.
   remote coroutines send results back to coroutine at client.
 
 * discoro_client6.py uses streaming of data to remote coroutines for efficient
-  communication.
+  communication. The example also shows how to implement live/real-time
+  analytics and send them to client.
+
+* discoro_client6_channel.py is same as discoro_client6.py, except it uses
+  channel to broadcast data to remote coroutines.
 
 * discoro_client7.py shows how to relay status messages from discoro scheduler
   to RemoteCoroScheduler and httpd concurrently. Computation prograss can be

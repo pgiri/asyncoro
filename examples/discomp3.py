@@ -1,5 +1,5 @@
-# This example uses status messages and message passing to run 'setup'
-# coroutine at remote process to prepare it for processing jobs.
+# Run 'discoronode.py' program to start processes to execute
+# computations sent by this client, along with this program.
 
 # This example uses message passing to get stream of requests from client to be
 # processed in a thread (not a coroutine, but regular Python function) and send
@@ -70,6 +70,7 @@ def compute_coro(client, coro=None):
     yield thread_done.wait()
 
 
+# client (local) coroutine submits computations
 def client_proc(computation, njobs, coro=None):
     # RemoteCoroScheduler is used to run at most one coroutine at a server
     # process This should be created before scheduling computation

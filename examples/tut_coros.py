@@ -13,5 +13,6 @@ def coro_proc(n, coro=None):
     yield coro.sleep(s)
     print('%f: coroutine %d terminating' % (time.time(), n))
 
+# create 10 clients
 for i in range(10):
     asyncoro.Coro(coro_proc, i)

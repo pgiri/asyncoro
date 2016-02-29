@@ -22,6 +22,8 @@ def client_proc(server, n, coro=None):
         msg_id += 1
         server.send('%d: %d / %d' % (msg_id, n, x))
 
+# create server
 server = asyncoro.Coro(server_proc)
+# create 10 clients
 for i in range(10):
     asyncoro.Coro(client_proc, server, i)

@@ -31,7 +31,7 @@ def client_proc(host, port, input, coro=None):
         csum.update(data)
         n = yield afd.write(data, full=True)
     afd.close()
-    print('client csum: %s' % csum.hexdigest())
+    print('client sha1 csum: %s' % csum.hexdigest())
 
 def server_proc(conn, coro=None):
     # conn is a synchronous socket (as it is obtained from synchronous
@@ -48,7 +48,7 @@ def server_proc(conn, coro=None):
         csum.update(line)
         nlines += 1
     afd.close()
-    print('server csum: %s' % (csum.hexdigest()))
+    print('server sha1 csum: %s' % (csum.hexdigest()))
     print('lines: %s' % (nlines))
 
 asyncoro.logger.setLevel(logging.DEBUG)
@@ -58,7 +58,7 @@ sock.listen(5)
 host, port = sock.getsockname()
 print('host: %s, port: %s' % (host, port))
 
-asyncoro.Coro(client_proc, host, port, sys.argv[1])
+asyncoro.Coro(client_proc, host, port, sys.argv[1] if len(sys.argv) > 1 else sys.argv[0])
 
 conn, addr = sock.accept()
 asyncoro.Coro(server_proc, conn)
