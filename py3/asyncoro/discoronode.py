@@ -93,6 +93,7 @@ def _discoro_proc():
     _discoro_busy_time = time.time()
     _discoro_globals = {}
     _discoro_locals = {}
+    _discoro_modules = dict(sys.modules)
     _discoro_globals.update(globals())
     _discoro_locals.update(locals())
 
@@ -260,6 +261,11 @@ def _discoro_proc():
                     if _discoro_var not in _discoro_globals:
                         globals().pop(_discoro_var, None)
                 globals().update(_discoro_globals)
+
+            for _discoro_var in list(sys.modules.keys()):
+                if _discoro_var not in _discoro_modules:
+                    sys.modules.pop(_discoro_var, None)
+            sys.modules.update(_discoro_modules)
 
             for _discoro_var in os.listdir(_discoro_dest_path):
                 _discoro_var = os.path.join(_discoro_dest_path, _discoro_var)
