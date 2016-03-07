@@ -84,6 +84,7 @@ def _discoro_proc():
         shutil.rmtree(_discoro_dest_path)
     os.makedirs(_discoro_dest_path)
     os.chdir(_discoro_dest_path)
+    sys.path.insert(0, _discoro_dest_path)
     with open(_discoro_pid_path, 'w') as _discoro_var:
         _discoro_var.write('%s' % os.getpid())
     asyncoro.logger.debug('discoro server "%s" started at %s; '
