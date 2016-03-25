@@ -39,7 +39,7 @@ def _discoro_proc():
     import asyncoro.disasyncoro as asyncoro
     from asyncoro import Coro
     from asyncoro.discoro import MinPulseInterval, MaxPulseInterval, \
-         DiscoroNodeInfo, DiscoroNodeStatus
+         DiscoroNodeInfo, DiscoroNodeAvailInfo
 
     class Nonlocals(object):
         def __init__(self, **kwargs):
@@ -120,9 +120,9 @@ def _discoro_proc():
 
             msg = {'ncoros': len(_discoro_job_coros), 'location': coro.location}
             if _discoro_node_status:
-                msg['node_status'] = DiscoroNodeStatus(coro.location.addr, psutil.cpu_percent(),
-                                                       psutil.virtual_memory().percent,
-                                                       psutil.disk_usage(_discoro_dest_path).percent)
+                msg['node_status'] = DiscoroNodeAvailInfo(
+                    coro.location.addr, 100.0 - psutil.cpu_percent(),
+                    psutil.virtual_memory().available, psutil.disk_usage(_discoro_dest_path).free)
 
             if _discoro_pulse_coro.send(msg) == 0:
                 last_pulse = time.time()
@@ -225,6 +225,8 @@ def _discoro_proc():
                 continue
             if psutil and _discoro_msg.get('node_status', None):
                 _discoro_node_status = True
+            else:
+                _discoro_node_status = None
             if isinstance(_discoro_computation.pulse_interval, int) and \
                MinPulseInterval <= _discoro_computation.pulse_interval <= MaxPulseInterval:
                 _discoro_computation.pulse_interval = _discoro_computation.pulse_interval
@@ -292,23 +294,20 @@ def _discoro_proc():
             _discoro_timer_coro.resume(MinPulseInterval)
         elif _discoro_req == 'node_info':
             if psutil:
-                info = DiscoroNodeInfo(
-                    _discoro_name, _discoro_coro.location.addr,
-                    psutil.cpu_count(), psutil.cpu_percent(),
-                    {_discoro_var: getattr(psutil.virtual_memory(), _discoro_var)
-                     for _discoro_var in ['total', 'percent']},
-                    {_discoro_var: getattr(psutil.disk_usage(_discoro_dest_path), _discoro_var)
-                     for _discoro_var in ['total', 'percent']}
-                    )
+                _discoro_var = DiscoroNodeAvailInfo(_discoro_coro.location.addr,
+                                                    100.0 - psutil.cpu_percent(),
+                                                    psutil.virtual_memory().available,
+                                                    psutil.disk_usage(_discoro_dest_path).free)
                 if _discoro_msg.get('node_status', None):
                     _discoro_node_status = True
             else:
-                info = DiscoroNodeInfo(_discoro_name, _discoro_coro.location.addr,
-                                       -1, -1, None, None)
+                _discoro_var = None
+            # _discoro_name is host name followed by '-' and ID
+            _discoro_var = DiscoroNodeInfo(_discoro_name[:_discoro_name.rfind('-')],
+                                           _discoro_coro.location.addr, _discoro_var)
             _discoro_client = _discoro_msg.get('client', None)
-            if not isinstance(_discoro_client, Coro):
-                continue
-            _discoro_client.send(info)
+            if isinstance(_discoro_client, Coro):
+                _discoro_client.send(_discoro_var)
         elif _discoro_req == 'status':
             if _discoro_msg.get('auth', None) != _discoro_config['auth']:
                 asyncoro.logger.debug('ignoring info: %s' % (_discoro_msg.get('auth')))

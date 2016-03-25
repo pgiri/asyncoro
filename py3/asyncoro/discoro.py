@@ -40,13 +40,23 @@ MaxPulseInterval = 10 * MinPulseInterval
 # status about nodes / servers are sent with this structure
 DiscoroStatus = collections.namedtuple('DiscoroStatus', ['status', 'info'])
 DiscoroCoroInfo = collections.namedtuple('DiscoroCoroInfo', ['coro', 'args', 'kwargs', 'start_time'])
-DiscoroNodeInfo = collections.namedtuple('DiscoroNodeInfo',
-                                         ['name', 'addr', 'cpus', 'cpus_use', 'memory', 'disk'])
-DiscoroNodeStatus = collections.namedtuple('DiscoroNodeStatus', ['addr', 'cpu', 'memory', 'disk'])
+DiscoroNodeInfo = collections.namedtuple('DiscoroNodeInfo', ['name', 'addr', 'avail_info'])
 DiscoroServerInfo = collections.namedtuple('DiscoroServerInfo', ['name', 'location'])
 
 # for internal use only
 _DiscoroFunction = collections.namedtuple('_DiscoroFunction', ['name', 'code', 'args', 'kwargs'])
+
+class DiscoroNodeAvailInfo(object):
+    """Node availability status is indicated with this class.  'cpu' is
+    available CPU in percent in the range 0 to 100. 0 indicates node is busy
+    executing tasks on all CPUs and 100 indicates node is not busy at all.
+    """
+
+    def __init__(self, ip_addr, cpu, memory, disk):
+        self.ip_addr = ip_addr
+        self.cpu = cpu
+        self.memory = memory
+        self.disk = disk
 
 
 class Computation(object):
@@ -434,11 +444,11 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
         def __init__(self, name, addr, scheduler):
             self.name = name
             self.addr = addr
+            self.avail_info = None
             self.servers = {}
             self.ncoros = 0
             self.load = 0.0
             self.status = None
-            self.info = None
             self.status_server = None
             self.scheduler = scheduler
 
@@ -719,10 +729,12 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
                 status_msg = DiscoroStatus(Scheduler.ComputationScheduled, id(self._cur_computation))
                 self._cur_computation.status_coro.send(status_msg)
             for node in self._nodes.values():
-                if node.info:
+                if node.avail_info:
                     node.status = Scheduler.NodeDiscovered
                     if self._cur_computation.status_coro:
-                        status_msg = DiscoroStatus(node.status, node.info)
+                        status_msg = DiscoroStatus(
+                            node.status, DiscoroNodeInfo(node.name, node.addr, node.avail_info)
+                            )
                         self._cur_computation.status_coro.send(status_msg)
                 else:
                     continue
@@ -730,9 +742,9 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
                     if isinstance(server.coro, Coro):
                         server.status = Scheduler.ServerDiscovered
                         if self._cur_computation.status_coro:
-                            status_msg = DiscoroStatus(server.status,
-                                                       DiscoroServerInfo(server.name,
-                                                                         server.location))
+                            status_msg = DiscoroStatus(
+                                server.status, DiscoroServerInfo(server.name, server.location)
+                                )
                             self._cur_computation.status_coro.send(status_msg)
 
             for node in self._nodes.values():
@@ -932,16 +944,17 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
                 # TODO: asuume temporary issue instead of removing it?
                 node.servers.pop(server.location, None)
                 raise StopIteration(-1)
-            if not node.info:
-                server.coro.send({'req': 'node_info', 'client': coro})
+            if not node.avail_info:
+                server.coro.send({'req': 'node_info', 'client': coro, 'node_status': False})
                 node_info = yield coro.receive(timeout=5)
-                if node_info and not node.info:
-                    node.info = node_info
+                if node_info and not node.avail_info:
+                    node.avail_info = node_info
                     node.status_server = server
                     if node.status != Scheduler.NodeDiscovered:
                         node.status = Scheduler.NodeDiscovered
+                        node.name = node_info.name
                         if self._cur_computation and self._cur_computation.status_coro:
-                            status = DiscoroStatus(Scheduler.NodeDiscovered, node.info)
+                            status = DiscoroStatus(Scheduler.NodeDiscovered, node.avail_info)
                             self._cur_computation.status_coro.send(status)
             if not self._cur_computation:
                 server.status = Scheduler.ServerDiscovered
@@ -1018,8 +1031,8 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
                 if node.status_server == server:
                     for node.status_server in node.servers.values():
                         if (node.status_server.coro and
-                            (node.status_server.coro.send({'req': 'node_info', 'client': None,
-                                                           'node_status': True}) == 0)):
+                            ((yield node.status_server.coro.deliver(
+                                {'req': 'node_info', 'client': None, 'node_status': True})) == 1)):
                             break
                     else:
                         node.status_server = None

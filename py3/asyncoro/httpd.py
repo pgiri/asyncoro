@@ -25,7 +25,7 @@ import re
 import traceback
 
 import asyncoro.disasyncoro as asyncoro
-from asyncoro.discoro import DiscoroStatus, DiscoroNodeInfo, DiscoroNodeStatus, DiscoroServerInfo
+from asyncoro.discoro import DiscoroStatus, DiscoroNodeAvailInfo, DiscoroServerInfo
 import asyncoro.discoro as discoro
 
 if sys.version_info.major > 2:
@@ -35,14 +35,13 @@ else:
     import BaseHTTPServer
     from urlparse import urlparse
 
-# Compatability function to work with both Python 2.7 and Python 3
-if sys.version_info.major >= 3:
-    def itervalues(arg):
-        return getattr(arg, 'values')()
-else:
-    def itervalues(arg):
-        return getattr(arg, 'itervalues')()
 
+if sys.version_info.major >= 3:
+    def dict_iter(arg, iterator):
+        return getattr(arg, iterator)()
+else:
+    def dict_iter(arg, iterator):
+        return getattr(arg, 'iter' + iterator)()
 
 class HTTPServer(object):
 
@@ -64,9 +63,9 @@ class HTTPServer(object):
             self.status = None
             self.servers = {}
             self.update_time = time.time()
-            self.cpu_info = {'total': 0, 'use': -1}
-            self.memory_info = {'total': 0, 'use': -1}
-            self.disk_info = {'total': 0, 'use': -1}
+            self.coros_submitted = 0
+            self.coros_done = 0
+            self.avail_info = None
 
     class _Server(object):
         def __init__(self, name, location):
@@ -88,45 +87,34 @@ class HTTPServer(object):
             # asyncoro.logger.debug('HTTP client %s: %s' % (self.client_address[0], fmt % args))
             return
 
+        @staticmethod
+        def json_encode_nodes(arg):
+            nodes = [dict(node.__dict__) for node in dict_iter(arg, 'values')]
+            for node in nodes:
+                node['servers'] = len(node['servers'])
+                if isinstance(node['avail_info'], DiscoroNodeAvailInfo):
+                    node['avail_info'] = node['avail_info'].__dict__
+            return nodes
+
         def do_GET(self):
             if self.path == '/cluster_updates':
                 self._ctx._lock.acquire()
-                updates = [
-                    {'ip_addr': node.ip_addr, 'name': node.name, 'status': node.status,
-                     'servers': len(node.servers), 'update_time': node.update_time,
-                     'coros_submitted': sum(server.coros_submitted
-                                            for server in node.servers.values()),
-                     'coros_done': sum(server.coros_done for server in node.servers.values()),
-                     'cpu': node.cpu_info['use'] if node.cpu_info else -1,
-                     'memory': node.memory_info['use'] if node.memory_info else -1,
-                     'disk': node.disk_info['use'] if node.disk_info else -1,
-                     } for node in itervalues(self._ctx._updates)
-                    ]
-                self._ctx._updates = {}
+                nodes = self.__class__.json_encode_nodes(self._ctx._updates)
+                self._ctx._updates.clear()
                 self._ctx._lock.release()
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
                 self.end_headers()
-                self.wfile.write(json.dumps(updates).encode())
+                self.wfile.write(json.dumps(nodes).encode())
                 return
             elif self.path == '/cluster_status':
                 self._ctx._lock.acquire()
-                status = [
-                    {'ip_addr': node.ip_addr, 'name': node.name, 'status': node.status,
-                     'servers': len(node.servers), 'update_time': node.update_time,
-                     'coros_submitted': sum(server.coros_submitted
-                                            for server in node.servers.values()),
-                     'coros_done': sum(server.coros_done for server in node.servers.values()),
-                     'cpu': node.cpu_info['use'] if node.cpu_info else -1,
-                     'memory': node.memory_info['use'] if node.memory_info else -1,
-                     'disk': node.disk_info['use'] if node.disk_info else -1,
-                     } for node in itervalues(self._ctx._nodes)
-                    ]
+                nodes = self.__class__.json_encode_nodes(self._ctx._nodes)
                 self._ctx._lock.release()
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
                 self.end_headers()
-                self.wfile.write(json.dumps(status).encode())
+                self.wfile.write(json.dumps(nodes).encode())
                 return
             else:
                 parsed_path = urlparse(self.path)
@@ -135,8 +123,8 @@ class HTTPServer(object):
                     path = 'cluster.html'
                 path = os.path.join(self.DocumentRoot, path)
                 try:
-                    f = open(path)
-                    data = f.read()
+                    with open(path) as fd:
+                        data = fd.read()
                     if path.endswith('.html'):
                         if path.endswith('.html'):
                             data = data % {'TIMEOUT': str(self._ctx._poll_sec)}
@@ -153,7 +141,6 @@ class HTTPServer(object):
                         self.send_header('Cache-Control', 'private, max-age=86400')
                     self.end_headers()
                     self.wfile.write(data.encode())
-                    f.close()
                     return
                 except:
                     asyncoro.logger.warning('HTTP client %s: Could not read/send "%s"',
@@ -226,10 +213,9 @@ class HTTPServer(object):
                 if node:
                     info = {'ip_addr': node.ip_addr, 'name': node.name,
                             'status': node.status, 'update_time': node.update_time,
-                            'coros_submitted': sum(server.coros_submitted
-                                                   for server in node.servers.values()),
-                            'coros_done': sum(server.coros_done
-                                              for server in node.servers.values()),
+                            'avail_info': node.avail_info.__dict__ if node.avail_info else None,
+
+                            'coros_submitted': node.coros_submitted, 'coros_done': node.coros_done,
                             'servers': [
                                 {'location': str(server.location),
                                  'coros_submitted': server.coros_submitted,
@@ -237,10 +223,7 @@ class HTTPServer(object):
                                  'coros_running': len(server.coros),
                                  'update_time': node.update_time
                                  } for server in node.servers.values()
-                                ],
-                            'cpu': node.cpu_info,
-                            'memory': node.memory_info,
-                            'disk': node.disk_info,
+                                ]
                             }
                 else:
                     info = {}
@@ -344,6 +327,7 @@ class HTTPServer(object):
                     if server:
                         if server.coros.pop(str(rcoro), None) is not None:
                             server.coros_done += 1
+                            node.coros_done += 1
                             node.update_time = time.time()
                             self._updates[node.ip_addr] = node
             elif isinstance(msg, DiscoroStatus):
@@ -355,6 +339,7 @@ class HTTPServer(object):
                         if server:
                             server.coros[str(rcoro.coro)] = rcoro
                             server.coros_submitted += 1
+                            node.coros_submitted += 1
                             node.update_time = time.time()
                             self._updates[node.ip_addr] = node
                 elif msg.status == discoro.Scheduler.ServerDiscovered:
@@ -391,30 +376,11 @@ class HTTPServer(object):
                 elif msg.status == discoro.Scheduler.NodeDiscovered:
                     node = self._nodes.get(msg.info.addr, None)
                     if not node:
-                        # name is host name followed by '-' and ID
-                        host_name = re.search(r'-\d+$', msg.info.name)
-                        if host_name:
-                            host_name = msg.info.name[:-len(host_name.group(0))]
-                        else:
-                            host_name = msg.info.name
-                        node = HTTPServer._Node(host_name, msg.info.addr)
+                        node = HTTPServer._Node(msg.info.name, msg.info.addr)
                         node.status = HTTPServer.NodeStatus[msg.status]
                         self._nodes[msg.info.addr] = node
-                    if isinstance(msg.info, DiscoroNodeInfo):
-                        if msg.info.memory:
-                            node.cpu_info = {'total': msg.info.cpus, 'use': msg.info.cpus_use}
-                            node.memory_info = {'total': '{:,.0f} M'.format(
-                                                        msg.info.memory.get('total', 0) / 1e6),
-                                                'use': msg.info.memory.get('percent', 0)}
-                            node.disk_info = {'total': '{:,.0f} G'.format(
-                                                       msg.info.disk.get('total', 0) / 1e9),
-                                              'use': msg.info.disk.get('percent', 0)}
-                        else:
-                            node.cpu_info = {'total': -1, 'use': -1}
-                            node.memory_info = {'total': -1, 'use': -1}
-                            node.disk_info = {'total': -1, 'use': -1}
-                    else:
-                        print('invalid node info: %s' % type(msg.info))
+
+                    node.avail_info = msg.info.avail_info
 
                 elif msg.status in (discoro.Scheduler.NodeInitialized,
                                     discoro.Scheduler.NodeClosed, discoro.Scheduler.NodeIgnore,
@@ -423,12 +389,12 @@ class HTTPServer(object):
                     if node:
                         node.status = HTTPServer.NodeStatus[msg.status]
                         node.update_time = time.time()
-            elif isinstance(msg, DiscoroNodeStatus):
-                node = self._nodes.get(msg.addr, None)
-                if node and node.memory_info:
-                    node.cpu_info['use'] = msg.cpu
-                    node.memory_info['use'] = msg.memory
-                    node.disk_info['use'] = msg.disk
+            elif isinstance(msg, DiscoroNodeAvailInfo):
+                node = self._nodes.get(msg.ip_addr, None)
+                if node:
+                    node.avail_info = msg
+                    node.update_time = time.time()
+                    self._updates[node.ip_addr] = node
             else:
                 asyncoro.logger.warning('Status message ignored: %s' % type(msg))
 

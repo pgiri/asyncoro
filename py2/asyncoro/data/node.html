@@ -7,6 +7,7 @@
     <link type="text/css" rel="stylesheet" href="asyncoro.css" />
 
     <script type="text/javascript" src="jquery.js"></script>
+    <script type="text/javascript" src="asyncoro.js"></script>
 
     <script type="text/javascript">
     //<![CDATA[
@@ -45,14 +46,10 @@
               $('#node_coros_done').text(node.coros_done);
               $('#node_coros_running').text(node.coros_submitted - node.coros_done);
               $('#node_update').text((new Date(1000 * node.update_time)).toLocaleTimeString());
-              if (node.cpu) {
-                $('#node_cpu').text(node.cpu.use.toFixed(1) + ' %% / ' + node.cpu.total);
-              }
-              if (node.memory) {
-                $('#node_memory').text(node.memory.use.toFixed(1) + ' %% / ' + node.memory.total);
-              }
-              if (node.disk) {
-                $('#node_disk').text(node.disk.use.toFixed(1) + ' %% / ' + node.disk.total);
+              if (node.avail_info) {
+                $('#node_cpu').text(node.avail_info.cpu.toFixed(2) + ' %%');
+                $('#node_memory').text(formatBytes(node.avail_info.memory));
+                $('#node_disk').text(formatBytes(node.avail_info.disk));
               }
               if ($('#node').is(':hidden')) {
                 $('#node').show();
@@ -188,13 +185,13 @@
             <td>Servers</td><td id="node_servers"></td>
           </tr>
           <tr>
-            <td>CPUs (Use / Total)</td><td id="node_cpu"></td>
+            <td>Available CPU</td><td id="node_cpu">-</td>
           </tr>
           <tr>
-            <td>Memory (Use / Total)</td><td id="node_memory"></td>
+            <td>Available Memory</td><td id="node_memory">-</td>
           </tr>
           <tr>
-            <td>Disk (Use / Total)</td><td id="node_disk"></td>
+            <td>Available Disk Space</td><td id="node_disk">-</td>
           </tr>
           <tr>
             <td>Coros Submitted</td><td id="node_coros_submitted"></td>
@@ -216,8 +213,13 @@
         <table class="fancy shadow" style="margin:20px auto;" id="servers-table">
           <caption><span class="border" style="display:inline-block;">Servers</span></caption>
           <thead>
-            <tr><th></th><th>Server</th><th>Coros<br />Submitted</th><th>Coros<br />Running</th>
-              <th>Coros<br />Done</th><th>Last<br />Update</th></tr>
+            <tr>
+	      <th rowspan="2"></th><th rowspan="2">Server</th><th colspan="3">Coros</th>
+              <th rowspan="2">Last Update</th>
+	    </tr>
+	    <tr>
+	      <th>Submitted</th><th>Running</th><th>Done</th>
+	    </tr>
           </thead>
           <tbody>
           </tbody>
