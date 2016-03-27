@@ -44,6 +44,13 @@ def _discoro_proc():
     _discoro_coro = asyncoro.AsynCoro.cur_coro()
     _discoro_config = yield _discoro_coro.receive()
     assert _discoro_config['req'] == 'config'
+
+    if _discoro_config['min_pulse_interval'] > 0:
+        MinPulseInterval = _discoro_config['min_pulse_interval']
+    if _discoro_config['max_pulse_interval'] > 0:
+        MaxPulseInterval = _discoro_config['max_pulse_interval']
+    del _discoro_config['min_pulse_interval'], _discoro_config['max_pulse_interval']
+
     _discoro_coro.register('discoro_server')
     _discoro_name = asyncoro.AsynCoro.instance().name
     asyncoro.AsynCoro.instance().dest_path = os.path.join('discoro',
@@ -421,6 +428,9 @@ def _discoro_process(_discoro_config, _discoro_name, _discoro_server_id,
         asyncoro.logger.setLevel(logging.INFO)
     del _discoro_config['loglevel']
 
+    min_pulse_interval = _discoro_config.pop('min_pulse_interval')
+    max_pulse_interval = _discoro_config.pop('max_pulse_interval')
+
     _discoro_scheduler = asyncoro.AsynCoro(**_discoro_config)
     _discoro_coro = asyncoro.Coro(_discoro_proc)
     # delete variables created in main
@@ -430,8 +440,12 @@ def _discoro_process(_discoro_config, _discoro_name, _discoro_server_id,
 
     _discoro_coro.send({'req': 'config', 'id': _discoro_server_id,
                         'phoenix': _discoro_phoenix, 'serve': _discoro_serve,
-                        'auth': _discoro_auth, 'mp_queue': _discoro_mp_queue})
+                        'auth': _discoro_auth, 'mp_queue': _discoro_mp_queue,
+                        'min_pulse_interval': min_pulse_interval,
+                        'max_pulse_interval': max_pulse_interval})
     del hashlib, logging, os, _discoro_serve, _discoro_phoenix
+    del min_pulse_interval, max_pulse_interval
+
     req_queue, _discoro_mp_queue = _discoro_mp_queue, None
 
     while True:
@@ -524,6 +538,10 @@ if __name__ == '__main__':
                         help='file containing SSL key')
     parser.add_argument('--serve', dest='serve', default=-1, type=int,
                         help='number of clients to serve before exiting')
+    parser.add_argument('--min_pulse_interval', dest='min_pulse_interval', default=0, type=int,
+                        help='minimum pulse interval clients can use in number of seconds')
+    parser.add_argument('--max_pulse_interval', dest='max_pulse_interval', default=0, type=int,
+                        help='maximum pulse interval clients can use in number of seconds')
     parser.add_argument('--daemon', action='store_true', dest='daemon', default=False,
                         help='if given, input is not read from terminal')
     parser.add_argument('--phoenix', action='store_true', dest='phoenix', default=False,
@@ -532,6 +550,12 @@ if __name__ == '__main__':
     parser.add_argument('-d', '--debug', action='store_true', dest='loglevel', default=False,
                         help='if given, debug messages are printed')
     _discoro_config = vars(parser.parse_args(sys.argv[1:]))
+
+    if _discoro_config['min_pulse_interval'] and _discoro_config['min_pulse_interval'] < 1:
+        raise Exception('min_pulse_interval must be at least 1')
+    if (_discoro_config['max_pulse_interval'] and _discoro_config['min_pulse_interval'] and
+        _discoro_config['max_pulse_interval'] < _discoro_config['min_pulse_interval']):
+        raise Exception('max_pulse_interval must be at least min_pulse_interval')
 
     _discoro_cpus = multiprocessing.cpu_count()
     if _discoro_config['cpus'] > 0:
