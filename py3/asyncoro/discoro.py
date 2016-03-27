@@ -52,8 +52,8 @@ class DiscoroNodeAvailInfo(object):
     executing tasks on all CPUs and 100 indicates node is not busy at all.
     """
 
-    def __init__(self, ip_addr, cpu, memory, disk):
-        self.ip_addr = ip_addr
+    def __init__(self, addr, cpu, memory, disk):
+        self.addr = addr
         self.cpu = cpu
         self.memory = memory
         self.disk = disk
@@ -948,14 +948,16 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
                 server.coro.send({'req': 'node_info', 'client': coro, 'node_status': False})
                 node_info = yield coro.receive(timeout=5)
                 if node_info and not node.avail_info:
-                    node.avail_info = node_info
+                    node.avail_info = node_info.avail_info
                     node.status_server = server
                     if node.status != Scheduler.NodeDiscovered:
                         node.status = Scheduler.NodeDiscovered
                         node.name = node_info.name
                         if self._cur_computation and self._cur_computation.status_coro:
-                            status = DiscoroStatus(Scheduler.NodeDiscovered, node.avail_info)
-                            self._cur_computation.status_coro.send(status)
+                            status_msg = DiscoroStatus(
+                                node.status, DiscoroNodeInfo(node.name, node.addr, node.avail_info)
+                                )
+                            self._cur_computation.status_coro.send(status_msg)
             if not self._cur_computation:
                 server.status = Scheduler.ServerDiscovered
                 raise StopIteration(0)

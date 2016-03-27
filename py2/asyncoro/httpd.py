@@ -57,9 +57,9 @@ class HTTPServer(object):
                     discoro.Scheduler.ServerDisconnected: 'Disconnected'}
 
     class _Node(object):
-        def __init__(self, name, ip_addr):
+        def __init__(self, name, addr):
             self.name = name
-            self.ip_addr = ip_addr
+            self.addr = addr
             self.status = None
             self.servers = {}
             self.update_time = time.time()
@@ -198,20 +198,20 @@ class HTTPServer(object):
                 self.wfile.write(json.dumps(info).encode())
                 return
             elif self.path == '/node_info':
-                ip_addr = None
+                addr = None
                 for item in form.list:
                     if item.name == 'host':
                         if re.match('^(\d+[\.\d]+)$', item.value):
-                            ip_addr = item.value
+                            addr = item.value
                         else:
                             try:
-                                ip_addr = socket.gethostbyname(item.value)
+                                addr = socket.gethostbyname(item.value)
                             except:
-                                ip_addr = item.value
+                                addr = item.value
                         break
-                node = self._ctx._nodes.get(ip_addr)
+                node = self._ctx._nodes.get(addr)
                 if node:
-                    info = {'ip_addr': node.ip_addr, 'name': node.name,
+                    info = {'addr': node.addr, 'name': node.name,
                             'status': node.status, 'update_time': node.update_time,
                             'avail_info': node.avail_info.__dict__ if node.avail_info else None,
 
@@ -329,7 +329,7 @@ class HTTPServer(object):
                             server.coros_done += 1
                             node.coros_done += 1
                             node.update_time = time.time()
-                            self._updates[node.ip_addr] = node
+                            self._updates[node.addr] = node
             elif isinstance(msg, DiscoroStatus):
                 if msg.status == discoro.Scheduler.CoroCreated:
                     rcoro = msg.info
@@ -341,7 +341,7 @@ class HTTPServer(object):
                             server.coros_submitted += 1
                             node.coros_submitted += 1
                             node.update_time = time.time()
-                            self._updates[node.ip_addr] = node
+                            self._updates[node.addr] = node
                 elif msg.status == discoro.Scheduler.ServerDiscovered:
                     if isinstance(msg.info, DiscoroServerInfo):
                         node = self._nodes.get(msg.info.location.addr)
@@ -359,7 +359,7 @@ class HTTPServer(object):
                         server.status = HTTPServer.ServerStatus[msg.status]
                         node.servers[str(server.location)] = server
                         node.update_time = time.time()
-                        self._updates[node.ip_addr] = node
+                        self._updates[node.addr] = node
                 elif msg.status in (discoro.Scheduler.ServerInitialized,
                                     discoro.Scheduler.ServerClosed, discoro.Scheduler.ServerIgnore,
                                     discoro.Scheduler.ServerDisconnected):
@@ -372,16 +372,14 @@ class HTTPServer(object):
                         if server:
                             server.status = HTTPServer.ServerStatus[msg.status]
                             node.update_time = time.time()
-                            self._updates[node.ip_addr] = node
+                            self._updates[node.addr] = node
                 elif msg.status == discoro.Scheduler.NodeDiscovered:
                     node = self._nodes.get(msg.info.addr, None)
                     if not node:
                         node = HTTPServer._Node(msg.info.name, msg.info.addr)
                         node.status = HTTPServer.NodeStatus[msg.status]
                         self._nodes[msg.info.addr] = node
-
                     node.avail_info = msg.info.avail_info
-
                 elif msg.status in (discoro.Scheduler.NodeInitialized,
                                     discoro.Scheduler.NodeClosed, discoro.Scheduler.NodeIgnore,
                                     discoro.Scheduler.NodeDisconnected):
@@ -390,11 +388,11 @@ class HTTPServer(object):
                         node.status = HTTPServer.NodeStatus[msg.status]
                         node.update_time = time.time()
             elif isinstance(msg, DiscoroNodeAvailInfo):
-                node = self._nodes.get(msg.ip_addr, None)
+                node = self._nodes.get(msg.addr, None)
                 if node:
                     node.avail_info = msg
                     node.update_time = time.time()
-                    self._updates[node.ip_addr] = node
+                    self._updates[node.addr] = node
             else:
                 asyncoro.logger.warning('Status message ignored: %s' % type(msg))
 
