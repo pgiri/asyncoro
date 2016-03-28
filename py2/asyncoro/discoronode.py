@@ -39,7 +39,7 @@ def _discoro_proc():
     import asyncoro.disasyncoro as asyncoro
     from asyncoro import Coro
     from asyncoro.discoro import MinPulseInterval, MaxPulseInterval, \
-         DiscoroNodeInfo, DiscoroNodeAvailInfo
+        DiscoroNodeInfo, DiscoroNodeAvailInfo
 
     class Nonlocals(object):
         def __init__(self, **kwargs):
@@ -396,7 +396,6 @@ def _discoro_process(_discoro_config, _discoro_name, _discoro_server_id,
                      _discoro_tcp_port, _discoro_mp_queue):
     import os
     import hashlib
-    import time
     import logging
     import asyncoro.disasyncoro as asyncoro
 
@@ -537,7 +536,7 @@ if __name__ == '__main__':
     if _discoro_config['min_pulse_interval'] and _discoro_config['min_pulse_interval'] < 1:
         raise Exception('min_pulse_interval must be at least 1')
     if (_discoro_config['max_pulse_interval'] and _discoro_config['min_pulse_interval'] and
-        _discoro_config['max_pulse_interval'] < _discoro_config['min_pulse_interval']):
+       _discoro_config['max_pulse_interval'] < _discoro_config['min_pulse_interval']):
         raise Exception('max_pulse_interval must be at least min_pulse_interval')
 
     _discoro_cpus = multiprocessing.cpu_count()

@@ -46,6 +46,7 @@ DiscoroServerInfo = collections.namedtuple('DiscoroServerInfo', ['name', 'locati
 # for internal use only
 _DiscoroFunction = collections.namedtuple('_DiscoroFunction', ['name', 'code', 'args', 'kwargs'])
 
+
 class DiscoroNodeAvailInfo(object):
     """Node availability status is indicated with this class.  'cpu' is
     available CPU in percent in the range 0 to 100. 0 indicates node is busy

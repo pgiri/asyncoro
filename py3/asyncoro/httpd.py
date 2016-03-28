@@ -43,6 +43,7 @@ else:
     def dict_iter(arg, iterator):
         return getattr(arg, 'iter' + iterator)()
 
+
 class HTTPServer(object):
 
     NodeStatus = {discoro.Scheduler.NodeDiscovered: 'Discovered',
@@ -174,7 +175,7 @@ class HTTPServer(object):
                 if server:
                     if 0 < max_coros < len(server.coros):
                         rcoros = []
-                        for i, rcoro in enumerate(itervalues(server.coros)):
+                        for i, rcoro in enumerate(dict_iter(server.coros, 'values')):
                             if i >= max_coros:
                                 break
                             rcoros.append(rcoro)
