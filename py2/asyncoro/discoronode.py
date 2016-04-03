@@ -53,7 +53,6 @@ def _discoro_proc():
         MinPulseInterval = _discoro_config['min_pulse_interval']
     if _discoro_config['max_pulse_interval'] > 0:
         MaxPulseInterval = _discoro_config['max_pulse_interval']
-    del _discoro_config['min_pulse_interval'], _discoro_config['max_pulse_interval']
 
     _discoro_coro.register('discoro_server')
     _discoro_name = asyncoro.AsynCoro.instance().name
@@ -94,6 +93,10 @@ def _discoro_proc():
     sys.path.insert(0, _discoro_dest_path)
     with open(_discoro_pid_path, 'w') as _discoro_var:
         _discoro_var.write('%s' % os.getpid())
+
+    for _discoro_var in ['req', 'phoenix', 'min_pulse_interval', 'max_pulse_interval']:
+        del _discoro_config[_discoro_var]
+
     asyncoro.logger.debug('discoro server "%s" started at %s; '
                           'computation files will be saved in "%s"' %
                           (_discoro_name, _discoro_coro.location, _discoro_dest_path))
@@ -129,7 +132,8 @@ def _discoro_proc():
             if _discoro_node_status:
                 msg['node_status'] = DiscoroNodeAvailInfo(
                     coro.location.addr, 100.0 - psutil.cpu_percent(),
-                    psutil.virtual_memory().available, psutil.disk_usage(_discoro_dest_path).free)
+                    psutil.virtual_memory().available, psutil.disk_usage(_discoro_dest_path).free,
+                    100.0 - psutil.swap_memory().percent)
 
             if _discoro_pulse_coro.send(msg) == 0:
                 last_pulse = time.time()
@@ -304,7 +308,8 @@ def _discoro_proc():
                 _discoro_var = DiscoroNodeAvailInfo(_discoro_coro.location.addr,
                                                     100.0 - psutil.cpu_percent(),
                                                     psutil.virtual_memory().available,
-                                                    psutil.disk_usage(_discoro_dest_path).free)
+                                                    psutil.disk_usage(_discoro_dest_path).free,
+                                                    100.0 - psutil.swap_memory().percent)
                 if _discoro_msg.get('node_status', None):
                     _discoro_node_status = True
             else:
@@ -459,20 +464,8 @@ def _discoro_process(_discoro_config, _discoro_name, _discoro_server_id,
 if __name__ == '__main__':
 
     """
-    If '-c' option is used with a positive number, discoro server is run that
-    many instances, so CPU intesive coroutines can be invoked on them. If the
-    number is negative, that many processors are not used (from the available
-    processors). The default value for this option is '0', in which case all the
-    available processors are used.
-
-    '-n' option can be used to specify prefix name for asyncoro schedulers. This
-    name is appended with hyphen followed by a unique number when AsynCoro is
-    created. Note that the names in a cluster must be unique; otherwise,
-    'locate' may give inconsistent results.
-
-    If '-d' option is used, debug logging is enabled.
-
-    Remaining options are as per AsynCoro in disasyncoro module.
+    See http://asyncoro.sourceforge.net/discoro.html#node-servers for details on
+    options to start this program.
     """
 
     import sys
@@ -489,10 +482,12 @@ if __name__ == '__main__':
 
     try:
         import psutil
-        del psutil
-    except:
+    except ImportError:
         print('\n   \'psutil\' module is not available; '
               'CPU, memory, disk status will not be sent!\n')
+    else:
+        psutil.cpu_percent(0.1)
+        del psutil
 
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--cpus', dest='cpus', type=int, default=0,

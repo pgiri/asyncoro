@@ -53,11 +53,12 @@ class DiscoroNodeAvailInfo(object):
     executing tasks on all CPUs and 100 indicates node is not busy at all.
     """
 
-    def __init__(self, addr, cpu, memory, disk):
+    def __init__(self, addr, cpu, memory, disk, swap):
         self.addr = addr
         self.cpu = cpu
         self.memory = memory
         self.disk = disk
+        self.swap = swap
 
 
 class Computation(object):

@@ -14,7 +14,7 @@
 
       jQuery.ajaxSettings.traditional = true;
 
-      var node_ip_addr = null;
+      var node_addr = null;
       var timer = null;
       var timeout = 1000 * %(TIMEOUT)s;
 
@@ -36,10 +36,10 @@
 
           .done(function(node) {
             $('#messages').html('');
-            if (node.hasOwnProperty('ip_addr')) {
-              node_ip_addr = node.ip_addr;
+            if (node.hasOwnProperty('addr')) {
+              node_addr = node.addr;
               $('#node_name').text(node.name);
-              $('#node_ip_addr').text(node.ip_addr);
+              $('#node_addr').text(node.addr);
               $('#node_status').text(node.status);
               $('#node_servers').text(node.servers.length);
               $('#node_coros_submitted').text(node.coros_submitted);
@@ -49,6 +49,7 @@
               if (node.avail_info) {
                 $('#node_cpu').text(node.avail_info.cpu.toFixed(2) + ' %%');
                 $('#node_memory').text(formatBytes(node.avail_info.memory));
+                $('#node_swap').text(node.avail_info.swap.toFixed(2) + ' %%');
                 $('#node_disk').text(formatBytes(node.avail_info.disk));
               }
               if ($('#node').is(':hidden')) {
@@ -80,7 +81,7 @@
               var now = new Date();
               $('#messages').append('<li>Status updated at ' + now.toLocaleTimeString() + '</li>');
               if (timeout >= 1000) {
-                timer = setTimeout(function() { show_node(node.ip_addr) }, timeout);
+                timer = setTimeout(function() { show_node(node.addr) }, timeout);
               }
             } else {
               $('#messages').append('<li>Failed to get information about "' + host + '"</li>');
@@ -176,7 +177,7 @@
             <td>Name</td><td id="node_name"></td>
           </tr>
           <tr>
-            <td>IP Address</td><td id="node_ip_addr"></td>
+            <td>IP Address</td><td id="node_addr"></td>
           </tr>
           <tr>
             <td>Status</td><td id="node_status"></td>
@@ -189,6 +190,9 @@
           </tr>
           <tr>
             <td>Available Memory</td><td id="node_memory">Unknown</td>
+          </tr>
+          <tr>
+            <td>Available Swap Space</td><td id="node_swap">Unknown</td>
           </tr>
           <tr>
             <td>Available Disk Space</td><td id="node_disk">Unknown</td>
