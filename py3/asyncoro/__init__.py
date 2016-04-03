@@ -1196,7 +1196,7 @@ if platform.system() == 'Windows':
                                     self._read_coro = self._write_coro = None
                                     self._read_overlap = self._write_overlap = None
                                     self._notifier = None
-                                else:
+                                elif rc:
                                     logger.warning('CancelIo failed?: %x' % rc)
                             if self._read_overlap and self._read_overlap.object:
                                 self._read_overlap.object = functools.partial(_cleanup_, self)
@@ -3546,6 +3546,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
         self._coros = {}
         self._channels = {}
         self.__class__.__instance = None
+        self._quit = True
         self._lock.release()
         self._notifier.terminate()
         logger.debug('AsynCoro terminated')
@@ -3556,10 +3557,10 @@ class AsynCoro(object, metaclass=MetaSingleton):
             except:
                 logger.warning('running %s failed:' % (func.__name__))
                 logger.warning(traceback.format_exc())
+        self._complete.set()
         logging.shutdown()
         # wait a bit for logger to flush
         time.sleep(0.01)
-        self._complete.set()
 
     def _exit(self, await_non_daemons):
         """Internal use only.
@@ -3585,8 +3586,15 @@ class AsynCoro(object, metaclass=MetaSingleton):
                 _Peer.quit(timeout=2)
                 self._complete.wait()
 
-            self._quit = True
-            self._notifier.interrupt()
+            self._lock.acquire()
+            if not self._quit:
+                self._complete.clear()
+                self._quit = True
+                self._lock.release()
+                self._notifier.interrupt()
+                self._complete.wait()
+            else:
+                self._lock.release()
 
     def finish(self):
         """Wait until all non-daemon coroutines finish and then
