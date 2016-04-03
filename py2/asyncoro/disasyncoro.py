@@ -132,7 +132,8 @@ class _Peer(object):
         def close(peer, coro=None):
             req = _NetRequest('peer_closed', kwargs={'location': _Peer._asyncoro._location},
                               dst=peer.location, timeout=timeout)
-            yield _Peer._asyncoro._sync_reply(req)
+            if peer.location in _Peer.peers:
+                yield _Peer._asyncoro._sync_reply(req)
         for peer in _Peer.peers.itervalues():
             Coro(close, peer)
 
@@ -1202,8 +1203,8 @@ class AsynCoro(asyncoro.AsynCoro):
                     logger.debug('peer %s terminated' % (peer_loc))
                     # TODO: remove from _stream_peers?
                     # self._stream_peers.pop((peer_loc.addr, peer_loc.port), None)
-                    _Peer.remove(peer_loc)
                     yield conn.send_msg(serialize('ack'))
+                    _Peer.remove(peer_loc)
                 break
             elif req.name == 'stream':
                 yield conn.send_msg(serialize('ack'))
