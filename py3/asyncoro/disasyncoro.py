@@ -140,6 +140,7 @@ class _Peer(object):
     def req_proc(self, coro=None):
         coro.set_daemon()
         conn_errors = 0
+        req = None
         while 1:
             if not self.reqs:
                 if not self.stream and self.conn:
@@ -161,7 +162,6 @@ class _Peer(object):
                         self.conn.shutdown(socket.SHUT_WR)
                         self.conn.close()
                         self.conn = None
-                    self.req_coro = None
                     break
                 except:
                     if self.conn:
@@ -175,7 +175,6 @@ class _Peer(object):
                     if conn_errors >= MaxConnectionErrors:
                         logger.warning('too many connection errors to %s; removing it' %
                                        self.location)
-                        self.req_coro = None
                         break
                     continue
                 else:
@@ -218,11 +217,11 @@ class _Peer(object):
                 self.conn = None
                 req.reply = None
             except GeneratorExit:
-                if req.name != 'peer_closed' and self.reqs:
+                if not req or req.name != 'peer_closed':
                     for req in self.reqs:
                         if req.name == 'peer_closed':
                             break
-                if req.name == 'peer_closed' and isinstance(req.event, Event):
+                if req and req.name == 'peer_closed' and isinstance(req.event, Event):
                     req.event.set()
                 if self.conn:
                     try:
@@ -243,9 +242,9 @@ class _Peer(object):
                     self.conn = None
                 req.reply = None
 
-        if self.req_coro:
-            self.req_coro = None
-            _Peer.remove(self.location)
+        self.req_coro = None
+        self.reqs.clear()
+        _Peer.remove(self.location)
         raise StopIteration
 
     @staticmethod

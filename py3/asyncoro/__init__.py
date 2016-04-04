@@ -3349,7 +3349,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                     timeout, cid, alarm_value = heappop(self._timeouts)
                     assert timeout <= now
                     coro = self._coros.get(cid, None)
-                    if coro is None or coro._timeout != timeout:
+                    if not coro or coro._timeout != timeout:
                         continue
                     if coro._state not in (AsynCoro._AwaitIO_, AsynCoro._Suspended,
                                            AsynCoro._AwaitMsg_):
@@ -3589,7 +3589,11 @@ class AsynCoro(object, metaclass=MetaSingleton):
 
             self._lock.acquire()
             if not self._quit:
+                self._complete.clear()
                 self._quit = True
+                # add a dummy timeout so scheduler will not wait for any other
+                # timeouts left behind by coroutines that may have quit already
+                heappush(self._timeouts, (_time() + 0.1, None, None))
                 self._lock.release()
                 self._notifier.interrupt()
                 self._complete.wait()
