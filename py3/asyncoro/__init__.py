@@ -17,7 +17,7 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "3.6.13"
+__version__ = "3.6.14"
 
 __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
@@ -80,6 +80,7 @@ def unserialize(pkl):
 
 
 class MetaSingleton(type):
+
     __instance = None
 
     def __call__(cls, *args, **kwargs):
@@ -3588,7 +3589,6 @@ class AsynCoro(object, metaclass=MetaSingleton):
 
             self._lock.acquire()
             if not self._quit:
-                self._complete.clear()
                 self._quit = True
                 self._lock.release()
                 self._notifier.interrupt()

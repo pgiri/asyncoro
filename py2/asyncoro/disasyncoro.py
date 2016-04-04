@@ -130,9 +130,9 @@ class _Peer(object):
     @staticmethod
     def quit(timeout=None):
         def close(peer, coro=None):
-            req = _NetRequest('peer_closed', kwargs={'location': _Peer._asyncoro._location},
-                              dst=peer.location, timeout=timeout)
-            if peer.location in _Peer.peers:
+            if (peer.location.addr, peer.location.port) in _Peer.peers:
+                req = _NetRequest('peer_closed', kwargs={'location': _Peer._asyncoro._location},
+                                  dst=peer.location, timeout=timeout)
                 yield _Peer._asyncoro._sync_reply(req)
         for peer in _Peer.peers.itervalues():
             Coro(close, peer)
@@ -218,6 +218,12 @@ class _Peer(object):
                 self.conn = None
                 req.reply = None
             except GeneratorExit:
+                if req.name != 'peer_closed' and self.reqs:
+                    for req in self.reqs:
+                        if req.name == 'peer_closed':
+                            break
+                if req.name == 'peer_closed' and isinstance(req.event, Event):
+                    req.event.set()
                 if self.conn:
                     try:
                         self.conn.shutdown(socket.SHUT_WR)
@@ -237,7 +243,9 @@ class _Peer(object):
                     self.conn = None
                 req.reply = None
 
-        _Peer.remove(self.location)
+        if self.req_coro:
+            self.req_coro = None
+            _Peer.remove(self.location)
         raise StopIteration
 
     @staticmethod
@@ -1203,8 +1211,8 @@ class AsynCoro(asyncoro.AsynCoro):
                     logger.debug('peer %s terminated' % (peer_loc))
                     # TODO: remove from _stream_peers?
                     # self._stream_peers.pop((peer_loc.addr, peer_loc.port), None)
-                    yield conn.send_msg(serialize('ack'))
                     _Peer.remove(peer_loc)
+                    yield conn.send_msg(serialize('ack'))
                 break
             elif req.name == 'stream':
                 yield conn.send_msg(serialize('ack'))

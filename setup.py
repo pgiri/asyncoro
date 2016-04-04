@@ -12,7 +12,7 @@ else:
 
 setup(
     name='asyncoro',
-    version='3.6.13',
+    version='3.6.14',
     description='Python framework for concurrent, distributed, asynchronous network programming with coroutines, asynchronous completions and message passing.',
     long_description=open('README.rst').read(),
     keywords='concurrent, distributed, asynchronous network programming, coroutines, message passing',
