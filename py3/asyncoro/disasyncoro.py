@@ -97,10 +97,7 @@ class _Peer(object):
         _Peer.peers[(location.addr, location.port)] = self
         self.req_coro = Coro(self.req_proc)
         if _Peer.status_coro:
-            try:
-                _Peer.status_coro.send(PeerStatus(location, name, PeerStatus.Online))
-            except:
-                pass
+            _Peer.status_coro.send(PeerStatus(location, name, PeerStatus.Online))
 
     @staticmethod
     def send_req(req):
@@ -128,14 +125,15 @@ class _Peer(object):
         return 0
 
     @staticmethod
-    def quit(timeout=None):
-        def close(peer, coro=None):
-            if (peer.location.addr, peer.location.port) in _Peer.peers:
-                req = _NetRequest('peer_closed', kwargs={'location': _Peer._asyncoro._location},
-                                  dst=peer.location, timeout=timeout)
-                yield _Peer._asyncoro._sync_reply(req)
+    def close(timeout=None, coro=None):
+        def _close_peer(peer, coro=None):
+            req = _NetRequest('peer_closed', kwargs={'location': _Peer._asyncoro._location},
+                              dst=peer.location, timeout=timeout)
+            yield _Peer._asyncoro._sync_reply(req)
+
         for peer in _Peer.peers.values():
-            Coro(close, peer)
+            Coro(_close_peer, peer)
+        yield None
 
     def req_proc(self, coro=None):
         coro.set_daemon()
@@ -148,7 +146,10 @@ class _Peer(object):
                     self.conn.close()
                     self.conn = None
                 self.reqs_pending.clear()
-                yield self.reqs_pending.wait()
+                try:
+                    yield self.reqs_pending.wait()
+                except GeneratorExit:
+                    break
             req = self.reqs.popleft()
             if not self.conn:
                 self.conn = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
@@ -159,8 +160,11 @@ class _Peer(object):
                     yield self.conn.connect((self.location.addr, self.location.port))
                 except GeneratorExit:
                     if self.conn:
-                        self.conn.shutdown(socket.SHUT_WR)
-                        self.conn.close()
+                        try:
+                            self.conn.shutdown(socket.SHUT_WR)
+                            self.conn.close()
+                        except:
+                            pass
                         self.conn = None
                     break
                 except:
@@ -217,12 +221,6 @@ class _Peer(object):
                 self.conn = None
                 req.reply = None
             except GeneratorExit:
-                if not req or req.name != 'peer_closed':
-                    for req in self.reqs:
-                        if req.name == 'peer_closed':
-                            break
-                if req and req.name == 'peer_closed' and isinstance(req.event, Event):
-                    req.event.set()
                 if self.conn:
                     try:
                         self.conn.shutdown(socket.SHUT_WR)
@@ -242,8 +240,15 @@ class _Peer(object):
                     self.conn = None
                 req.reply = None
 
-        self.req_coro = None
+        if req and req.name == 'peer_closed' and isinstance(req.event, Event):
+            req.event.set()
+        else:
+            for req in self.reqs:
+                if req.name == 'peer_closed' and isinstance(req.event, Event):
+                    req.event.set()
+                    break
         self.reqs.clear()
+        self.req_coro = None
         _Peer.remove(self.location)
         raise StopIteration
 
@@ -256,10 +261,7 @@ class _Peer(object):
                 peer.req_coro.terminate()
                 peer.req_coro = None
             if _Peer.status_coro:
-                try:
-                    _Peer.status_coro.send(PeerStatus(peer.location, peer.name, PeerStatus.Offline))
-                except:
-                    pass
+                _Peer.status_coro.send(PeerStatus(peer.location, peer.name, PeerStatus.Offline))
 
     @staticmethod
     def peer_status(coro):
@@ -779,7 +781,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             pass
         ping_sock.close()
 
-        while True:
+        while 1:
             msg, addr = yield self._udp_sock.recvfrom(1024)
             if not msg.startswith(b'ping:'):
                 logger.warning('ignoring UDP message from %s:%s', addr[0], addr[1])
@@ -813,9 +815,12 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             try:
                 yield sock.connect((req_peer.addr, req_peer.port))
                 yield sock.send_msg(serialize(req))
+            except GeneratorExit:
+                break
             except:
                 pass
-            sock.close()
+            finally:
+                sock.close()
 
             if ping_info.pop('broadcast', None):
                 ping_sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
@@ -826,9 +831,12 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 try:
                     yield ping_sock.sendto(ping_msg,
                                            ('<broadcast>', self._udp_sock.getsockname()[1]))
+                except GeneratorExit:
+                    break
                 except:
                     pass
-                ping_sock.close()
+                finally:
+                    ping_sock.close()
             elif ping_info.pop('propagate', None):
                 for peer in [peer for peer in _Peer.peers.values()
                              if peer.location.addr == self._location.addr and
@@ -840,22 +848,25 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                     try:
                         yield sock.connect((peer.location.addr, peer.location.port))
                         yield sock.send_msg(serialize(req))
+                    except GeneratorExit:
+                        break
                     except:
                         pass
-                    sock.close()
+                    finally:
+                        sock.close()
 
     def _tcp_proc(self, coro=None):
         """Internal use only.
         """
         coro.set_daemon()
-        while True:
+        while 1:
             conn, addr = yield self._tcp_sock.accept()
             Coro(self._tcp_task, conn, addr)
 
     def _tcp_task(self, conn, addr, coro=None):
         """Internal use only.
         """
-        while True:
+        while 1:
             try:
                 msg = yield conn.recv_msg()
             except:

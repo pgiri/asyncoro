@@ -939,7 +939,7 @@ if platform.system() == 'Windows':
                 self.cmd_rsock = AsyncSocket(self.cmd_rsock)
                 setattr(self.cmd_rsock, '_read_task', lambda: self.cmd_rsock._rsock.recv(128))
                 self.add(self.cmd_rsock, _AsyncPoller._Read)
-                while True:
+                while 1:
                     self.polling = True
                     rlist, wlist, xlist = self.poller(self.rset, self.wset, self.xset)
                     self.polling = False
@@ -2975,7 +2975,7 @@ class CategorizeMessages(object):
             raise StopIteration(msg)
         if timeout:
             start = _time()
-        while True:
+        while 1:
             msg = yield self._coro.receive(timeout=timeout, alarm_value=alarm_value)
             if msg == alarm_value:
                 raise StopIteration(msg)
@@ -3531,7 +3531,7 @@ class AsynCoro(object):
 
             self._complete.wait()
             if self._location:
-                _Peer.quit(timeout=2)
+                Coro(_Peer.close, timeout=2)
                 self._complete.wait()
 
             self._lock.acquire()
@@ -3605,7 +3605,7 @@ class AsyncThreadPool(object):
             tasklet.start()
 
     def _tasklet(self):
-        while True:
+        while 1:
             item = self._task_queue.get(block=True)
             if item is None:
                 self._task_queue.task_done()
