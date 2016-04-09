@@ -1,9 +1,6 @@
 # This example uses status messages and message passing to run 'setup' coroutine
 # at remote process to prepare it for processing jobs.
 
-# DiscoroStatus must be imported in global scope as below; otherwise,
-# unserializing status messages fails (if external scheduler is used)
-from asyncoro.discoro import DiscoroStatus
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro_schedulers import RemoteCoroScheduler
@@ -74,7 +71,3 @@ if __name__ == '__main__':
     client = asyncoro.Coro(client_proc, computation, 10)
     # use RemoteCoroScheduler to start coroutines at servers
     rcoro_scheduler = RemoteCoroScheduler(computation)
-    # call '.value()' of coroutine created here, otherwise main thread
-    # may finish (causing interpreter to start cleanup) before asyncoro
-    # scheduler gets a chance to start
-    client.value()

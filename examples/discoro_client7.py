@@ -33,13 +33,16 @@ def client_proc(computation, coro=None):
             httpd.status_coro.send(msg)
             if isinstance(msg, asyncoro.MonitorException):
                 if msg.args[1][0] == StopIteration:
-                    print('result from %s: %s' % (msg.args[0].location, msg.args[1][1]))
+                    print('    result from %s: %s' % (msg.args[0].location, msg.args[1][1]))
                 else:
                     # if computation is reentrant, resubmit this job
                     # (keep track of submitted rcoro, args and kwargs)
-                    print('%s failed: %s' % (msg.args[0], msg.args[1][1]))
+                    print('    %s failed: %s' % (msg.args[0], msg.args[1][1]))
 
     job_scheduler = RemoteCoroScheduler(computation)
+    # to illustrate passing status messages to multiple coroutines,
+    # httpd is also used in this example:
+    httpd = asyncoro.httpd.HTTPServer(computation)
     computation.status_coro = asyncoro.Coro(status_proc)
 
     if (yield computation.schedule()):
@@ -51,6 +54,7 @@ def client_proc(computation, coro=None):
 
     # wait for all jobs to be done and close computation
     yield job_scheduler.finish(close=True)
+    httpd.shutdown()
 
 
 if __name__ == '__main__':
@@ -58,13 +62,8 @@ if __name__ == '__main__':
     # if scheduler is not already running (on a node as a program),
     # start private scheduler:
     discoro.Scheduler()
-    # send 'compute' generator function
-    computation = discoro.Computation([compute], timeout=5)
-    # to illustrate passing status messages to multiple coroutines,
-    # httpd is also used in this example:
-    httpd = asyncoro.httpd.HTTPServer(computation)
-    # call '.value()' of coroutine created here, otherwise main thread
-    # may finish (causing interpreter to start cleanup) before asyncoro
-    # scheduler gets a chance to start
-    asyncoro.Coro(client_proc, computation).value()
-    httpd.shutdown()
+    # send 'compute' generator function;
+    # use MinPulseInterval so node status updates are sent more frequently
+    # (instead of default 2*MinPulseInterval)
+    computation = discoro.Computation([compute], timeout=5, pulse_interval=discoro.MinPulseInterval)
+    asyncoro.Coro(client_proc, computation)

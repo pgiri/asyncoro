@@ -9,7 +9,6 @@
 # program back to the client.
 
 import logging, random, sys, os
-from asyncoro.discoro import DiscoroStatus
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
 import asyncoro.discoro_schedulers
@@ -119,4 +118,4 @@ if __name__ == '__main__':
     # send rcoro_proc and discomp4_proc.py
     computation = discoro.Computation([rcoro_proc, os.path.join(os.path.dirname(sys.argv[0]),
                                                                 'discomp4_proc.py')])
-    asyncoro.Coro(client_proc, computation, n).value()
+    asyncoro.Coro(client_proc, computation, n)

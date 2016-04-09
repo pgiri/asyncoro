@@ -135,7 +135,4 @@ if __name__ == '__main__':
     # othrwise, start private scheduler:
     discoro.Scheduler()
     computation = discoro.Computation([])
-    # call '.value()' of coroutine created here, otherwise main thread
-    # may finish (causing interpreter to start cleanup) before asyncoro
-    # scheduler gets a chance to start
-    asyncoro.Coro(client_proc, computation).value()
+    asyncoro.Coro(client_proc, computation)

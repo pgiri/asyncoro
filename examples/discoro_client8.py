@@ -49,7 +49,7 @@ def client_proc(computation, n, coro=None):
     # necessary/available, running one job at a server process
     jobs = [asyncoro.Coro(exec_proc, compute, random.uniform(3, 10)) for _ in range(n)]
     for job in jobs:
-        print('result: %s' % (yield job.finish()))
+        print('    result: %s' % (yield job.finish()))
 
     yield job_scheduler.finish(close=True)
 
@@ -63,7 +63,4 @@ if __name__ == '__main__':
     discoro.Scheduler()
     # send 'compute' generator function
     computation = discoro.Computation([compute])
-    # call '.value()' of coroutine created here, otherwise main thread
-    # may finish (causing interpreter to start cleanup) before asyncoro
-    # scheduler gets a chance to start
-    asyncoro.Coro(client_proc, computation, n).value()
+    asyncoro.Coro(client_proc, computation, n)

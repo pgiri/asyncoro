@@ -53,5 +53,5 @@ if __name__ == '__main__':
     # start it (private scheduler):
     discoro.Scheduler()
     computation = discoro.Computation([rcoro_proc])
-    # run 10 jobs
-    asyncoro.Coro(client_proc, computation, 10 if len(sys.argv) < 2 else int(sys.argv[1])).value()
+    # run 10 (or given number of) jobs
+    asyncoro.Coro(client_proc, computation, 10 if len(sys.argv) < 2 else int(sys.argv[1]))

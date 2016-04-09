@@ -78,7 +78,7 @@ def client_proc(job_id, rcoro, coro=None):
     output = os.path.join(asyncoro.AsynCoro().dest_path, 'output%s.dat' % obj.i)
     # if necessary, move file to os.getcwd()
     # os.rename(output, os.getcwd())
-    print('job %s processed' % (obj.i))
+    print('    job %s processed' % (obj.i))
 
 
 def submit_jobs_proc(computation, njobs, coro=None):
@@ -111,4 +111,4 @@ if __name__ == '__main__':
     # which is a bit inefficient
     computation = discoro.Computation([C])
     # run 10 jobs
-    asyncoro.Coro(submit_jobs_proc, computation, 10).value()
+    asyncoro.Coro(submit_jobs_proc, computation, 10)

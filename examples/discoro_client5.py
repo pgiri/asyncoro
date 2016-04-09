@@ -17,6 +17,7 @@ from asyncoro.discoro_schedulers import RemoteCoroScheduler
 # this generator function is sent to remote discoro servers to run
 # coroutines there
 def compute(n, client, coro=None):
+    # this message is shown at server where this coroutine is executing
     print('process at %s received: %s' % (coro.location, n))
     yield coro.sleep(n)
     client.send(n)  # send n to results coro at client
@@ -57,7 +58,4 @@ if __name__ == '__main__':
     discoro.Scheduler()
     # send 'compute' generator function
     computation = discoro.Computation([compute], timeout=5)
-    # call '.value()' of coroutine created here, otherwise main thread
-    # may finish (causing interpreter to start cleanup) before asyncoro
-    # scheduler gets a chance to start
-    asyncoro.Coro(client_proc, computation).value()
+    asyncoro.Coro(client_proc, computation)

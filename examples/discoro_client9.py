@@ -21,9 +21,9 @@ def proc_available(location, coro=None):
     # available. 'location' is Location instance of server. When this coroutine
     # is executed, 'depends' of computation would've been transferred.
 
-    # data_file could've been sent with the computation 'depends'; here, to
+    # data_file could've been sent with the computation 'depends'; however, to
     # illustrate how files can be sent separately, file is transferred during
-    # setup. Different servers can also be sent different files, perhaps to
+    # setup. Different servers can also be sent different files, for example, to
     # distribute the data among servers.
     if (yield asyncoro.AsynCoro().send_file(location, data_file, timeout=5)) < 0:
         print('Could not send data file "%s" to %s' % (data_file, location))
@@ -100,9 +100,9 @@ def client_proc(computation, coro=None):
     for job in jobs:
         result = yield job.finish()
         if isinstance(result, tuple) and len(result) == 2:
-            print('%ssum: %s' % (result[0], result[1]))
+            print('    %ssum: %s' % (result[0], result[1]))
         else:
-            print('rcoro %s failed: %s' % (job, result))
+            print('  rcoro %s failed: %s' % (job, result))
 
     yield job_scheduler.finish(close=True)
 
@@ -122,4 +122,4 @@ if __name__ == '__main__':
     # This should be created before scheduling computation
     job_scheduler = RemoteCoroScheduler(computation, proc_available=proc_available,
                                         proc_close=proc_close)
-    asyncoro.Coro(client_proc, computation).value()
+    asyncoro.Coro(client_proc, computation)

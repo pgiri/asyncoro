@@ -4,9 +4,6 @@
 # The remote servers are initialized (to create AsyncThreadPool) with a setup
 # coroutine and that pool is later used to execute computations.
 
-# DiscoroStatus must be imported in global scope as below; otherwise,
-# unserializing status messages fails (if external scheduler is used)
-from asyncoro.discoro import DiscoroStatus
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
 
@@ -94,20 +91,22 @@ def client_proc(computation, njobs, coro=None):
             # a process finished job
             rcoro = msg.args[0]
             if msg.args[1][0] == StopIteration and len(msg.args[1][1]) == 2:
-                print('result from %s: %s' % (msg.args[1][1][0], msg.args[1][1][1]))
+                print('    result from %s: %s' % (msg.args[1][1][0], msg.args[1][1][1]))
             else:
-                print('%s failed: %s' % (rcoro.location, str(msg.args[1])))
+                print('  %s failed: %s' % (rcoro.location, str(msg.args[1])))
             status['done'] += 1
             if status['done'] == njobs:
                 break
             if status['submitted'] < njobs:
                 # schedule another job at this process
                 asyncoro.Coro(submit_job, rcoro.location)
-        elif isinstance(msg, DiscoroStatus):
+        elif isinstance(msg, discoro.DiscoroStatus):
             # asyncoro.logger.debug('Node/Server status: %s, %s' % (msg.status, msg.info))
             if msg.status == discoro.Scheduler.ServerInitialized and status['submitted'] < njobs:
                 # a new process is available; initialize it
                 asyncoro.Coro(init_proc, msg.info)
+        elif isinstance(msg, discoro.DiscoroNodeAvailInfo):
+            pass
         else:
             asyncoro.logger.debug('Ignoring status message %s' % str(msg))
 
@@ -125,8 +124,5 @@ if __name__ == '__main__':
     # start it (private scheduler):
     discoro.Scheduler()
     computation = discoro.Computation([compute_coro, compute_func])
-    # call '.value()' of coroutine created here, otherwise main thread
-    # may finish (causing interpreter to start cleanup) before asyncoro
-    # scheduler gets a chance to start
     # run 10 jobs
-    asyncoro.Coro(client_proc, computation, 10).value()
+    asyncoro.Coro(client_proc, computation, 10)

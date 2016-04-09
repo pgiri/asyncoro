@@ -6,9 +6,6 @@
 # results back to client. httpd module is also used so status of cluster / node
 # / server can be monitored in a web browser.
 
-# DiscoroStatus must be imported in global scope as below; otherwise,
-# unserializing status messages fails (if external scheduler is used)
-from asyncoro.discoro import DiscoroStatus
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro_schedulers import RemoteCoroScheduler
@@ -37,13 +34,13 @@ def compute_coro(client, coro=None):
     else:
         import Queue as queue
 
-    # requests from client are received by the coroutine and sent to thread with
-    # Queue. Thread can't receive from client, as message passing is not
-    # available in threads.
+    # requests from client are received by this coroutine and sent to thread
+    # function with Queue. Thread function can't receive from client, as message
+    # passing is not available in threads.
     thread_queue = queue.Queue()
     # thread process sets thread_done asyncoro event that the compute_coro waits
-    # for (setting the event and sending messages are regular functions, so they
-    # can be used in thread)
+    # for (setting the asynchronous event and sending messages are regular
+    # functions, so they can be used in thread)
     thread_done = asyncoro.Event()
 
     def compute_func(): # executed in a thread
@@ -75,6 +72,10 @@ def client_proc(computation, njobs, coro=None):
     # RemoteCoroScheduler is used to run at most one coroutine at a server
     # process This should be created before scheduling computation
     job_scheduler = RemoteCoroScheduler(computation)
+
+    # to illustrate passing status messages to multiple coroutines,
+    # httpd is also used in this example:
+    httpd = asyncoro.httpd.HTTPServer(computation)
 
     # 'status_proc' receives status messages from discoro scheduler
     def status_proc(coro=None):
@@ -133,6 +134,7 @@ def client_proc(computation, njobs, coro=None):
         yield job.finish()
 
     yield job_scheduler.finish(close=True)
+    httpd.shutdown()
 
 if __name__ == '__main__':
     import logging, random, sys
@@ -140,14 +142,9 @@ if __name__ == '__main__':
     # if scheduler is not already running (on a node as a program),
     # start it (private scheduler):
     discoro.Scheduler()
-    computation = discoro.Computation([compute_coro])
-    # to illustrate passing status messages to multiple coroutines,
-    # httpd is also used in this example:
-    httpd = asyncoro.httpd.HTTPServer(computation)
+    # use MinPulseInterval so node status updates are sent more frequently
+    # (instead of default 2*MinPulseInterval)
+    computation = discoro.Computation([compute_coro], pulse_interval=discoro.MinPulseInterval)
 
-    # call '.value()' of coroutine created here, otherwise main thread
-    # may finish (causing interpreter to start cleanup) before asyncoro
-    # scheduler gets a chance to start
     # run 10 (or given number of) jobs
-    asyncoro.Coro(client_proc, computation, 10 if len(sys.argv) < 2 else int(sys.argv[1])).value()
-    httpd.shutdown()
+    asyncoro.Coro(client_proc, computation, 10 if len(sys.argv) < 2 else int(sys.argv[1]))

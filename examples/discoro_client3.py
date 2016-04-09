@@ -5,9 +5,6 @@
 # RemoteCoroScheduler, it uses status message notifications from discoro
 # scheduler to submit jobs at remote discoronode processes.
 
-# DiscoroStatus must be imported in global scope as below; otherwise,
-# unserializing status messages fails (if external scheduler is used)
-from asyncoro.discoro import DiscoroStatus
 import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
 
@@ -28,9 +25,9 @@ def status_proc(computation, njobs, coro=None):
         if isinstance(msg, asyncoro.MonitorException):
             rcoro = msg.args[0]
             if msg.args[1][0] == StopIteration:
-                print('  rcoro_proc at %s finished with %s' % (rcoro.location, msg.args[1][1]))
+                print('    rcoro_proc at %s finished with %s' % (rcoro.location, msg.args[1][1]))
             else:
-                print('  rcoro_proc at %s failed: %s / %s' %
+                print('    rcoro_proc at %s failed: %s / %s' %
                       (rcoro.location, msg.args[1][0], msg.args[1][1]))
 
             npending -= 1
@@ -42,7 +39,7 @@ def status_proc(computation, njobs, coro=None):
                 if isinstance(rcoro, asyncoro.Coro):
                     print('rcoro_proc started at %s with %s' % (rcoro.location, n))
                     njobs -= 1
-        elif isinstance(msg, DiscoroStatus):
+        elif isinstance(msg, discoro.DiscoroStatus):
             # print('Status: %s / %s' % (msg.info, msg.status))
             if msg.status == discoro.Scheduler.ServerInitialized and njobs > 0: # submit a job
                 n = random.uniform(5, 10)
@@ -67,8 +64,5 @@ if __name__ == '__main__':
     # start it (private scheduler):
     discoro.Scheduler()
     computation = discoro.Computation([rcoro_proc])
-    # call '.value()' of coroutine created here, otherwise main thread
-    # may finish (causing interpreter to start cleanup) before asyncoro
-    # scheduler gets a chance to start
     # run 10 jobs
-    asyncoro.Coro(client_proc, computation, 10).value()
+    asyncoro.Coro(client_proc, computation, 10)

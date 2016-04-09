@@ -7,7 +7,6 @@
 
 import sys, logging, random
 import asyncoro.discoro as discoro
-from asyncoro.discoro import DiscoroStatus
 import asyncoro.disasyncoro as asyncoro
 
 
@@ -39,16 +38,16 @@ def status_proc(coro=None):
         http_server.status_coro.send(msg)
         if isinstance(msg, asyncoro.MonitorException):
             if msg.args[1][0] == StopIteration:
-                print('  rcoro %s done' % (msg.args[0]))
+                print('    rcoro %s done' % (msg.args[0]))
             else:
                 print('  rcoro %s failed: %s / %s' % (msg.args[0], msg.args[1][0], msg.args[1][1]))
-        elif isinstance(msg, DiscoroStatus):
+        elif isinstance(msg, discoro.DiscoroStatus):
             if msg.status == discoro.Scheduler.CoroCreated:
                 print('rcoro %s started' % msg.info.coro)
             # else:
             #     print('Status: %s / %s' % (msg.status, msg.info))
 
-        elif isinstance(msg, discoro.DiscoroNodeStatus):
+        elif isinstance(msg, discoro.DiscoroNodeAvailInfo):
             pass
         else:
             print('status msg ignored: %s' % type(msg))
@@ -69,7 +68,7 @@ def client_proc(computation, coro=None):
             break
         i += 1
         c = C(i)
-        c.n = random.uniform(50, 90)
+        c.n = random.uniform(20, 50)
         if cmd == 'servers':
             yield computation.run_servers(compute, c, coro)
         elif cmd == 'nodes':
@@ -88,7 +87,9 @@ if __name__ == '__main__':
     discoro.Scheduler()
     # send generator function and class C (as the computation uses
     # objects of C)
-    computation = discoro.Computation([compute, C])
+    # use MinPulseInterval so node status updates are sent more frequently
+    # (instead of default 2*MinPulseInterval)
+    computation = discoro.Computation([compute, C], pulse_interval=discoro.MinPulseInterval)
     # create http server to monitor nodes, servers, coroutines
     http_server = asyncoro.httpd.HTTPServer(computation)
     coro = asyncoro.Coro(client_proc, computation)

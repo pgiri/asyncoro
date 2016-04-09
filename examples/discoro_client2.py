@@ -49,7 +49,7 @@ def client_proc(computation, njobs, coro=None):
     def recv_results(coro=None):
         for i in range(njobs):
             msg = yield coro.receive()
-            print('result: %s' % msg)
+            print('    result for job %d: %s' % (i, msg))
 
     results_coro = asyncoro.Coro(recv_results)
     # remote coroutines send replies as messages to this coro
@@ -59,6 +59,7 @@ def client_proc(computation, njobs, coro=None):
         # as noted in 'discoro_client1.py', 'schedule' method is used to run
         # jobs sequentially; use 'submit' to run multiple jobs on one server
         # concurrently
+        print('request %d: %s' % (i, cobj.n))
         rcoro = yield rcoro_scheduler.schedule(compute, cobj, results_coro)
         if not isinstance(rcoro, asyncoro.Coro):
             print('failed to create rcoro %s: %s' % (i, rcoro))
@@ -78,4 +79,4 @@ if __name__ == '__main__':
     # objects of C)
     computation = discoro.Computation([compute, C])
     # create 10 remote coroutines (jobs)
-    asyncoro.Coro(client_proc, computation, 10).value()
+    asyncoro.Coro(client_proc, computation, 10)

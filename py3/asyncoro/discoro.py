@@ -531,13 +531,6 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
         self.__client_coro = Coro(self.__client_proc)
         self.__timer_coro = Coro(self.__timer_proc)
         self._status_coro = Coro(self.__status_proc)
-        atexit.register(self.__close)
-
-    def __close(self):
-        # TODO: wait for pending coroutines?
-        self.__timer_coro.terminate()
-        self.__client_coro.terminate()
-        self._status_coro.terminate()
 
     def __status_proc(self, coro=None):
         coro.set_daemon()
