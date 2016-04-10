@@ -17,7 +17,7 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "3.6.14"
+__version__ = "3.6.15"
 
 __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
@@ -3531,7 +3531,7 @@ class AsynCoro(object):
 
             self._complete.wait()
             if self._location:
-                Coro(_Peer.close, timeout=2)
+                Coro(_Peer.shutdown, timeout=2)
                 self._complete.wait()
 
             self._lock.acquire()

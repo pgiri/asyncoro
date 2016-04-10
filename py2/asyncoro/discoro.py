@@ -993,7 +993,7 @@ class Scheduler(object):
     def __close_server(self, server, coro=None):
         computation = self._cur_computation
         if not computation or server.status != Scheduler.ServerInitialized:
-            logger.warning('Closing server %s ignored' % server.location)
+            logger.debug('Closing server %s ignored' % server.location)
             raise StopIteration(-1)
         node = self._nodes.get(server.location.addr, None)
         if not node:

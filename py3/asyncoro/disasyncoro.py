@@ -100,6 +100,10 @@ class _Peer(object):
             _Peer.status_coro.send(PeerStatus(location, name, PeerStatus.Online))
 
     @staticmethod
+    def get_peers():
+        return [Location(addr, port) for (addr, port) in _Peer.peers.iterkeys()]
+
+    @staticmethod
     def send_req(req):
         peer = _Peer.peers.get((req.dst.addr, req.dst.port), None)
         if peer is None:
@@ -125,14 +129,16 @@ class _Peer(object):
         return 0
 
     @staticmethod
-    def close(timeout=None, coro=None):
-        def _close_peer(peer, coro=None):
-            req = _NetRequest('peer_closed', kwargs={'location': _Peer._asyncoro._location},
-                              dst=peer.location, timeout=timeout)
-            yield _Peer._asyncoro._sync_reply(req)
+    def close_peer(location, timeout, coro=None):
+        req = _NetRequest('peer_closed', kwargs={'location': _Peer._asyncoro._location},
+                          dst=location, timeout=timeout)
+        yield _Peer._asyncoro._sync_reply(req)
+        _Peer.remove(location)
 
+    @staticmethod
+    def shutdown(timeout=None, coro=None):
         for peer in _Peer.peers.values():
-            Coro(_close_peer, peer)
+            Coro(_Peer.close_peer, peer.location, timeout)
         yield None
 
     def req_proc(self, coro=None):
@@ -423,6 +429,9 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
     'ext_ip_addr' is the IP address of NAT firewall/gateway if
     asyncoro is behind that firewall/gateway.
 
+    If 'discover_peers' is True (default), this node broadcasts message to
+    detect other peers. If it is False, message is not broadcasted.
+
     'secret' is string that is used to hash which is used for
     authentication, so only peers that have same secret can
     communicate.
@@ -442,7 +451,8 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
     __instance = None
 
     def __init__(self, udp_port=0, tcp_port=0, node=None, ext_ip_addr=None,
-                 name=None, secret='', certfile=None, keyfile=None, notifier=None,
+                 name=None, discover_peers=True,
+                 secret='', certfile=None, keyfile=None, notifier=None,
                  dest_path=None, max_file_size=None):
         if self.__class__.__instance is None:
             super(AsynCoro, self).__init__(notifier=notifier)
@@ -510,12 +520,13 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             self._rcis = {}
             self._pending_reqs = {}
             self._tcp_sock.listen(32)
-            logger.info('network server %s@ %s, udp_port=%s', '"%s" ' % name if name else '',
+            logger.info('version %s network server %s@ %s, udp_port=%s',
+                        __version__, '"%s" ' % name if name else '',
                         self._location, self._udp_sock.getsockname()[1])
             self._tcp_sock = AsyncSocket(self._tcp_sock, keyfile=self._keyfile,
                                          certfile=self._certfile)
             self._tcp_coro = Coro(self._tcp_proc)
-            self._udp_coro = Coro(self._udp_proc)
+            self._udp_coro = Coro(self._udp_proc, discover_peers)
 
     @property
     def dest_path(self):
@@ -673,6 +684,11 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
         """
         _Peer.peer_status(coro)
 
+    def peers(self):
+        """Returns list of current peers (as Location instances).
+        """
+        return _Peer.get_peers()
+
     def send_file(self, location, file, dir=None, overwrite=False, timeout=None):
         """Must be used with 'yield' as
         'val = yield scheduler.send_file(location, "file1")'.
@@ -765,21 +781,39 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             reply = -1
         raise StopIteration(reply)
 
-    def _udp_proc(self, coro=None):
+    def _udp_proc(self, discover_peers, coro=None):
         """Internal use only.
         """
+        def send_ping_req(peer, auth, coro=None):
+            req = _NetRequest('ping',
+                              kwargs={'location': self._location, 'signature': self._signature,
+                                      'name': self._name, 'version': __version__},
+                              dst=peer, auth=auth)
+            sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                               keyfile=self._keyfile, certfile=self._certfile)
+            sock.settimeout(2)
+            try:
+                yield sock.connect((peer.addr, peer.port))
+                yield sock.send_msg(serialize(req))
+            except:
+                pass
+            finally:
+                sock.close()
+
         coro.set_daemon()
-        ping_sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
-        ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        ping_sock.settimeout(2)
-        ping_msg = {'location': self._location, 'signature': self._signature,
-                    'name': self._name, 'version': __version__}
-        ping_msg = b'ping:' + serialize(ping_msg)
-        try:
-            yield ping_sock.sendto(ping_msg, ('<broadcast>', self._udp_sock.getsockname()[1]))
-        except:
-            pass
-        ping_sock.close()
+
+        if discover_peers:
+            ping_sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+            ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            ping_sock.settimeout(2)
+            ping_msg = {'location': self._location, 'signature': self._signature,
+                        'name': self._name, 'version': __version__}
+            ping_msg = b'ping:' + serialize(ping_msg)
+            try:
+                yield ping_sock.sendto(ping_msg, ('<broadcast>', self._udp_sock.getsockname()[1]))
+            except:
+                pass
+            ping_sock.close()
 
         while 1:
             msg, addr = yield self._udp_sock.recvfrom(1024)
@@ -805,22 +839,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             if peer and peer.auth == auth_code:
                 continue
 
-            req = _NetRequest('ping',
-                              kwargs={'location': self._location, 'signature': self._signature,
-                                      'name': self._name, 'version': __version__},
-                              dst=req_peer, auth=auth_code)
-            sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
-                               keyfile=self._keyfile, certfile=self._certfile)
-            sock.settimeout(2)
-            try:
-                yield sock.connect((req_peer.addr, req_peer.port))
-                yield sock.send_msg(serialize(req))
-            except GeneratorExit:
-                break
-            except:
-                pass
-            finally:
-                sock.close()
+            Coro(send_ping_req, req_peer, auth_code)
 
             if ping_info.pop('broadcast', None):
                 ping_sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
@@ -841,19 +860,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 for peer in [peer for peer in _Peer.peers.values()
                              if peer.location.addr == self._location.addr and
                              peer.location.port != self._location.port]:
-                    req = _NetRequest('ping', kwargs=ping_info, dst=peer.location, auth=peer.auth)
-                    sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
-                                       keyfile=self._keyfile, certfile=self._certfile)
-                    sock.settimeout(2)
-                    try:
-                        yield sock.connect((peer.location.addr, peer.location.port))
-                        yield sock.send_msg(serialize(req))
-                    except GeneratorExit:
-                        break
-                    except:
-                        pass
-                    finally:
-                        sock.close()
+                    Coro(send_ping_req, peer.location, peer.auth)
 
     def _tcp_proc(self, coro=None):
         """Internal use only.

@@ -90,6 +90,13 @@ def _discoro_proc():
     with open(_discoro_pid_path, 'w') as _discoro_var:
         _discoro_var.write('%s' % os.getpid())
 
+    def _discoro_peer(peer, coro=None):
+        yield asyncoro.AsynCoro.instance().peer(peer)
+
+    for _discoro_var in _discoro_config.pop('peers', []):
+        Coro(_discoro_peer, _discoro_var)
+    del _discoro_peer
+
     for _discoro_var in ['req', 'phoenix', 'min_pulse_interval', 'max_pulse_interval']:
         del _discoro_config[_discoro_var]
 
@@ -258,7 +265,7 @@ def _discoro_proc():
                                           'location': _discoro_coro.location})
             for _discoro_var in _discoro_job_coros:
                 _discoro_var.terminate()
-            _discoro_job_coros = set()
+            _discoro_job_coros.clear()
 
             if __name__ == '__mp_main__':  # Windows multiprocessing process
                 for _discoro_var in list(globals()):
@@ -418,8 +425,6 @@ def _discoro_process(_discoro_config, _discoro_name, _discoro_server_id,
     import logging
     import asyncoro.disasyncoro as asyncoro
 
-    _discoro_serve = _discoro_config.pop('serve', -1)
-    _discoro_phoenix = _discoro_config.pop('phoenix', False)
     _discoro_auth = hashlib.sha1(''.join(hex(_)[2:] for _ in os.urandom(10)).encode()).hexdigest()
     _discoro_config['name'] = '%s-%s' % (_discoro_name, _discoro_server_id)
     _discoro_config['tcp_port'] = _discoro_tcp_port
@@ -429,8 +434,13 @@ def _discoro_process(_discoro_config, _discoro_name, _discoro_server_id,
         asyncoro.logger.setLevel(logging.INFO)
     del _discoro_config['loglevel']
 
-    min_pulse_interval = _discoro_config.pop('min_pulse_interval')
-    max_pulse_interval = _discoro_config.pop('max_pulse_interval')
+    _discoro_config_msg = {'req': 'config', 'id': _discoro_server_id,
+                           'phoenix': _discoro_config.pop('phoenix', False),
+                           'serve': _discoro_config.pop('serve', -1),
+                           'peers': _discoro_config.pop('peers', []),
+                           'min_pulse_interval': _discoro_config.pop('min_pulse_interval'),
+                           'max_pulse_interval': _discoro_config.pop('max_pulse_interval'),
+                           'auth': _discoro_auth, 'mp_queue': _discoro_mp_queue}
 
     _discoro_scheduler = asyncoro.AsynCoro(**_discoro_config)
     _discoro_coro = asyncoro.Coro(_discoro_proc)
@@ -439,13 +449,8 @@ def _discoro_process(_discoro_config, _discoro_name, _discoro_server_id,
         if _discoro_var.startswith('_discoro_'):
             globals().pop(_discoro_var)
 
-    _discoro_coro.send({'req': 'config', 'id': _discoro_server_id,
-                        'phoenix': _discoro_phoenix, 'serve': _discoro_serve,
-                        'auth': _discoro_auth, 'mp_queue': _discoro_mp_queue,
-                        'min_pulse_interval': min_pulse_interval,
-                        'max_pulse_interval': max_pulse_interval})
-    del hashlib, logging, os, _discoro_serve, _discoro_phoenix
-    del min_pulse_interval, max_pulse_interval
+    _discoro_coro.send(_discoro_config_msg)
+    del hashlib, logging, os, _discoro_config_msg, _discoro_config
 
     req_queue, _discoro_mp_queue = _discoro_mp_queue, None
 
@@ -493,6 +498,7 @@ if __name__ == '__main__':
         import readline
     except:
         pass
+    import asyncoro.disasyncoro as asyncoro
 
     try:
         import psutil
@@ -538,6 +544,11 @@ if __name__ == '__main__':
     parser.add_argument('--phoenix', action='store_true', dest='phoenix', default=False,
                         help='if given, server processes from previous run will be killed '
                         'and new server process started')
+    parser.add_argument('--discover_peers', action='store_true', dest='discover_peers',
+                        default=False,
+                        help='if given, peers are discovered during startup')
+    parser.add_argument('--peer', dest='peers', action='append', default=[],
+                        help='peer location (in the form node:TCPport) to communicate')
     parser.add_argument('-d', '--debug', action='store_true', dest='loglevel', default=False,
                         help='if given, debug messages are printed')
     _discoro_config = vars(parser.parse_args(sys.argv[1:]))
@@ -578,6 +589,15 @@ if __name__ == '__main__':
             _discoro_tcp_ports.append(tcp_port)
     else:
         _discoro_tcp_ports = [0] * _discoro_cpus
+
+    peers, _discoro_config['peers'] = _discoro_config['peers'], []
+    peer = None
+    for peer in peers:
+        peer = peer.split(':')
+        if len(peer) != 2:
+            raise Exception('peer %s is not valid' % ':'.join(peer))
+        _discoro_config['peers'].append(asyncoro.Location(peer[0], peer[1]))
+    del peer, peers
 
     _discoro_name = _discoro_config['name']
     if not _discoro_name:
