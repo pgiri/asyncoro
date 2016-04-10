@@ -1,5 +1,5 @@
 include README.rst
-include LICENSE.txt
+include LICENSE
 include *.py
 recursive-include py2 *
 recursive-include py3 *

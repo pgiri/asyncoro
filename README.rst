@@ -1,8 +1,9 @@
-asyncoro
-########
+ asyncoro
+##########
 
 asyncoro is a Python framework for concurrent, distributed,
-asynchronous network programming.
+asynchronous network programming with coroutines, asynchronous
+completions and message passing.
 
 Unlike with other asynchronous frameworks, programs developed with
 asyncoro have **same logic and structure** as programs with threads,
@@ -51,40 +52,44 @@ Features
   <http://en.wikipedia.org/wiki/Location_transparency>`_ with naming
   and locating (local and remote) resources,
 
-* Remote execution of coroutines for distributed/parallel programming
-  with Remote Coroutine Invocation and message passing,
-
 * Monitoring and restarting of (local or remote) coroutines, for
   fault detection and fault-tolerance,
+
+* Distributing computation components (code and data) for execution of
+  distributed communicating processes, for wide range of use cases,
+  covering `SIMD, MISD, MIMD
+  <https://en.wikipedia.org/wiki/Flynn%27s_taxonomy>`_ system
+  architectures at the process level, `web interface
+  <http://asyncoro.sourceforge.net/discoro.html#client-browser-interface>`_
+  to monitor cluster/application status/performance; `in-memory
+  processing <https://en.wikipedia.org/wiki/In-memory_processing>`_,
+  and data streaming are supported as well,
 
 * Hot-swapping of coroutine functions, for dynamic system
   reconfiguration,
 
-* Distributing computation fragments for remote execution of
-  coroutines,
-
 * Thread pools with asynchronous task completions, for executing
-  time consuming synchronous tasks,
-
-Installation
-------------
-To install asyncoro for Python 2.7+, run::
-
-   pip install asyncoro
-
-or to install asyncoro for Python 3.1+, run::
-
-   pip3 install asyncoro
+  (external) synchronous tasks, e.g., reading standard input.
 
 Dependencies
 ------------
 
-asyncoro is implemented with standard modules in Python. Under Windows
-efficient polling notifier I/O Completion Ports (IOCP) is supported
-only if `pywin32
-<http://sourceforge.net/projects/pywin32/files/pywin32/>`_ is
-installed; otherwise, inefficient *select* notifier is used.
+asyncoro is implemented with standard modules in Python.
 
+If `psutil <https://pypi.python.org/pypi/psutil>`_ is available on nodes, node
+availability status (CPU, memory and disk) is sent in status messages, and shown
+in web browser so node/application performance can be monitored.
+
+Under Windows efficient polling notifier I/O Completion Ports (IOCP) is
+supported only if `pywin32
+<http://sourceforge.net/projects/pywin32/files/pywin32/>`_ is available;
+otherwise, inefficient *select* notifier is used.
+
+Installation
+------------
+To install asyncoro, run::
+
+   python -m pip install asyncoro
 
 Authors
 -------
@@ -94,3 +99,4 @@ Links
 -----
 * `Project page <http://asyncoro.sourceforge.net>`_.
 * `Tutorial/Examples <http://asyncoro.sourceforge.net/tutorial.html>`_.
+* `GitHub (Code Repository) <https://github.com/pgiri/asyncoro>`_.
