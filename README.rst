@@ -1,9 +1,9 @@
- asyncoro
-##########
+asyncoro
+########
 
-asyncoro is a Python framework for concurrent, distributed,
-asynchronous network programming with coroutines, asynchronous
-completions and message passing.
+`asyncoro <http://asyncoro.sourceforge.net>`_ is a Python framework for
+concurrent, distributed, asynchronous network programming with coroutines,
+asynchronous completions and message passing.
 
 Unlike with other asynchronous frameworks, programs developed with
 asyncoro have **same logic and structure** as programs with threads,
@@ -56,14 +56,13 @@ Features
   fault detection and fault-tolerance,
 
 * Distributing computation components (code and data) for execution of
-  distributed communicating processes, for wide range of use cases,
-  covering `SIMD, MISD, MIMD
-  <https://en.wikipedia.org/wiki/Flynn%27s_taxonomy>`_ system
+  distributed communicating processes, for wide range of use cases, covering
+  `SIMD, MISD, MIMD <https://en.wikipedia.org/wiki/Flynn%27s_taxonomy>`_ system
   architectures at the process level, `web interface
-  <http://asyncoro.sourceforge.net/discoro.html#client-browser-interface>`_
-  to monitor cluster/application status/performance; `in-memory
-  processing <https://en.wikipedia.org/wiki/In-memory_processing>`_,
-  and data streaming are supported as well,
+  <http://asyncoro.sourceforge.net/discoro.html#client-browser-interface>`_ to
+  monitor cluster/application status/performance; `in-memory processing
+  <https://en.wikipedia.org/wiki/In-memory_processing>`_, data streaming,
+  real-time (live) analytics and cloud computing are supported as well,
 
 * Hot-swapping of coroutine functions, for dynamic system
   reconfiguration,
