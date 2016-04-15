@@ -56,11 +56,9 @@ def _discoro_proc():
 
     _discoro_coro.register('discoro_server')
     _discoro_name = asyncoro.AsynCoro.instance().name
-    asyncoro.AsynCoro.instance().dest_path = os.path.join('discoro',
-                                                          'server%s' % (_discoro_config['id']))
+    asyncoro.AsynCoro.instance().dest_path = os.path.join('discoro', _discoro_name)
     _discoro_dest_path = asyncoro.AsynCoro.instance().dest_path
-    _discoro_pid_path = os.path.join(_discoro_dest_path, '..',
-                                     'server%s.pid' % (_discoro_config['id']))
+    _discoro_pid_path = os.path.join(_discoro_dest_path, '..', '%s.pid' % _discoro_name)
     _discoro_pid_path = os.path.normpath(_discoro_pid_path)
     # TODO: is file locking necessary?
     if os.path.exists(_discoro_pid_path):
@@ -82,7 +80,7 @@ def _discoro_proc():
             time.sleep(0.1)
             try:
                 if os.waitpid(_discoro_var, os.WNOHANG)[0] != _discoro_var:
-                    asyncoro.logger.warning('Killing process %d failed' % _discoro_var)
+                    asyncoro.logger.warning('Killing process %d failed', _discoro_var)
             except:
                 pass
         del signal
@@ -104,9 +102,9 @@ def _discoro_proc():
     for _discoro_var in ['req', 'phoenix', 'min_pulse_interval', 'max_pulse_interval']:
         del _discoro_config[_discoro_var]
 
-    asyncoro.logger.debug('discoro server "%s" started at %s; '
-                          'computation files will be saved in "%s"' %
-                          (_discoro_name, _discoro_coro.location, _discoro_dest_path))
+    asyncoro.logger.info('discoro server "%s" started at %s; '
+                         'computation files will be saved in "%s"',
+                         _discoro_name, _discoro_coro.location, _discoro_dest_path)
     _discoro_req = _discoro_client = _discoro_auth = _discoro_msg = None
     _discoro_timer_coro = _discoro_pulse_coro = _discoro_timer_proc = _discoro_peer_status = None
     _discoro_monitor_coro = _discoro_monitor_proc = _discoro_node_status = None
@@ -123,7 +121,7 @@ def _discoro_proc():
         coro.set_daemon()
         last_pulse = time.time()
         interval = None
-        while True:
+        while 1:
             reset = yield coro.sleep(interval)
             if reset:
                 if not isinstance(_discoro_pulse_coro, Coro):
@@ -145,44 +143,44 @@ def _discoro_proc():
             if _discoro_pulse_coro.send(msg) == 0:
                 last_pulse = time.time()
             elif (time.time() - last_pulse) > (5 * interval) and _discoro_computation:
-                asyncoro.logger.warning('scheduler is not reachable; closing computation "%s"' %
+                asyncoro.logger.warning('scheduler is not reachable; closing computation "%s"',
                                         _discoro_computation._auth)
                 _discoro_coro.send({'req': 'close', 'auth': _discoro_computation._auth})
 
             if ((not _discoro_job_coros) and _discoro_computation.zombie_period and
                ((time.time() - _discoro_nonlocals.busy_time) > _discoro_computation.zombie_period)):
-                asyncoro.logger.debug('%s: zombie computation "%s"' %
-                                      (coro.location, _discoro_computation._auth))
+                asyncoro.logger.debug('%s: zombie computation "%s"',
+                                      coro.location, _discoro_computation._auth)
                 # TODO: close? For now wait for "too many" timeouts to close
 
     def _discoro_peer_status(coro=None):
         coro.set_daemon()
-        while True:
+        while 1:
             status = yield coro.receive()
             if isinstance(status, asyncoro.PeerStatus) and \
                status.status == asyncoro.PeerStatus.Offline and \
                _discoro_pulse_coro and _discoro_pulse_coro.location == status.location:
-                asyncoro.logger.debug('scheduler at %s quit; closing computation %s' %
-                                      (status.location, _discoro_computation._auth))
+                asyncoro.logger.debug('scheduler at %s quit; closing computation %s',
+                                      status.location, _discoro_computation._auth)
                 msg = {'req': 'close', 'auth': _discoro_computation._auth}
                 _discoro_coro.send(msg)
 
     def _discoro_monitor_proc(coro=None):
         coro.set_daemon()
-        while True:
+        while 1:
             msg = yield coro.receive()
             if isinstance(msg, asyncoro.MonitorException):
                 _discoro_nonlocals.busy_time = time.time()
-                asyncoro.logger.debug('job %s done' % msg.args[0])
+                asyncoro.logger.debug('job %s done', msg.args[0])
                 _discoro_job_coros.discard(msg.args[0])
             else:
-                asyncoro.logger.warning('%s: invalid monitor message ignored' % coro.location)
+                asyncoro.logger.warning('%s: invalid monitor message ignored', coro.location)
 
     _discoro_timer_coro = Coro(_discoro_timer_proc)
     _discoro_monitor_coro = Coro(_discoro_monitor_proc)
     asyncoro.AsynCoro.instance().peer_status(Coro(_discoro_peer_status))
 
-    while True:
+    while 1:
         _discoro_msg = yield _discoro_coro.receive()
         if not isinstance(_discoro_msg, dict):
             continue
@@ -194,7 +192,7 @@ def _discoro_proc():
             _discoro_func = _discoro_msg.get('func', None)
             if not isinstance(_discoro_client, Coro) or not _discoro_computation or \
                _discoro_auth != _discoro_computation._auth:
-                asyncoro.logger.warning('invalid run: %s' % (type(_discoro_func)))
+                asyncoro.logger.warning('invalid run: %s', type(_discoro_func))
                 if isinstance(_discoro_client, Coro):
                     _discoro_client.send(None)
                 continue
@@ -211,7 +209,7 @@ def _discoro_proc():
                 job_coro = (sys.exc_info()[0], getattr(_discoro_func, 'name', _discoro_func),
                             traceback.format_exc())
             else:
-                asyncoro.logger.debug('job %s created' % job_coro)
+                asyncoro.logger.debug('job %s created', job_coro)
                 _discoro_job_coros.add(job_coro)
                 job_coro.notify(_discoro_monitor_coro)
                 _discoro_var = _discoro_msg.get('notify', None)
@@ -252,16 +250,16 @@ def _discoro_proc():
                 _discoro_computation.pulse_interval = MinPulseInterval
             _discoro_timer_coro.resume(_discoro_computation.pulse_interval)
             _discoro_nonlocals.busy_time = time.time()
-            asyncoro.logger.debug('computation "%s" from %s' %
-                                  (_discoro_computation._auth, _discoro_msg['client'].location))
+            asyncoro.logger.debug('computation "%s" from %s',
+                                  _discoro_computation._auth, _discoro_msg['client'].location)
             _discoro_client.send(0)
         elif _discoro_req == 'close':
             _discoro_auth = _discoro_msg.get('auth', None)
             if not _discoro_computation or (_discoro_auth != _discoro_computation._auth and
                                             _discoro_auth != _discoro_config['auth']):
                 continue
-            asyncoro.logger.debug('%s deleting computation "%s"' %
-                                  (_discoro_coro.location, _discoro_computation._auth))
+            asyncoro.logger.debug('%s deleting computation "%s"',
+                                  _discoro_coro.location, _discoro_computation._auth)
             if _discoro_auth != _discoro_computation._auth and _discoro_pulse_coro:
                 _discoro_pulse_coro.send({'status': 'ServerClosed',
                                           'location': _discoro_coro.location})
@@ -300,7 +298,7 @@ def _discoro_proc():
                     with open(_discoro_pid_path, 'w') as _discoro_var:
                         _discoro_var.write('%s' % os.getpid())
                 except:
-                    asyncoro.logger.warning('PID file "%s" is invalid' % _discoro_pid_path)
+                    asyncoro.logger.warning('PID file "%s" is invalid', _discoro_pid_path)
             os.chdir(_discoro_dest_path)
             asyncoro.AsynCoro.instance().dest_path = _discoro_dest_path
             _discoro_computation = _discoro_client = _discoro_pulse_coro = None
@@ -329,7 +327,7 @@ def _discoro_proc():
                 _discoro_client.send(_discoro_var)
         elif _discoro_req == 'status':
             if _discoro_msg.get('auth', None) != _discoro_config['auth']:
-                asyncoro.logger.debug('ignoring info: %s' % (_discoro_msg.get('auth')))
+                asyncoro.logger.debug('ignoring info: %s', _discoro_msg.get('auth'))
                 continue
             if _discoro_pulse_coro:
                 print('  Server %s running %d coroutines for computation at %s' %
@@ -339,7 +337,7 @@ def _discoro_proc():
                 print('  Server %s not used by any computation' % (_discoro_coro.location))
         elif _discoro_req == 'quit':
             if _discoro_msg.get('auth', None) != _discoro_config['auth']:
-                asyncoro.logger.debug('ignoring quit: %s' % (_discoro_msg.get('auth')))
+                asyncoro.logger.debug('ignoring quit: %s', _discoro_msg.get('auth'))
                 continue
             if _discoro_pulse_coro:
                 _discoro_pulse_coro.send({'status': 'ServerClosed',
@@ -347,7 +345,7 @@ def _discoro_proc():
             break
         elif _discoro_req == 'terminate':
             if _discoro_msg.get('auth', None) != _discoro_config['auth']:
-                asyncoro.logger.debug('ignoring terminate: %s' % (_discoro_msg.get('auth')))
+                asyncoro.logger.debug('ignoring terminate: %s', _discoro_msg.get('auth'))
                 continue
             if _discoro_pulse_coro:
                 _discoro_pulse_coro.send({'status': 'ServerTerminated',
@@ -359,7 +357,7 @@ def _discoro_proc():
             else:
                 break
         else:
-            asyncoro.logger.warning('invalid command "%s" ignored' % _discoro_req)
+            asyncoro.logger.warning('invalid command "%s" ignored', _discoro_req)
             _discoro_client = _discoro_msg.get('client', None)
             if not isinstance(_discoro_client, Coro):
                 continue
@@ -376,8 +374,8 @@ def _discoro_proc():
             _discoro_auth = _discoro_msg.get('auth', None)
             if not _discoro_computation or _discoro_auth != _discoro_computation._auth:
                 continue
-            asyncoro.logger.debug('%s deleting computation "%s"' %
-                                  (_discoro_coro.location, _discoro_computation._auth))
+            asyncoro.logger.debug('%s deleting computation "%s"',
+                                  _discoro_coro.location, _discoro_computation._auth)
 
             for _discoro_var in list(globals()):
                 if _discoro_var not in _discoro_globals:
@@ -386,7 +384,7 @@ def _discoro_proc():
 
             break
         else:
-            asyncoro.logger.warning('invalid command "%s" ignored' % _discoro_req)
+            asyncoro.logger.warning('invalid command "%s" ignored', _discoro_req)
             _discoro_client = _discoro_msg.get('client', None)
             if not isinstance(_discoro_client, Coro):
                 continue
@@ -401,7 +399,7 @@ def _discoro_proc():
     if os.path.isfile(_discoro_pid_path):
         os.remove(_discoro_pid_path)
     _discoro_config['mp_queue'].put(_discoro_config['auth'])
-    asyncoro.logger.debug('discoro server %s quit' % _discoro_coro.location)
+    asyncoro.logger.debug('discoro server %s quit', _discoro_coro.location)
 
 
 def _discoro_process(_discoro_config, _discoro_name, _discoro_server_id,
@@ -440,7 +438,7 @@ def _discoro_process(_discoro_config, _discoro_name, _discoro_server_id,
 
     req_queue, _discoro_mp_queue = _discoro_mp_queue, None
 
-    while True:
+    while 1:
         try:
             req = req_queue.get()
         except:
@@ -459,9 +457,9 @@ def _discoro_process(_discoro_config, _discoro_name, _discoro_server_id,
             if req == _discoro_auth:
                 break
             else:
-                asyncoro.logger.warning('Ignoring invalid request: "%s"' % req)
+                asyncoro.logger.warning('Ignoring invalid request: "%s"', req)
         else:
-            asyncoro.logger.warning('Ignoring invalid request: "%s"' % type(req))
+            asyncoro.logger.warning('Ignoring invalid request: "%s"', type(req))
 
     _discoro_scheduler.finish()
 
@@ -624,7 +622,7 @@ if __name__ == '__main__':
         import threading
 
         def _discoro_cmd_reader():
-            while True:
+            while 1:
                 time.sleep(0.25)
                 try:
                     _discoro_cmd = raw_input(
@@ -660,7 +658,7 @@ if __name__ == '__main__':
     else:
         _discoro_cmd = None
 
-    while True:
+    while 1:
         try:
             for _discoro_server_info in _discoro_server_infos:
                 if _discoro_server_info.Proc.is_alive():

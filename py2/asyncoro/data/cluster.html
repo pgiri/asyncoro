@@ -99,7 +99,8 @@
           })
 
           .fail(function(jqXHR, textStatus, errorThrown) {
-            $('#messages').append('<li>Could not get status; ' +
+            $('#messages').append('<li>Could not get status at ' +
+               (new Date()).toLocaleTimeString() + '; ' +
               'reload this page when computation is scheduled</li>');
             $('#timeout-div').hide();
             if (timer != null) {

@@ -92,7 +92,8 @@
           })
 
           .fail(function(jqXHR, textStatus, errorThrown) {
-            $('#messages').append('<li>Server update failed</li>');
+            $('#messages').append('<li>Server update failed at ' +
+              (new Date()).toLocaleTimeString() + '</li>');
             $('#coros').hide();
           });
       }

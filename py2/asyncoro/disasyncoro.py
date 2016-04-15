@@ -107,7 +107,7 @@ class _Peer(object):
     def send_req(req):
         peer = _Peer.peers.get((req.dst.addr, req.dst.port), None)
         if peer is None:
-            logger.debug('invalid peer: %s, %s' % (req.dst, req.name))
+            logger.debug('invalid peer: %s, %s', req.dst, req.name)
             return -1
         peer.reqs.append(req)
         peer.reqs_pending.set()
@@ -118,7 +118,7 @@ class _Peer(object):
         if dst:
             peer = _Peer.peers.get((dst.addr, dst.port), None)
             if peer is None:
-                logger.debug('invalid peer: %s, %s' % (dst, req.name))
+                logger.debug('invalid peer: %s, %s', dst, req.name)
                 return -1
             peer.reqs.append(req)
             peer.reqs_pending.set()
@@ -183,7 +183,7 @@ class _Peer(object):
                         req.event.set()
                     conn_errors += 1
                     if conn_errors >= MaxConnectionErrors:
-                        logger.warning('too many connection errors to %s; removing it' %
+                        logger.warning('too many connection errors to %s; removing it',
                                        self.location)
                         break
                     continue
@@ -208,7 +208,7 @@ class _Peer(object):
                 logger.debug('could not send "%s" to %s', req.name, self.location)
                 # logger.debug(traceback.format_exc())
                 if len(exc.args) == 1 and exc.args[0] == 'hangup':
-                    logger.warning('peer "%s" not reachable' % self.location)
+                    logger.warning('peer "%s" not reachable', self.location)
                     # TODO: remove peer?
                 try:
                     self.conn.shutdown(socket.SHUT_WR)
@@ -475,7 +475,7 @@ class AsynCoro(asyncoro.AsynCoro):
                 except:
                     # likely another asyncoro created this directory
                     if not os.path.isdir(self.__dest_path):
-                        logger.warning('failed to create "%s"' % self.__dest_path)
+                        logger.warning('failed to create "%s"', self.__dest_path)
                         logger.debug(traceback.format_exc())
             self.max_file_size = max_file_size
             self._certfile = certfile
@@ -486,7 +486,8 @@ class AsynCoro(asyncoro.AsynCoro):
             if hasattr(socket, 'SO_REUSEPORT'):
                 self._udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
             self._udp_sock.bind(('', udp_port))
-            self._tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self._tcp_sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                         keyfile=self._keyfile, certfile=self._certfile)
             if tcp_port:
                 if hasattr(socket, 'SO_REUSEADDR'):
                     self._tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -521,11 +522,9 @@ class AsynCoro(asyncoro.AsynCoro):
             self._rcis = {}
             self._pending_reqs = {}
             self._tcp_sock.listen(32)
-            logger.info('version %s network server %s@ %s, udp_port=%s',
-                        __version__, '"%s" ' % name if name else '',
-                        self._location, self._udp_sock.getsockname()[1])
-            self._tcp_sock = AsyncSocket(self._tcp_sock, keyfile=self._keyfile,
-                                         certfile=self._certfile)
+            logger.info('network server %s@ %s, udp_port=%s',
+                        '"%s" ' % name if name else '', self._location,
+                        self._udp_sock.getsockname()[1])
             self._tcp_coro = Coro(self._tcp_proc)
             self._udp_coro = Coro(self._udp_proc, discover_peers)
 
@@ -707,16 +706,16 @@ class AsynCoro(asyncoro.AsynCoro):
         try:
             stat_buf = os.stat(file)
         except:
-            logger.warning('send_file: File "%s" is not valid' % file)
+            logger.warning('send_file: File "%s" is not valid', file)
             raise StopIteration(-1)
         if not ((stat.S_IMODE(stat_buf.st_mode) & stat.S_IREAD) and stat.S_ISREG(stat_buf.st_mode)):
-            logger.warning('send_file: File "%s" is not valid' % file)
+            logger.warning('send_file: File "%s" is not valid', file)
             raise StopIteration(-1)
         if dir and isinstance(dir, str):
             dir = dir.strip()
             # reject absolute path for dir
             if os.path.join(os.sep, dir) == dir:
-                logger.warning('send_file: Absolute path for dir "%s" is not allowed' % dir)
+                logger.warning('send_file: Absolute path for dir "%s" is not allowed', dir)
                 raise StopIteration(-1)
         peer = _Peer.peers.get((location.addr, location.port), None)
         if peer is None:
@@ -753,7 +752,7 @@ class AsynCoro(asyncoro.AsynCoro):
             reply = -1
             logger.debug('could not send "%s" to %s', req.name, location)
             if len(exc.args) == 1 and exc.args[0] == 'hangup':
-                logger.warning('peer "%s" not reachable' % location)
+                logger.warning('peer "%s" not reachable', location)
                 # TODO: remove peer?
         except:
             logger.warning('send_file: Could not send "%s" to %s', file, location)
@@ -829,8 +828,8 @@ class AsynCoro(asyncoro.AsynCoro):
             if req_peer == self._location:
                 continue
             if ping_info['version'] != __version__:
-                logger.warning('Peer %s version %s is not %s' %
-                               (req_peer, ping_info['version'], __version__))
+                logger.warning('Peer %s version %s is not %s',
+                               req_peer, ping_info['version'], __version__)
                 continue
             if self._secret is None:
                 auth_code = None
@@ -887,7 +886,7 @@ class AsynCoro(asyncoro.AsynCoro):
                 assert req.auth == self._auth_code
             except:
                 if not req:
-                    logger.debug('invalid message from %s:%s' % (addr[0], addr[1]))
+                    logger.debug('invalid message from %s:%s', addr[0], addr[1])
                     break
                 if req.name != 'ping':
                     logger.warning('invalid request %s ignored: "%s", "%s"',
@@ -902,7 +901,7 @@ class AsynCoro(asyncoro.AsynCoro):
                 # synchronous message
                 reply = -1
                 if req.dst != self._location:
-                    logger.warning('ignoring invalid "send" (%s != %s)' % (req.dst, self._location))
+                    logger.warning('ignoring invalid "send" (%s != %s)', req.dst, self._location)
                 else:
                     coro = req.kwargs.get('coro', None)
                     if coro is not None:
@@ -910,8 +909,7 @@ class AsynCoro(asyncoro.AsynCoro):
                         if isinstance(coro, Coro):
                             reply = coro.send(req.kwargs['message'])
                         else:
-                            logger.warning('ignoring send to invalid coro %s',
-                                           req.kwargs['coro'])
+                            logger.warning('ignoring send to invalid coro %s', req.kwargs['coro'])
                     else:
                         channel = req.kwargs.get('channel', None)
                         if channel is not None:
@@ -928,8 +926,7 @@ class AsynCoro(asyncoro.AsynCoro):
                 # synchronous message
                 reply = -1
                 if req.dst != self._location:
-                    logger.warning('ignoring invalid "deliver" (%s != %s)' %
-                                   (req.dst, self._location))
+                    logger.warning('ignoring invalid "deliver" (%s != %s)', req.dst, self._location)
                 else:
                     coro = req.kwargs.get('coro', None)
                     if coro is not None:
@@ -1002,8 +999,8 @@ class AsynCoro(asyncoro.AsynCoro):
             elif req.name == 'ping':
                 peer_loc = req.kwargs.get('location', None)
                 if req.kwargs.get('version', None) != __version__:
-                    logger.warning('Peer %s version %s is not %s' %
-                                   (peer_loc, req.kwargs.get['version'], __version__))
+                    logger.warning('Peer %s version %s is not %s',
+                                   peer_loc, req.kwargs.get['version'], __version__)
                     break
                 try:
                     assert req.kwargs['name']
@@ -1032,7 +1029,7 @@ class AsynCoro(asyncoro.AsynCoro):
                     reply = yield sock.recv_msg()
                     assert reply == 'ack'
                 except:
-                    logger.debug('%s: ignoring peer: %s' % (self._location, peer_loc))
+                    logger.debug('%s: ignoring peer: %s', self._location, peer_loc)
                     break
                 finally:
                     sock.close()
@@ -1040,8 +1037,8 @@ class AsynCoro(asyncoro.AsynCoro):
                 peer = _Peer.peers.get((peer_loc.addr, peer_loc.port), None)
                 if peer and peer.auth == auth_code:
                     break
-                logger.debug('%s: found asyncoro "%s" at %s' % (self._location, req.kwargs['name'],
-                                                                peer_loc))
+                logger.debug('%s: found asyncoro "%s" at %s',
+                             self._location, req.kwargs['name'], peer_loc)
                 peer = _Peer(req.kwargs['name'], peer_loc, auth_code, self._keyfile, self._certfile)
                 if (peer_loc.addr, peer_loc.port) in self._stream_peers or \
                    (peer_loc.addr, 0) in self._stream_peers:
@@ -1064,8 +1061,8 @@ class AsynCoro(asyncoro.AsynCoro):
             elif req.name == 'pong':
                 peer_loc = req.kwargs.get('location', None)
                 if req.kwargs.get('version', None) != __version__:
-                    logger.warning('Peer %s version %s is not %s' %
-                                   (peer_loc, req.kwargs.get['version'], __version__))
+                    logger.warning('Peer %s version %s is not %s',
+                                   peer_loc, req.kwargs.get['version'], __version__)
                     break
                 try:
                     assert req.kwargs['name']
@@ -1075,20 +1072,20 @@ class AsynCoro(asyncoro.AsynCoro):
                         auth_code = hashlib.sha1(req.kwargs['signature'] + self._secret).hexdigest()
                     peer = _Peer.peers.get((peer_loc.addr, peer_loc.port), None)
                     if peer and peer.auth == auth_code:
-                        # logger.debug('%s: ignoring peer: %s' % (self._location, peer_loc))
+                        # logger.debug('%s: ignoring peer: %s', self._location, peer_loc)
                         yield conn.send_msg('nak')
                         break
                     yield conn.send_msg('ack')
                 except:
-                    logger.debug('%s: ignoring peer: %s' % (self._location, peer_loc))
+                    logger.debug('%s: ignoring peer: %s', self._location, peer_loc)
                     # logger.debug(traceback.format_exc())
                     break
 
                 peer = _Peer.peers.get((peer_loc.addr, peer_loc.port), None)
                 if peer and peer.auth == auth_code:
                     break
-                logger.debug('%s: found asyncoro "%s" at %s' % (self._location, req.kwargs['name'],
-                                                                peer_loc))
+                logger.debug('%s: found asyncoro "%s" at %s',
+                             self._location, req.kwargs['name'], peer_loc)
                 peer = _Peer(req.kwargs['name'], peer_loc, auth_code, self._keyfile, self._certfile)
                 if (peer_loc.addr, peer_loc.port) in self._stream_peers or \
                    (peer_loc.addr, 0) in self._stream_peers:
@@ -1225,7 +1222,7 @@ class AsynCoro(asyncoro.AsynCoro):
                 # synchronous message
                 peer_loc = req.kwargs.get('location', None)
                 if peer_loc:
-                    logger.debug('peer %s terminated' % (peer_loc))
+                    logger.debug('peer %s terminated', peer_loc)
                     # TODO: remove from _stream_peers?
                     # self._stream_peers.pop((peer_loc.addr, peer_loc.port), None)
                     _Peer.remove(peer_loc)

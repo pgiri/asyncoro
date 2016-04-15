@@ -85,7 +85,7 @@ class HTTPServer(object):
             BaseHTTPServer.BaseHTTPRequestHandler.__init__(self, *args)
 
         def log_message(self, fmt, *args):
-            # asyncoro.logger.debug('HTTP client %s: %s' % (self.client_address[0], fmt % args))
+            # asyncoro.logger.debug('HTTP client %s: %s', self.client_address[0], fmt % args)
             return
 
         @staticmethod
@@ -149,8 +149,8 @@ class HTTPServer(object):
                     asyncoro.logger.debug(traceback.format_exc())
                 self.send_error(404)
                 return
-            asyncoro.logger.debug('Bad GET request from %s: %s' %
-                                  (self.client_address[0], self.path))
+            asyncoro.logger.debug('Bad GET request from %s: %s',
+                                  self.client_address[0], self.path)
             self.send_error(400)
             return
 
@@ -240,7 +240,7 @@ class HTTPServer(object):
                         try:
                             coros.append(item.value)
                         except ValueError:
-                            asyncoro.logger.debug('Terminate: coro "%s" is invalid' % item.value)
+                            asyncoro.logger.debug('Terminate: coro "%s" is invalid', item.value)
 
                 terminated = []
                 self._ctx._lock.acquire()
@@ -285,8 +285,8 @@ class HTTPServer(object):
                     self.send_header('Content-Type', 'text/html')
                     self.end_headers()
                     return
-            asyncoro.logger.debug('Bad POST request from %s: %s' %
-                                  (self.client_address[0], self.path))
+            asyncoro.logger.debug('Bad POST request from %s: %s',
+                                  self.client_address[0], self.path)
             self.send_error(400)
             return
 
@@ -298,7 +298,7 @@ class HTTPServer(object):
         self._nodes = {}
         self._updates = {}
         if poll_sec < 1:
-            asyncoro.logger.warning('invalid poll_sec value %s; it must be at least 1' % poll_sec)
+            asyncoro.logger.warning('invalid poll_sec value %s; it must be at least 1', poll_sec)
             poll_sec = 1
         self._poll_sec = poll_sec
         self._server = BaseHTTPServer.HTTPServer((host, port), lambda *args:
@@ -313,8 +313,8 @@ class HTTPServer(object):
         self.computation = computation
         if not computation.status_coro:
             computation.status_coro = self.status_coro
-        asyncoro.logger.info('Started HTTP%s server at %s' %
-                             ('s' if certfile else '', str(self._server.socket.getsockname())))
+        asyncoro.logger.info('Started HTTP%s server at %s',
+                             's' if certfile else '', str(self._server.socket.getsockname()))
 
     def status_proc(self, coro=None):
         coro.set_daemon()
@@ -395,7 +395,7 @@ class HTTPServer(object):
                     node.update_time = time.time()
                     self._updates[node.addr] = node
             else:
-                asyncoro.logger.warning('Status message ignored: %s' % type(msg))
+                asyncoro.logger.warning('Status message ignored: %s', type(msg))
 
     def shutdown(self, wait=True):
         """This method should be called by user program to close the
@@ -407,10 +407,16 @@ class HTTPServer(object):
             asyncoro.logger.info('HTTP server waiting for %s seconds for client updates '
                                  'before quitting', self._poll_sec)
             if asyncoro.AsynCoro().cur_coro():
-                def _wait(sec, coro=None):
-                    yield coro.sleep(sec)
-                asyncoro.Coro(_wait, self._poll_sec)
+                def _shutdown(coro=None):
+                    yield coro.sleep(self._poll_sec)
+                    yield coro.sleep(0.1)
+                    self._server.shutdown()
+                    self._server.server_close()
+                asyncoro.Coro(_shutdown)
             else:
                 time.sleep(self._poll_sec)
-        self._server.shutdown()
-        self._server.server_close()
+                self._server.shutdown()
+                self._server.server_close()
+        else:
+            self._server.shutdown()
+            self._server.server_close()

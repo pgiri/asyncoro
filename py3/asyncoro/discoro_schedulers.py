@@ -242,8 +242,8 @@ class RemoteCoroScheduler(object):
                     # or 'execute')
                     if len(msg.args) > 2:
                         if msg.args[2] > 5:
-                            asyncoro.logger.debug('Inavlid rcoro %s exit status ignored: %s' %
-                                                  (msg.args[0], msg.args[2]))
+                            asyncoro.logger.debug('Inavlid rcoro %s exit status ignored: %s',
+                                                  msg.args[0], msg.args[2])
                             continue
                         msg.args = (msg.args[0], msg.args[1], (msg.args[2] + 1))
                     else:

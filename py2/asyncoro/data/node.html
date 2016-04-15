@@ -92,7 +92,8 @@
           })
 
           .fail(function(jqXHR, textStatus, errorThrown) {
-            $('#messages').append('<li>Node update failed</li>');
+            $('#messages').append('<li>Node update failed at ' +
+              (new Date()).toLocaleTimeString() + '</li>');
           });
       }
 

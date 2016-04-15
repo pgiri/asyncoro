@@ -195,14 +195,14 @@ class Computation(object):
                     for xf in self._xfer_files:
                         if (yield asyncoro.AsynCoro.instance().send_file(
                            self.scheduler.location, xf, dir=self._auth, timeout=self.timeout)) < 0:
-                            logger.warning('Could not send file "%s" to scheduler' % xf)
+                            logger.warning('Could not send file "%s" to scheduler', xf)
                             yield self.close()
                             raise StopIteration(-1)
             msg = {'req': 'await', 'auth': self._auth, 'client': coro}
             if (yield self.scheduler.deliver(msg, timeout=self.timeout)) != 1:
                 yield self.close()
                 raise StopIteration(-1)
-            while True:
+            while 1:
                 resp = yield coro.receive(timeout=timeout)
                 if isinstance(resp, dict) and resp.get('auth') == self._auth and \
                    resp.get('resp') == 'scheduled':
@@ -236,7 +236,7 @@ class Computation(object):
             code = None
         else:
             # if not inspect.isgeneratorfunction(gen):
-            #     logger.warning('"%s" is not a valid generator function' % name)
+            #     logger.warning('"%s" is not a valid generator function', name)
             #     raise StopIteration(None)
             code = inspect.getsource(gen).lstrip()
 
@@ -275,7 +275,7 @@ class Computation(object):
             code = None
         else:
             # if not inspect.isgeneratorfunction(gen):
-            #     logger.warning('"%s" is not a valid generator function' % name)
+            #     logger.warning('"%s" is not a valid generator function', name)
             #     raise StopIteration([])
             code = inspect.getsource(gen).lstrip()
 
@@ -393,7 +393,7 @@ class Computation(object):
         """For internal use only.
         """
         last_pulse = time.time()
-        while True:
+        while 1:
             msg = yield coro.receive(timeout=(2 * self.pulse_interval))
             if msg == 'pulse':
                 last_pulse = time.time()
@@ -531,17 +531,17 @@ class Scheduler(object):
     def __status_proc(self, coro=None):
         coro.set_daemon()
         self.asyncoro.peer_status(coro)
-        while True:
+        while 1:
             msg = yield coro.receive()
             if isinstance(msg, asyncoro.MonitorException):
                 rcoro = msg.args[0]
                 node = self._nodes.get(rcoro.location.addr, None)
                 if not node:
-                    logger.warning('node %s is invalid' % rcoro.location.addr)
+                    logger.warning('node %s is invalid', rcoro.location.addr)
                     continue
                 server = node.servers.get(rcoro.location, None)
                 if not server:
-                    logger.warning('server "%s" is invalid' % (rcoro.location))
+                    logger.warning('server "%s" is invalid', rcoro.location)
                     continue
                 if server.rcoros.pop(rcoro, None) is None:
                     # A server may not have updated server.rcoros
@@ -553,8 +553,8 @@ class Scheduler(object):
                     # drop it.
                     if len(msg.args) > 2:
                         if msg.args[2] > 5:
-                            logger.warning('Invalid remote coroutine %s exit status ignored: %s' %
-                                           (rcoro, msg.args[2]))
+                            logger.warning('Invalid remote coroutine %s exit status ignored: %s',
+                                           rcoro, msg.args[2])
                             continue
                         msg.args = (msg.args[0], msg.args[1], (msg.args[2] + 1))
                     else:
@@ -587,8 +587,8 @@ class Scheduler(object):
                         if server:
                             Coro(self.__close_server, server)
                     elif computation and msg.location == computation._pulse_coro.location:
-                        logger.warning('client %s terminated; closing computation %s' %
-                                       (msg.location, self.__cur_client_auth))
+                        logger.warning('client %s terminated; closing computation %s',
+                                       msg.location, self.__cur_client_auth)
                         Coro(self.__close_computation)
 
             else:
@@ -597,7 +597,7 @@ class Scheduler(object):
     def __timer_proc(self, coro=None):
         coro.set_daemon()
         server_check = client_pulse = time.time()
-        while True:
+        while 1:
             msg = yield coro.receive(timeout=self.__pulse_interval)
             now = time.time()
             if isinstance(msg, dict):  # message from a node's server
@@ -610,8 +610,8 @@ class Scheduler(object):
                         if server:
                             server.last_pulse = now
                             if ncoros != len(server.rcoros):
-                                logger.debug('Server %s running %s coroutines, scheduled %s' %
-                                             (server.location, ncoros, len(server.rcoros)))
+                                logger.debug('Server %s running %s coroutines, scheduled %s',
+                                             server.location, ncoros, len(server.rcoros))
                         node_status = msg.get('node_status', None)
                         if (node_status and self._cur_computation and
                            self._cur_computation.status_coro):
@@ -619,7 +619,7 @@ class Scheduler(object):
 
                 elif msg.get('status', None) in ('ServerClosed', 'ServerTerminated'):
                     location = msg.get('location', None)
-                    asyncoro.logger.debug('Server %s closed' % location)
+                    asyncoro.logger.debug('Server %s closed', location)
                     if isinstance(location, asyncoro.Location):
                         node = self._nodes.get(location.addr, None)
                     else:
@@ -654,8 +654,7 @@ class Scheduler(object):
                     client_pulse = now
                 else:
                     if (now - client_pulse) > (5 * self.__pulse_interval):
-                        logger.debug('client %s not responding; closing it' %
-                                     self.__cur_client_auth)
+                        logger.debug('client %s not responding; closing it', self.__cur_client_auth)
                         Coro(self.__close_computation)
 
             if (now - server_check) > (5 * self.__pulse_interval):
@@ -666,7 +665,7 @@ class Scheduler(object):
                         if server.status != Scheduler.ServerInitialized:
                             continue
                         if (now - server.last_pulse) > (5 * self.__pulse_interval):
-                            logger.warning('Server %s is zombie!' % server.location)
+                            logger.warning('Server %s is zombie!', server.location)
                             Coro(self.__close_server, server)
 
     def __run(self, func, client):
@@ -700,7 +699,7 @@ class Scheduler(object):
 
             self._cur_computation, client = yield coro.receive()
 
-            logger.debug('Computation %s scheduled' % self._cur_computation._auth)
+            logger.debug('Computation %s scheduled', self._cur_computation._auth)
             if isinstance(self._cur_computation.pulse_interval, int) and \
                MinPulseInterval <= self._cur_computation.pulse_interval <= MaxPulseInterval:
                 self.__pulse_interval = self._cur_computation.pulse_interval
@@ -755,7 +754,7 @@ class Scheduler(object):
             client = msg.get('client', None)
             auth = msg.get('auth', None)
             if not isinstance(client, Coro):
-                logger.warning('Ignoring invalid client request "%s"' % req)
+                logger.warning('Ignoring invalid client request "%s"', req)
                 continue
 
             if req == 'run':
@@ -834,14 +833,14 @@ class Scheduler(object):
                     logger.warning('ignoring invalid computation request')
                     client.send(None)
                     continue
-                while True:
+                while 1:
                     computation._auth = Scheduler.auth_code()
                     if not os.path.exists(os.path.join(self.__dest_path, computation._auth)):
                         break
                 try:
                     os.mkdir(os.path.join(self.__dest_path, computation._auth))
                 except:
-                    logger.debug('Could not create "%s"' %
+                    logger.debug('Could not create "%s"',
                                  os.path.join(self.__dest_path, computation._auth))
                     client.send(None)
                     continue
@@ -860,8 +859,8 @@ class Scheduler(object):
                                                for xf in computation._xfer_files]
                 for xf in computation._xfer_files:
                     if not os.path.isfile(xf):
-                        logger.warning('File "%s" for computation %s is not valid' %
-                                       (xf, computation._auth))
+                        logger.warning('File "%s" for computation %s is not valid',
+                                       xf, computation._auth)
                         computation = None
                         break
                 if computation is None:
@@ -908,7 +907,7 @@ class Scheduler(object):
                 client.send(servers)
 
             else:
-                logger.warning('Ignoring invalid client request "%s"' % req)
+                logger.warning('Ignoring invalid client request "%s"', req)
 
     def __setup_node(self, node, coro=None):
         if node.status == Scheduler.NodeIgnore:
@@ -931,7 +930,7 @@ class Scheduler(object):
                 timeout = MsgTimeout
             server.coro = yield Coro.locate('discoro_server', server.location, timeout=timeout)
             if not isinstance(server.coro, Coro):
-                logger.debug('server at %s is not valid' % (server.location))
+                logger.debug('server at %s is not valid', server.location)
                 # TODO: asuume temporary issue instead of removing it?
                 node.servers.pop(server.location, None)
                 raise StopIteration(-1)
@@ -963,13 +962,13 @@ class Scheduler(object):
                           'node_status': server == node.status_server})
         ret = yield coro.receive(timeout=computation.timeout, alarm_value=-1)
         if ret:
-            logger.warning('setup of %s failed: %s' % (server.coro, ret))
+            logger.warning('setup of %s failed: %s', server.coro, ret)
             raise StopIteration(ret)
         for xf in computation._xfer_files:
             reply = yield self.asyncoro.send_file(server.location, xf,
                                                   timeout=computation.timeout)
             if reply < 0:
-                logger.debug('failed to transfer file %s: %s' % (xf, reply))
+                logger.debug('failed to transfer file %s: %s', xf, reply)
                 Coro(self.__close_server, server)
                 raise StopIteration(-1)
         server.status = Scheduler.ServerInitialized
@@ -985,7 +984,7 @@ class Scheduler(object):
     def __close_node(self, node, coro=None):
         computation = self._cur_computation
         if not computation:
-            logger.warning('Closing node %s ignored' % node.addr)
+            logger.warning('Closing node %s ignored', node.addr)
             raise StopIteration(-1)
         for server in node.servers.values():
             yield self.__close_server(server, coro=coro)
@@ -993,7 +992,7 @@ class Scheduler(object):
     def __close_server(self, server, coro=None):
         computation = self._cur_computation
         if not computation or server.status != Scheduler.ServerInitialized:
-            logger.debug('Closing server %s ignored' % server.location)
+            logger.debug('Closing server %s ignored', server.location)
             raise StopIteration(-1)
         node = self._nodes.get(server.location.addr, None)
         if not node:
@@ -1007,7 +1006,7 @@ class Scheduler(object):
             yield server.coro.deliver({'req': 'close', 'auth': computation._auth},
                                       timeout=computation.timeout)
         if server.rcoros:
-            logger.warning('%s coros running at %s' % (len(server.rcoros), server.location))
+            logger.warning('%s coros running at %s', len(server.rcoros), server.location)
             if computation and computation.status_coro:
                 for rcoro in server.rcoros.itervalues():
                     status = asyncoro.MonitorException(rcoro, (Scheduler.ServerClosed, None))
@@ -1127,7 +1126,7 @@ if __name__ == '__main__':
             yield coro.suspend()
         asyncoro.Coro(hang).value()
     else:
-        while True:
+        while 1:
             try:
                 cmd = raw_input('Enter "quit" or "exit" to terminate discoro scheduler: ')
                 if cmd.strip().lower() in ('quit', 'exit'):

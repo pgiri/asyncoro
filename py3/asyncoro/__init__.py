@@ -48,13 +48,6 @@ import collections
 import pickle
 import copy
 
-logger = logging.getLogger('asyncoro')
-logger.setLevel(logging.INFO)
-handler = logging.StreamHandler()
-handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(message)s'))
-logger.addHandler(handler)
-del handler
-
 if platform.system() == 'Windows':
     from errno import WSAEINPROGRESS as EINPROGRESS
     from errno import WSAEWOULDBLOCK as EWOULDBLOCK
@@ -87,6 +80,69 @@ class MetaSingleton(type):
         if cls.__instance is None:
             cls.__instance = super(MetaSingleton, cls).__call__(*args, **kwargs)
         return cls.__instance
+
+
+class Logger(object):
+    """Simple(r) (and more efficient) version of logging mechanism with limited
+    features.
+    """
+    def __init__(self, name, stream=sys.stdout, level=logging.INFO):
+        """
+        'name' is appeneded to timestamp (similar to 'logging' module).
+        'stream' (default is sys.stdout) is where log entry is written to.
+        'level' is initial log level.
+        """
+        self.name = name
+        self.stream = stream
+        self.level = level
+        self.log_ms = False
+
+    def setLevel(self, level):
+        """Set to new log level.
+        """
+        self.level = level
+
+    def show_ms(self, flag):
+        """If 'flag' is True, milliseconds is shown in timestamp.
+        """
+        self.log_ms = bool(flag)
+
+    def log(self, message, *args):
+        now = time.time()
+        if len(args) == 1:
+            args = args[0]
+        message = message % args
+        if self.log_ms:
+            self.stream.write('%s.%03d %s - %s\n' %
+                              (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now)),
+                               1000 * (now - long(now)), self.name, message))
+        else:
+            self.stream.write('%s %s - %s\n' %
+                              (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now)),
+                               self.name, message))
+
+    debug = lambda self, message, *args: \
+            self.log(message, *args) if self.level <= logging.DEBUG else None
+
+    info = lambda self, message, *args: \
+           self.log(message, *args) if self.level <= logging.INFO else None
+
+    warn = warning = lambda self, message, *args: \
+           self.log(message, *args) if self.level <= logging.WARNING else None
+
+    def shutdown(self):
+        """Stream is flushed, but not closed.
+        """
+        self.stream.flush()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, trace):
+        self.shutdown()
+
+
+logger = Logger('asyncoro')
 
 
 class _AsyncSocket(object):
@@ -265,7 +321,7 @@ class _AsyncSocket(object):
                 self._timeout = timeout
                 # self._notifier._del_timeout(self)
             else:
-                logger.warning('invalid timeout %s ignored' % timeout)
+                logger.warning('invalid timeout %s ignored', timeout)
 
     def gettimeout(self):
         if self._blocking:
@@ -1144,7 +1200,8 @@ if platform.system() == 'Windows':
                             fd._timeout_id = None
                             break
                         if fd._timeout_id != self._timeouts[i][0]:
-                            logger.warning('fd %s with %s is not found', fd._fileno, fd._timeout_id)
+                            logger.warning('fd %s with %s is not found',
+                                           fd._fileno, fd._timeout_id)
                             break
                         i += 1
                     self._lock.release()
@@ -1154,7 +1211,7 @@ if platform.system() == 'Windows':
                 self.cmd_rsock.close()
                 self.cmd_wsock.close()
                 if len(self._timeouts):
-                    logger.warning('pending timeouts: %s' % (len(self._timeouts)))
+                    logger.warning('pending timeouts: %s', len(self._timeouts))
                 win32file.CloseHandle(self.iocp)
                 self.iocp = None
                 self.cmd_rsock_buf = None
@@ -1198,7 +1255,7 @@ if platform.system() == 'Windows':
                                     self._read_overlap = self._write_overlap = None
                                     self._notifier = None
                                 elif rc:
-                                    logger.warning('CancelIo failed?: %x' % rc)
+                                    logger.warning('CancelIo failed?: %x', rc)
                             if self._read_overlap and self._read_overlap.object:
                                 self._read_overlap.object = functools.partial(_cleanup_, self)
                             if self._write_overlap and self._write_overlap.object:
@@ -1620,7 +1677,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                 self.timeout_multiplier = 1
 
                 if hasattr(select, 'epoll'):
-                    logger.debug('poller: epoll')
+                    self._poller_name = 'epoll'
                     self._poller = select.epoll()
                     _AsyncPoller._Read = select.EPOLLIN | select.EPOLLPRI
                     _AsyncPoller._Write = select.EPOLLOUT
@@ -1628,7 +1685,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                     _AsyncPoller._Error = select.EPOLLERR
                     _AsyncPoller._Block = -1
                 elif hasattr(select, 'kqueue'):
-                    logger.debug('poller: kqueue')
+                    self._poller_name = 'kqueue'
                     self._poller = _KQueueNotifier()
                     # kqueue filter values are negative numbers so using
                     # them as flags won't work, so define them as necessary
@@ -1638,7 +1695,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                     _AsyncPoller._Error = 0x08
                     _AsyncPoller._Block = None
                 elif hasattr(select, 'devpoll'):
-                    logger.debug('poller: devpoll')
+                    self._poller_name = 'devpoll'
                     self._poller = select.devpoll()
                     _AsyncPoller._Read = select.POLLIN | select.POLLPRI
                     _AsyncPoller._Write = select.POLLOUT
@@ -1647,7 +1704,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                     _AsyncPoller._Block = -1
                     self.timeout_multiplier = 1000
                 elif hasattr(select, 'poll'):
-                    logger.debug('poller: poll')
+                    self._poller_name = 'poll'
                     self._poller = select.poll()
                     _AsyncPoller._Read = select.POLLIN | select.POLLPRI
                     _AsyncPoller._Write = select.POLLOUT
@@ -1656,7 +1713,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                     _AsyncPoller._Block = -1
                     self.timeout_multiplier = 1000
                 else:
-                    logger.debug('poller: select')
+                    self._poller_name = 'select'
                     self._poller = _SelectNotifier()
                     _AsyncPoller._Read = 0x01
                     _AsyncPoller._Write = 0x02
@@ -1742,7 +1799,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
             self.cmd_wsock.close()
             self.cmd_rsock.close()
             if len(self._timeouts):
-                logger.warning('pending timeouts: %s' % (len(self._timeouts)))
+                logger.warning('pending timeouts: %s', len(self._timeouts))
             if hasattr(self._poller, 'terminate'):
                 self._poller.terminate()
             else:
@@ -2520,7 +2577,7 @@ class Coro(object):
         try:
             generator = Coro.__get_generator(self, target, *args, **kwargs)
         except:
-            logger.warning('%s is not a generator!' % target.__name__)
+            logger.warning('%s is not a generator!', target.__name__)
             return -1
         self._swap_generator = generator
         return Coro._asyncoro._swap_generator(self)
@@ -2678,7 +2735,7 @@ class Channel(object):
         Channel._asyncoro._lock.acquire()
         if name in Channel._asyncoro._channels:
             Channel._asyncoro._lock.release()
-            logger.warning('duplicate channel "%s"!' % name)
+            logger.warning('duplicate channel "%s"!', name)
         else:
             Channel._asyncoro._channels[name] = self
             Channel._asyncoro._lock.release()
@@ -2853,7 +2910,7 @@ class Channel(object):
                     invalid.append(subscriber)
             if invalid:
                 def _unsub(self, subscriber, coro=None):
-                    logger.debug('remote subscriber %s is not valid; unsubscribing it' % subscriber)
+                    logger.debug('remote subscriber %s is not valid; unsubscribing it', subscriber)
                     yield self.unsubscribe(subscriber)
                 for subscriber in invalid:
                     Coro(_unsub, self, subscriber)
@@ -2934,7 +2991,7 @@ class Channel(object):
 
             if info['invalid']:
                 def _unsub(self, subscriber, coro=None):
-                    logger.debug('remote subscriber %s is not valid; unsubscribing it' % subscriber)
+                    logger.debug('remote subscriber %s is not valid; unsubscribing it', subscriber)
                     yield self.unsubscribe(subscriber)
                 for subscriber in info['invalid']:
                     Coro(_unsub, self, subscriber)
@@ -3101,6 +3158,8 @@ class AsynCoro(object, metaclass=MetaSingleton):
             self._scheduler.daemon = True
             self._scheduler.start()
             atexit.register(self.finish)
+            logger.info('version %s with %s I/O notifier',
+                        __version__, self._notifier._poller_name)
 
     @property
     def location(self):
@@ -3146,7 +3205,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
         self._lock.acquire()
         if AsynCoro.__cur_coro != coro:
             self._lock.release()
-            logger.warning('invalid "set_daemon" - "%s" != "%s"' % (coro, AsynCoro.__cur_coro))
+            logger.warning('invalid "set_daemon" - "%s" != "%s"', coro, AsynCoro.__cur_coro)
             return -1
         if coro._daemon != flag:
             coro._daemon = flag
@@ -3180,7 +3239,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
         self._lock.acquire()
         if AsynCoro.__cur_coro != coro:
             self._lock.release()
-            logger.warning('invalid "suspend" - "%s" != "%s"' % (coro, AsynCoro.__cur_coro))
+            logger.warning('invalid "suspend" - "%s" != "%s"', coro, AsynCoro.__cur_coro)
             return -1
         cid = coro._id
         if state == AsynCoro._AwaitMsg_ and coro._msgs:
@@ -3448,7 +3507,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                                                coro._name, traceback.format_exc())
                         # delete this coro
                         if coro._state not in (AsynCoro._Scheduled, AsynCoro._Running):
-                            logger.warning('coro "%s" is in state: %s' % (coro._name, coro._state))
+                            logger.warning('coro "%s" is in state: %s', coro._name, coro._state)
                         monitors = list(coro._monitors)
                         for monitor in monitors:
                             if monitor._location == self._location:
@@ -3486,7 +3545,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                             coro._monitors.clear()
                             coro._exceptions = []
                             if self._coros.pop(coro._id, None) != coro:
-                                logger.warning('invalid coro: %s, %s' % (coro._id, coro._state))
+                                logger.warning('invalid coro: %s, %s', coro._id, coro._state)
                             if coro._daemon is True:
                                 self._daemons -= 1
                         elif coro._monitors:
@@ -3556,10 +3615,9 @@ class AsynCoro(object, metaclass=MetaSingleton):
             try:
                 func(*fargs, **fkwargs)
             except:
-                logger.warning('running %s failed:' % (func.__name__))
+                logger.warning('running %s failed:', func.__name__)
                 logger.warning(traceback.format_exc())
         self._complete.set()
-        logging.shutdown()
         # wait a bit for logger to flush
         time.sleep(0.01)
 
@@ -3578,7 +3636,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
                         coro._daemon = True
                         self._daemons += 1
                 if len(self._coros) != self._daemons:
-                    logger.warning('daemons mismatch: %s != %s' % (len(self._coros), self._daemons))
+                    logger.warning('daemons mismatch: %s != %s', len(self._coros), self._daemons)
                 self._complete.set()
                 self._lock.release()
 
