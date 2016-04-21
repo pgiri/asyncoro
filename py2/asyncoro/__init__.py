@@ -1099,7 +1099,7 @@ if platform.system() == 'Windows':
                                                self.cmd_rsock._read_overlap, 0)
                     if err and err != winerror.ERROR_IO_PENDING:
                         logger.warning('WSARecv error: %s', err)
-                    logger.debug('poller: IOCP')
+                    self._poller_name = 'IOCP'
 
             def cmd_rsock_recv(self, err, n):
                 if n == 0:
