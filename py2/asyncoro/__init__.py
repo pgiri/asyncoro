@@ -17,7 +17,7 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "3.6.15"
+__version__ = "4.0"
 
 __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
@@ -127,10 +127,10 @@ class Logger(object):
     warn = warning = lambda self, message, *args: \
            self.log(message, *args) if self.level <= logging.WARNING else None
 
-    def shutdown(self):
-        """Stream is flushed, but not closed.
-        """
+    def flush(self):
         self.stream.flush()
+
+    shutdown = flush
 
     def __enter__(self):
         return self
@@ -1779,13 +1779,13 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                 logger.warning('pending timeouts: %s', len(self._timeouts))
             if hasattr(self._poller, 'terminate'):
                 self._poller.terminate()
-            else:
-                for fd in self._fds.itervalues():
-                    try:
-                        self._poller.unregister(fd._fileno)
-                    except:
-                        logger.warning('unregister of %s failed with %s',
-                                       fd._fileno, traceback.format_exc())
+            for fd in self._fds.itervalues():
+                try:
+                    self._poller.unregister(fd._fileno)
+                except:
+                    logger.warning('unregister of %s failed with %s',
+                                   fd._fileno, traceback.format_exc())
+                fd._notifier = None
             self._poller = None
             self._timeouts = []
             self._fds = {}
@@ -2380,7 +2380,7 @@ class Coro(object):
             return Coro._asyncoro._resume(self, message, AsynCoro._AwaitMsg_)
         else:
             request = _NetRequest('send', kwargs={'coro': self._id, 'message': message},
-                                  dst=self._location, timeout=2)
+                                  dst=self._location, timeout=5)
             # request is queued for asynchronous processing
             if _Peer.send_req(request) != 0:
                 logger.warning('remote coro at %s may not be valid', self._location)
@@ -2407,6 +2407,8 @@ class Coro(object):
                                   dst=self._location, timeout=timeout)
             request.reply = -1
             reply = yield Coro._asyncoro._sync_reply(request, alarm_value=0)
+            if reply is None:
+                reply = -1
             # if reply < 0:
             #     logger.warning('remote coro at %s may not be valid', self._location)
         raise StopIteration(reply)
@@ -2420,6 +2422,8 @@ class Coro(object):
         timeout happens, coro receives alarm_value.
         """
         return Coro._asyncoro._suspend(self, timeout, alarm_value, AsynCoro._AwaitMsg_)
+
+    recv = receive
 
     def throw(self, *args):
         """Throw exception in coroutine. This method must be called from
@@ -2491,7 +2495,7 @@ class Coro(object):
             return Coro._asyncoro._terminate_coro(self)
         else:
             request = _NetRequest('terminate_coro', kwargs={'coro': self._id},
-                                  dst=self._location, timeout=2)
+                                  dst=self._location, timeout=5)
             if _Peer.send_req(request) != 0:
                 logger.warning('remote coro at %s may not be valid', self._location)
                 return -1
@@ -2544,7 +2548,7 @@ class Coro(object):
         else:
             # remote coro
             request = _NetRequest('monitor', kwargs={'monitor': self, 'coro': observe._id},
-                                  dst=observe._location, timeout=2)
+                                  dst=observe._location, timeout=5)
             reply = yield Coro._asyncoro._sync_reply(request)
         raise StopIteration(reply)
 
@@ -2862,7 +2866,7 @@ class Channel(object):
         else:
             # remote channel
             request = _NetRequest('send', kwargs={'channel': self._name, 'message': message},
-                                  dst=self._location, timeout=2)
+                                  dst=self._location, timeout=5)
             # request is queued for asynchronous processing
             if _Peer.send_req(request) != 0:
                 logger.warning('remote channel at %s may not be valid', self._location)
@@ -2949,6 +2953,8 @@ class Channel(object):
                                   dst=self._location, timeout=timeout)
             request.reply = -1
             reply = yield Channel._asyncoro._sync_reply(request, alarm_value=0)
+            if reply is None:
+                reply = -1
             # if reply < 0:
             #     logger.warning('remote channel "%s" at %s may have gone away!',
             #                    self._name, self._location)
@@ -3052,6 +3058,8 @@ class CategorizeMessages(object):
                 timeout -= now - start
                 start = now
 
+    recv = receive
+
 
 class AsynCoro(object):
     """Coroutine scheduler.
@@ -3100,6 +3108,7 @@ class AsynCoro(object):
             self._polling = False
             self._channels = {}
             self._atexit = []
+            Coro._asyncoro = Channel._asyncoro = self
             self._scheduler = threading.Thread(target=self._schedule)
             self._scheduler.daemon = True
             self._scheduler.start()
@@ -3144,6 +3153,20 @@ class AsynCoro(object):
         if self._polling and len(self._scheduled) == 1:
             self._notifier.interrupt()
         self._lock.release()
+
+    def _remove(self, coro):
+        """Internal use only.
+        """
+        self._lock.acquire()
+        try:
+            self._scheduled.remove(coro._id)
+        except KeyError:
+            ret = -1
+        else:
+            self._coros.pop(coro._id, None)
+            ret = 0
+        self._lock.release()
+        return ret
 
     def _set_daemon(self, coro, flag):
         """Internal use only. See set_daemon in Coro.
@@ -3367,7 +3390,6 @@ class AsynCoro(object):
                     coro._state = AsynCoro._Scheduled
                     coro._value = alarm_value
             scheduled = [self._coros[cid] for cid in self._scheduled]
-            # random.shuffle(scheduled)
             self._lock.release()
 
             for coro in scheduled:
@@ -3553,8 +3575,8 @@ class AsynCoro(object):
         self._channels = {}
         self.__class__.__instance = None
         self._quit = True
-        self._lock.release()
         self._notifier.terminate()
+        self._lock.release()
         logger.debug('AsynCoro terminated')
         while self._atexit:
             func, fargs, fkwargs = self._atexit.pop()
@@ -3564,8 +3586,8 @@ class AsynCoro(object):
                 logger.warning('running %s failed:', func.__name__)
                 logger.warning(traceback.format_exc())
         self._complete.set()
-        # wait a bit for logger to flush
-        time.sleep(0.01)
+        logger.shutdown()
+        time.sleep(0.1)
 
     def _exit(self, await_non_daemons):
         """Internal use only.
@@ -3588,7 +3610,7 @@ class AsynCoro(object):
 
             self._complete.wait()
             if self._location:
-                Coro(_Peer.shutdown, timeout=2)
+                Coro(_Peer.shutdown, timeout=5)
                 self._complete.wait()
 
             self._lock.acquire()
