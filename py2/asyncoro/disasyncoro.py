@@ -522,6 +522,7 @@ class AsynCoro(asyncoro.AsynCoro):
             self._rcis = {}
             self._pending_reqs = {}
             self._tcp_sock.listen(32)
+            Coro._asyncoro = Channel._asyncoro = RCI._asyncoro = self
             logger.info('network server %s@ %s, udp_port=%s',
                         '"%s" ' % name if name else '', self._location,
                         self._udp_sock.getsockname()[1])
@@ -887,6 +888,7 @@ class AsynCoro(asyncoro.AsynCoro):
             except:
                 if not req:
                     logger.debug('invalid message from %s:%s', addr[0], addr[1])
+                    logger.debug(traceback.format_exc())
                     break
                 if req.name != 'ping':
                     logger.warning('invalid request %s ignored: "%s", "%s"',
