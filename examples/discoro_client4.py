@@ -13,8 +13,8 @@
 # Note that the objective is to illustrate features, so implementation
 # is not ideal. Error checking is skipped at a few places for brevity.
 
-import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
+from asyncoro.discoro import *
 from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
 # objects of C are sent by a client to remote coroutine
@@ -82,21 +82,17 @@ def client_proc(job_id, rcoro, coro=None):
 
 
 def submit_jobs_proc(computation, njobs, coro=None):
-    # use RemoteCoroScheduler to schedule/submit coroutines; scheduler must be
-    # created before computation is scheduled (next step below)
-    job_scheduler = RemoteCoroScheduler(computation)
-
     if (yield computation.schedule()):
         raise Exception('Failed to schedule computation')
 
     for i in range(njobs):
         # create remote coroutine
-        rcoro = yield job_scheduler.schedule(rcoro_proc)
+        rcoro = yield rcoro_scheduler.schedule(rcoro_proc)
         if isinstance(rcoro, asyncoro.Coro):
             # create local coroutine to send input file and data to rcoro
             asyncoro.Coro(client_proc, i, rcoro)
 
-    yield job_scheduler.finish(close=True)
+    yield rcoro_scheduler.finish(close=True)
 
 
 if __name__ == '__main__':
@@ -104,11 +100,15 @@ if __name__ == '__main__':
     asyncoro.logger.setLevel(logging.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start it (private scheduler):
-    discoro.Scheduler()
+    Scheduler()
     # unlike in earlier examples, rcoro_proc is not sent with
     # computation (as it is not included in 'components';
     # instead, it is sent each time a job is submitted,
     # which is a bit inefficient
-    computation = discoro.Computation([C])
+    computation = Computation([C])
+    # use RemoteCoroScheduler to schedule/submit coroutines; scheduler must be
+    # created before computation is scheduled (next step below)
+    rcoro_scheduler = RemoteCoroScheduler(computation)
+
     # run 10 jobs
     asyncoro.Coro(submit_jobs_proc, computation, 10)

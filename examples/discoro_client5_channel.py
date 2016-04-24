@@ -3,11 +3,8 @@
 # this case, to read data in to memory so it can be processed
 # efficiently).
 
-# DiscoroStatus must be imported in global scope as below; otherwise,
-# unserializing status messages fails (if external scheduler is used)
-from asyncoro.discoro import DiscoroStatus
-import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
+from asyncoro.discoro import *
 
 
 # This generator function is sent to remote discoro process to
@@ -105,7 +102,7 @@ def client_proc(computation, data_file, njobs, coro=None):
                 asyncoro.Coro(submit_job, rcoro.location)
         elif isinstance(msg, DiscoroStatus):
             # asyncoro.logger.debug('Node/Server status: %s, %s' % (msg.status, msg.info))
-            if msg.status == discoro.Scheduler.ServerInitialized:
+            if msg.status == Scheduler.ServerInitialized:
                 # a new process is available; initialize it
                 asyncoro.Coro(init_proc, msg.info)
         else:
@@ -122,8 +119,8 @@ if __name__ == '__main__':
     asyncoro.logger.setLevel(logging.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start it (private scheduler):
-    discoro.Scheduler()
-    computation = discoro.Computation([rcoro_proc])
+    Scheduler()
+    computation = Computation([rcoro_proc])
     inp_file = sys.argv[0] if len(sys.argv) == 1 else sys.argv[1]
     # run 10 jobs
     asyncoro.Coro(client_proc, computation, inp_file, 10)

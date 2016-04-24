@@ -2,8 +2,8 @@
 # to process streaming data for live/real-time analysis. This example uses
 # 'deque' module to implement circular buffer.
 
-import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
+from asyncoro.discoro import *
 from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
 
@@ -11,18 +11,16 @@ from asyncoro.discoro_schedulers import RemoteCoroScheduler
 # and generate apprporiate signals that are sent to a coroutine
 # running on client. The signal in this simple case is average of
 # moving window of given size is below or above a threshold.
-def rcoro_avg_proc(threshold, trend_coro, window_size, coro=None):
+def rcoro_avg_proc(channel, threshold, trend_coro, window_size, coro=None):
     import collections
-    # get remote channel (at client) and subscribe to it
-    data_channel = yield asyncoro.Channel.locate('data_channel')
-    assert isinstance(data_channel, asyncoro.Channel)
-    yield data_channel.subscribe(coro)
+    # subscribe to channel (at client)
+    yield channel.subscribe(coro)
     # create circular buffer
     data = collections.deque(maxlen=window_size)
     for i in range(window_size):
         data.append(0.0)
     cumsum = 0.0
-    # first message is not data (see client_proc)
+    # first message is 'start' command; see 'client_proc'
     assert (yield coro.receive()) == 'start'
     while True:
         i, n = yield coro.receive()
@@ -40,17 +38,17 @@ def rcoro_avg_proc(threshold, trend_coro, window_size, coro=None):
 
 # This generator function is sent to remote discoro process to save
 # the received data in a file (on the remote peer).
-def rcoro_save_proc(coro=None):
+def rcoro_save_proc(channel, coro=None):
     import os
     import tempfile
-    # get remote channel (at client) and subscribe to it
-    data_channel = yield asyncoro.Channel.locate('data_channel')
-    assert isinstance(data_channel, asyncoro.Channel)
-    yield data_channel.subscribe(coro)
-    # first message is not data
+    # subscribe to channel (at client)
+    yield channel.subscribe(coro)
+    # first message is 'start' command (to make sure all recipients started)
     assert (yield coro.receive()) == 'start'
-    # save data in /tmp/tickdata
-    with open(os.path.join(os.sep, tempfile.gettempdir(), 'tickdata'), 'w') as fd:
+    # save data in 'tickdata' where computation files are saved (this will be
+    # deleted when computation is done, so it must be copied elsewhere if
+    # necessary)
+    with open('tickdata', 'w') as fd:
         while True:
             i, n = yield coro.receive()
             if n is None:
@@ -95,9 +93,6 @@ def trend_proc(coro=None):
 # server processes, two local coroutines, one to receive trend signal from one
 # of the remote coroutines, and another to send data to two remote coroutines
 def client_proc(computation, coro=None):
-    # use RemoteCoroScheduler to schedule/submit coroutines; scheduler must be
-    # created before computation is scheduled (next step below)
-    job_scheduler = RemoteCoroScheduler(computation)
 
     # distribute computation to server
     if (yield computation.schedule()):
@@ -110,9 +105,9 @@ def client_proc(computation, coro=None):
 
     trend_coro = asyncoro.Coro(trend_proc)
 
-    rcoro_avg = yield job_scheduler.schedule(rcoro_avg_proc, 0.4, trend_coro, 10)
+    rcoro_avg = yield rcoro_scheduler.schedule(rcoro_avg_proc, data_channel, 0.4, trend_coro, 10)
     assert isinstance(rcoro_avg, asyncoro.Coro)
-    rcoro_save = yield job_scheduler.schedule(rcoro_save_proc)
+    rcoro_save = yield rcoro_scheduler.schedule(rcoro_save_proc, data_channel)
     assert isinstance(rcoro_save, asyncoro.Coro)
 
     # make sure both remote coroutines have subscribed to channel ('deliver'
@@ -124,7 +119,7 @@ def client_proc(computation, coro=None):
 
     asyncoro.Coro(data_proc, data_channel, 1000)
 
-    yield job_scheduler.finish(close=True)
+    yield rcoro_scheduler.finish(close=True)
 
 
 if __name__ == '__main__':
@@ -133,6 +128,9 @@ if __name__ == '__main__':
     # if scheduler is shared (i.e., running as program), nothing needs
     # to be done (its location can optionally be given to 'schedule');
     # othrwise, start private scheduler:
-    discoro.Scheduler()
-    computation = discoro.Computation([])
+    Scheduler()
+    computation = Computation([])
+    # use RemoteCoroScheduler to schedule/submit coroutines; scheduler must be
+    # created before computation is scheduled (next step below)
+    rcoro_scheduler = RemoteCoroScheduler(computation)
     asyncoro.Coro(client_proc, computation)

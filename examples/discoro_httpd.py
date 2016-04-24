@@ -5,9 +5,8 @@
 # server to run as remote coroutines. Remote coroutines and client
 # can use message passing to exchange data.
 
-import sys, logging, random
-import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
+from asyncoro.discoro import *
 
 
 # objects of C are exchanged between client and servers
@@ -41,13 +40,13 @@ def status_proc(coro=None):
                 print('    rcoro %s done' % (msg.args[0]))
             else:
                 print('  rcoro %s failed: %s / %s' % (msg.args[0], msg.args[1][0], msg.args[1][1]))
-        elif isinstance(msg, discoro.DiscoroStatus):
-            if msg.status == discoro.Scheduler.CoroCreated:
+        elif isinstance(msg, DiscoroStatus):
+            if msg.status == Scheduler.CoroCreated:
                 print('rcoro %s started' % msg.info.coro)
             # else:
             #     print('Status: %s / %s' % (msg.status, msg.info))
 
-        elif isinstance(msg, discoro.DiscoroNodeAvailInfo):
+        elif isinstance(msg, DiscoroNodeAvailInfo):
             pass
         else:
             print('status msg ignored: %s' % type(msg))
@@ -80,16 +79,16 @@ def client_proc(computation, coro=None):
 
 
 if __name__ == '__main__':
-    import os, asyncoro.httpd
+    import os, asyncoro.httpd, sys, logging, random
     # asyncoro.logger.setLevel(logging.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start it (private scheduler):
-    discoro.Scheduler()
+    Scheduler()
     # send generator function and class C (as the computation uses
     # objects of C)
     # use MinPulseInterval so node status updates are sent more frequently
     # (instead of default 2*MinPulseInterval)
-    computation = discoro.Computation([compute, C], pulse_interval=discoro.MinPulseInterval)
+    computation = Computation([compute, C], pulse_interval=MinPulseInterval)
     # create http server to monitor nodes, servers, coroutines
     http_server = asyncoro.httpd.HTTPServer(computation)
     coro = asyncoro.Coro(client_proc, computation)

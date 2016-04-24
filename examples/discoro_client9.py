@@ -11,9 +11,8 @@
 # 'discoro_client5.py') and streaming (see 'discoro_client6.py') for
 # efficient processing of data and communication.
 
-import logging, random, functools
-import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
+from asyncoro.discoro import *
 from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
 def proc_available(location, coro=None):
@@ -36,15 +35,14 @@ def proc_available(location, coro=None):
     def setup_server(data_file, coro=None):  # executed on remote server
         global os, hashlib, data
         import os, hashlib
-        fd = open(data_file, 'rb')
-        data = fd.read()
-        fd.close()
+        with open(data_file, 'rb') as fd:
+            data = fd.read()
         os.remove(data_file)  # data_file is not needed anymore
         # generator functions must have at least one 'yield'
         yield 0 # indicate successful initialization with exit value 0
 
     # run 'setup_server' to read file in to memory
-    if (yield job_scheduler.execute_at(location, setup_server, data_file)) != 0:
+    if (yield rcoro_scheduler.execute_at(location, setup_server, data_file)) != 0:
         print('Could not setup %s, %s' % (data_file, location))
         raise StopIteration(-1)
     raise StopIteration(0)
@@ -64,8 +62,8 @@ def proc_close(status, location, coro=None):
         del hashlib, data
         yield 0  # generator functions should have at least one 'yield'
 
-    if status == discoro.Scheduler.ServerInitialized:
-        yield job_scheduler.execute_at(location, cleanup_server)
+    if status == Scheduler.ServerInitialized:
+        yield rcoro_scheduler.execute_at(location, cleanup_server)
 
 # 'compute' is executed at remote server process repeatedly to compute
 # checksum of data in memory, initialized by 'setup_server'
@@ -81,45 +79,35 @@ def client_proc(computation, coro=None):
     if (yield computation.schedule()):
         raise Exception('schedule failed')
 
-    # coroutine to call RemoteCoroScheduler's "execute" method
-    def coro_exec(gen, *args, **kwargs):
-        # execute computation; result of computation is result of
-        # 'yield' which is also result of this coroutine (obtained
-        # with 'finish' method below)
-        yield job_scheduler.execute(gen, *args, **kwargs)
-        # results can be processed here (as they become available), or
-        # await in sequence as done below
-
     # execute 10 jobs (coroutines) and get their results. Note that
     # number of jobs created can be more than number of server
     # processes available; the scheduler will use as many processes as
     # necessary/available, running one job at a server process
-    algs = ['md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512']
-    jobs = [asyncoro.Coro(coro_exec, compute, algs[i % len(algs)], random.uniform(1, 3))
-            for i in range(10)]
-    for job in jobs:
-        result = yield job.finish()
+    algorithms = ['md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512']
+    args = [(algorithms[i % len(algorithms)], random.uniform(1, 3)) for i in range(10)]
+    results = yield rcoro_scheduler.map_results(compute, args)
+    for result in results:
         if isinstance(result, tuple) and len(result) == 2:
             print('    %ssum: %s' % (result[0], result[1]))
         else:
-            print('  rcoro %s failed: %s' % (job, result))
+            print('  rcoro failed: %s' % str(result))
 
-    yield job_scheduler.finish(close=True)
+    yield rcoro_scheduler.finish(close=True)
 
 
 if __name__ == '__main__':
-    import sys
+    import logging, random, functools, sys
     asyncoro.logger.setLevel(logging.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start private scheduler:
-    discoro.Scheduler()
+    Scheduler()
     data_file = sys.argv[0] if len(sys.argv) == 1 else sys.argv[1]
     # send 'compute' generator function; data_file can also be sent with
     # 'depends', but in this case, the client sends it separately when server is
     # initialized (to illustrate how client can transfer files).
-    computation = discoro.Computation([compute])
+    computation = Computation([compute])
     # Use RemoteCoroScheduler to run at most one coroutine at a server process
     # This should be created before scheduling computation
-    job_scheduler = RemoteCoroScheduler(computation, proc_available=proc_available,
-                                        proc_close=proc_close)
+    rcoro_scheduler = RemoteCoroScheduler(computation, proc_available=proc_available,
+                                          proc_close=proc_close)
     asyncoro.Coro(client_proc, computation)

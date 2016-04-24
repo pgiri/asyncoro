@@ -1,59 +1,68 @@
 # Run 'discoronode.py' program to start processes to execute
 # computations sent by this client, along with this program.
 
-# This program is similar to 'discoro_client1.py', but instead of using
-# RemoteCoroScheduler, it uses status message notifications from discoro
-# scheduler to submit jobs at remote discoronode processes.
+# Example where this client sends computation to remote discoro process to run
+# as remote coroutines. Computations are scheduled with custom scheduler
+# (without using RemoteCoroScheduler). Remote coroutines and client can use
+# message passing to exchange data.
 
-import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
-
-# this generator function is sent to remote server to run coroutines there
-def rcoro_proc(n, coro=None):
-    yield coro.sleep(n)
-    raise StopIteration(n)
+from asyncoro.discoro import *
+from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
 
-# Instead of using RemoteCoroScheduler (which is easier), in this example status
-# messages from discoro scheduler are used to start remote coroutines and get
-# their exit status
-def status_proc(computation, njobs, coro=None):
-    npending = njobs
+# objects of C are exchanged between client and servers
+class C(object):
+    def __init__(self, i):
+        self.i = i
+        self.n = None
 
-    while True:
-        msg = yield coro.receive()
-        if isinstance(msg, asyncoro.MonitorException):
-            rcoro = msg.args[0]
-            if msg.args[1][0] == StopIteration:
-                print('    rcoro_proc at %s finished with %s' % (rcoro.location, msg.args[1][1]))
-            else:
-                print('    rcoro_proc at %s failed: %s / %s' %
-                      (rcoro.location, msg.args[1][0], msg.args[1][1]))
+    def __repr__(self):
+        return '%d: %s' % (self.i, self.n)
 
-            npending -= 1
-            if npending == 0:
-                break
-            if njobs > 0: # submit another job
-                n = random.uniform(5, 10)
-                rcoro = yield computation.run_at(rcoro.location, rcoro_proc, n)
-                if isinstance(rcoro, asyncoro.Coro):
-                    print('rcoro_proc started at %s with %s' % (rcoro.location, n))
-                    njobs -= 1
-        elif isinstance(msg, discoro.DiscoroStatus):
-            # print('Status: %s / %s' % (msg.info, msg.status))
-            if msg.status == discoro.Scheduler.ServerInitialized and njobs > 0: # submit a job
-                n = random.uniform(5, 10)
-                rcoro = yield computation.run_at(msg.info, rcoro_proc, n)
-                if isinstance(rcoro, asyncoro.Coro):
-                    print('rcoro_proc started at %s with %s' % (rcoro.location, n))
-                    njobs -= 1
+
+# this generator function is sent to remote discoro servers to run
+# coroutines there
+def compute(obj, client, coro=None):
+    # obj is an instance of C
+    import math
+    # this coroutine and client can use message passing; client sends
+    # data to this coro as a message
+    print('process at %s received: %s' % (coro.location, obj.n))
+    yield coro.sleep(obj.n)
+    obj.n = math.sqrt(obj.n)
+    # send result back to client
+    yield client.deliver(obj, timeout=5)
+
 
 def client_proc(computation, njobs, coro=None):
-    computation.status_coro = asyncoro.Coro(status_proc, computation, njobs)
+
+    # distribute computation to server
     if (yield computation.schedule()):
-        raise Exception('Failed to schedule computation')
-    # wait for jobs to be created and finished
-    yield computation.status_coro.finish()
+        raise Exception('schedule failed')
+
+    # create a separate coroutine to receive results, so they can be processed
+    # as soon as received
+    def recv_results(coro=None):
+        for i in range(njobs):
+            msg = yield coro.receive()
+            print('    result for job %d: %s' % (i, msg))
+
+    results_coro = asyncoro.Coro(recv_results)
+    # remote coroutines send replies as messages to this coro
+    for i in range(njobs):
+        cobj = C(i)
+        cobj.n = random.uniform(5, 10)
+        # as noted in 'discoro_client1.py', 'schedule' method is used to run
+        # jobs sequentially; use 'submit' to run multiple jobs on one server
+        # concurrently
+        print('  request %d: %s' % (i, cobj.n))
+        rcoro = yield rcoro_scheduler.schedule(compute, cobj, results_coro)
+        if not isinstance(rcoro, asyncoro.Coro):
+            print('failed to create rcoro %s: %s' % (i, rcoro))
+
+    # wait for all results
+    yield results_coro.finish()
     yield computation.close()
 
 
@@ -62,7 +71,12 @@ if __name__ == '__main__':
     asyncoro.logger.setLevel(logging.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start it (private scheduler):
-    discoro.Scheduler()
-    computation = discoro.Computation([rcoro_proc])
-    # run 10 jobs
+    Scheduler()
+    # send generator function and class C (as the computation uses
+    # objects of C)
+    computation = Computation([compute, C])
+    # use RemoteCoroScheduler to schedule/submit coroutines; scheduler must be
+    # created before computation is scheduled (next step below)
+    rcoro_scheduler = RemoteCoroScheduler(computation)
+    # create 10 remote coroutines (jobs)
     asyncoro.Coro(client_proc, computation, 10)

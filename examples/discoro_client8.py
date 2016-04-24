@@ -1,66 +1,97 @@
-# Run 'discoronode.py' program to start processes to execute
-# computations sent by this client, along with this program.
+# This example uses status messages and message passing to run 'setup' coroutine
+# at remote process to prepare it for processing jobs.
 
-# Distributed computing example where this client sends computation to
-# remote discoro process to run as remote coroutines. At any time at
-# most one computation coroutine is scheduled at a process (due to
-# RemoteCoroScheduler). This example shows how to use 'execute' method of
-# RemoteCoroScheduler to submit comutations and get their results easily.
-
-# This example can be combined with in-memory processing (see
-# 'discoro_client5.py') and streaming (see 'discoro_client6.py') for
-# efficient processing of data and communication.
-
-import logging, random
-import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
+from asyncoro.discoro import *
 from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
+# The computation is simulated with 'time.sleep', during which entire asyncoro
+# framework is suspended as well. To avoid blocking the framework (which would
+# prevent it from accepting messages from client), the computation is executed
+# in a thread. Coroutine sends messages to thread with Queue (thread function
+# can't receive messages from client directly).
 
-# this generator function is sent to remote discoro servers to run
-# coroutines there
-def compute(n, coro=None):
-    import time
-    yield coro.sleep(n)
-    raise StopIteration(time.asctime()) # result of 'compute' is current time
+def compute_coro(coro=None):
+    import threading, time
+    if sys.version_info.major >= 3:
+        import queue
+    else:
+        import Queue as queue
 
+    client = yield coro.receive() # first message is client coroutine
 
-def client_proc(computation, n, coro=None):
+    # requests from client are received by this coroutine and sent to thread
+    # function with Queue. Thread function can't receive from client, as message
+    # passing is not available in threads.
+    thread_queue = queue.Queue()
+    # thread process sets thread_done asyncoro event that the compute_coro waits
+    # for (setting the asynchronous event and sending messages are regular
+    # functions, so they can be used in thread)
+    thread_done = asyncoro.Event()
 
-    # coroutine to call RemoteCoroScheduler's "execute" method
-    def exec_proc(gen, *args, **kwargs):
-        # execute computation; result of computation is result of
-        # 'yield' which is also result of this coroutine (obtained
-        # with 'finish' method below)
-        yield job_scheduler.execute(gen, *args, **kwargs)
-        # results can be processed here (as they become available), or
-        # await in sequence as done below
+    def compute_func(): # executed in a thread
+        result = 0
+        while True:
+            n = thread_queue.get()
+            if n is None:  # end of requests
+                client.send(result)
+                break
+            time.sleep(n)
+            result += n
+        thread_done.set()
 
-    # Use RemoteCoroScheduler to run at most one coroutine at a server process
-    # This should be created before scheduling computation
-    job_scheduler = RemoteCoroScheduler(computation)
+    thread = threading.Thread(target=compute_func)
+    thread.start()
+
+    # receive requests from client and put them in thread_queue so thread can
+    # process them
+    while True:
+        req = yield coro.receive()
+        thread_queue.put(req)
+        if req is None:
+            break
+
+    # wait for thread to finish
+    yield thread_done.wait()
+
+# client (local) coroutine submits computations
+def client_proc(computation, njobs, coro=None):
 
     if (yield computation.schedule()):
-        raise Exception('schedule failed')
+        raise Exception('Failed to schedule computation')
 
-    # execute n jobs (coroutines) and get their results. Note that
-    # number of jobs created can be more than number of server
-    # processes available; the scheduler will use as many processes as
-    # necessary/available, running one job at a server process
-    jobs = [asyncoro.Coro(exec_proc, compute, random.uniform(3, 10)) for _ in range(n)]
-    for job in jobs:
-        print('    result: %s' % (yield job.finish()))
+    # send 5 requests to remote process (compute_coro)
+    def send_requests(rcoro, coro=None):
+        # first send this local coroutine (to whom rcoro sends result)
+        rcoro.send(coro)
+        for i in range(5):
+            rcoro.send(random.uniform(2, 10))
+            # assume delay in input availability
+            yield coro.sleep(random.uniform(0, 2))
+        # end of input is indicated with None
+        rcoro.send(None)
+        result = yield coro.receive() # get result
+        print('    %s computed result: %.4f' % (rcoro.location, result))
 
-    yield job_scheduler.finish(close=True)
+    for i in range(njobs):
+        rcoro = yield rcoro_scheduler.schedule(compute_coro)
+        if isinstance(rcoro, asyncoro.Coro):
+            print('  job %d processed by %s' % (i, rcoro.location))
+            asyncoro.Coro(send_requests, rcoro)
+
+    yield rcoro_scheduler.finish(close=True)
 
 
 if __name__ == '__main__':
-    import sys
+    import logging, random, sys
     asyncoro.logger.setLevel(logging.DEBUG)
-    n = 10 if len(sys.argv) == 1 else int(sys.argv[1])
-    # if scheduler is not already running (on a node as a program),
-    # start private scheduler:
-    discoro.Scheduler()
-    # send 'compute' generator function
-    computation = discoro.Computation([compute])
-    asyncoro.Coro(client_proc, computation, n)
+    # if scheduler is not already running (on a node as a program), start
+    # private scheduler:
+    Scheduler()
+    # package computation fragments
+    computation = Computation([compute_coro])
+    # use RemoteCoroScheduler to start coroutines at servers (should be done
+    # before scheduling computation)
+    rcoro_scheduler = RemoteCoroScheduler(computation)
+    # run n jobs
+    asyncoro.Coro(client_proc, computation, 10 if len(sys.argv) < 2 else int(sys.argv[1]))

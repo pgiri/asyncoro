@@ -3,8 +3,8 @@
 # module (although not necessary, and circular buffer can be implemented with
 # 'deque' instead).
 
-import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
+from asyncoro.discoro import *
 from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
 
@@ -89,9 +89,6 @@ def trend_proc(coro=None):
 # server processes, two local coroutines, one to receive trend signal from one
 # of the remote coroutines, and another to send data to two remote coroutines
 def client_proc(computation, coro=None):
-    # use RemoteCoroScheduler to schedule/submit coroutines; scheduler must be
-    # created before computation is scheduled (next step below)
-    job_scheduler = RemoteCoroScheduler(computation)
 
     # distribute computation to server
     if (yield computation.schedule()):
@@ -99,14 +96,14 @@ def client_proc(computation, coro=None):
 
     trend_coro = asyncoro.Coro(trend_proc)
 
-    rcoro_avg = yield job_scheduler.schedule(rcoro_avg_proc, 0.4, trend_coro, 10)
+    rcoro_avg = yield rcoro_scheduler.schedule(rcoro_avg_proc, 0.4, trend_coro, 10)
     assert isinstance(rcoro_avg, asyncoro.Coro)
-    rcoro_save = yield job_scheduler.schedule(rcoro_save_proc)
+    rcoro_save = yield rcoro_scheduler.schedule(rcoro_save_proc)
     assert isinstance(rcoro_save, asyncoro.Coro)
 
     asyncoro.Coro(data_proc, 1000, rcoro_avg, rcoro_save)
 
-    yield job_scheduler.finish(close=True)
+    yield rcoro_scheduler.finish(close=True)
 
 
 if __name__ == '__main__':
@@ -115,6 +112,9 @@ if __name__ == '__main__':
     # if scheduler is shared (i.e., running as program), nothing needs
     # to be done (its location can optionally be given to 'schedule');
     # othrwise, start private scheduler:
-    discoro.Scheduler()
-    computation = discoro.Computation([])
+    Scheduler()
+    computation = Computation([])
+    # use RemoteCoroScheduler to schedule/submit coroutines; scheduler must be
+    # created before computation is scheduled (next step below)
+    rcoro_scheduler = RemoteCoroScheduler(computation)
     asyncoro.Coro(client_proc, computation)

@@ -20,9 +20,8 @@
 # 'discoro_client5.py') and streaming (see 'discoro_client6.py') for
 # efficient processing of data and communication.
 
-import logging, random
-import asyncoro.discoro as discoro
 import asyncoro.disasyncoro as asyncoro
+from asyncoro.discoro import *
 from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
 
@@ -69,13 +68,13 @@ def client_proc(computation, n, coro=None):
 
 
 if __name__ == '__main__':
-    import sys
+    import sys, logging, random
     asyncoro.logger.setLevel(logging.DEBUG)
     asyncoro.AsynCoro(node='127.0.0.1', tcp_port=4567)
     n = 10 if len(sys.argv) == 1 else int(sys.argv[1])
     # if scheduler is not already running (on a node as a program),
     # start private scheduler:
-    discoro.Scheduler()
+    Scheduler()
     # send 'compute' generator function
-    computation = discoro.Computation([compute])
+    computation = Computation([compute])
     asyncoro.Coro(client_proc, computation, n)
