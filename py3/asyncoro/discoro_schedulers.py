@@ -19,7 +19,7 @@ import inspect
 import asyncoro.disasyncoro as asyncoro
 import asyncoro.discoro as discoro
 from asyncoro import Coro
-from asyncoro.discoro import DiscoroStatus
+from asyncoro.discoro import DiscoroStatus, DiscoroServerInfo, DiscoroNodeInfo
 
 
 class RemoteCoroScheduler(object):
@@ -170,6 +170,25 @@ class RemoteCoroScheduler(object):
         else:
             raise StopIteration(asyncoro.MonitorException(None, (type(rcoro), rcoro)))
 
+    def map_results(self, gen, iter):
+        """Execute generator 'gen' with arguments from given iterator. Each
+        element in iterator must be a tuple (i.e., keyword arguments are not
+        allowed). The return value is list of results that correspond to
+        executing 'gen' with arguments in iterator in the same order.
+
+        Must be used with 'yield', as for example,
+        'results = yield scheduler.map_results(generator, list_of_tuples)'.
+        """
+        def exec_proc(gen, *args):
+            yield self.execute(gen, *args)
+
+        coros = [Coro(exec_proc, gen, *params) for params in iter]
+        results = []
+        for coro in coros:
+            result = yield coro.finish()
+            results.append(result)
+        raise StopIteration(results)
+
     def submit_at(self, where, gen, *args, **kwargs):
         """Similar to 'run_at' method of computation. If 'where' is None, the
         calling coroutine is blocked until any server is discovered and
@@ -222,7 +241,7 @@ class RemoteCoroScheduler(object):
         """
 
         coro.set_daemon()
-        while True:
+        while 1:
             msg = yield coro.receive()
             if isinstance(msg, asyncoro.MonitorException):
                 if msg.args[1][0] == discoro.Scheduler.ServerClosed:
