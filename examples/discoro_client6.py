@@ -1,7 +1,7 @@
 # This example uses status messages and message passing to run remote coroutines
-# to process streaming data for live/real-time analysis. This example uses numpy
-# module (although not necessary, and circular buffer can be implemented with
-# 'deque' instead).
+# to process streaming data for live/real-time analysis. This example requires
+# numpy module available on servers. See discoro_client6_channel.py that uses
+# channels for communication and 'deque' for circular buffers (instead of numpy).
 
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *
@@ -22,7 +22,7 @@ def rcoro_avg_proc(threshold, trend_coro, window_size, coro=None):
         if n is None:
             break
         cumsum += (n - data[0])
-        avg = (cumsum / window_size)
+        avg = cumsum / window_size
         if avg > threshold:
             trend_coro.send((i, 'high', float(avg)))
         elif avg < -threshold:
@@ -45,35 +45,6 @@ def rcoro_save_proc(coro=None):
                 break
             fd.write('%s: %s\n' % (i, n))
     raise StopIteration(0)
-
-
-# This process runs locally. It sends (random) data to remote coroutines.
-def data_proc(count, rcoro_avg, rcoro_save, coro=None):
-    import random
-    # if data is sent frequently (say, many times a second), enable
-    # streaming data to remote peer; this is more efficient as
-    # connections are kept open (so the cost of opening and closing
-    # connections is avoided), but keeping too many connections open
-    # consumes system resources
-    yield asyncoro.AsynCoro.instance().peer(rcoro_avg.location, stream_send=True)
-    yield asyncoro.AsynCoro.instance().peer(rcoro_save.location, stream_send=True)
-    i = 0
-    while i < count:
-        i += 1
-        n = random.uniform(-1, 1)
-        item = (i, n)
-        # data can be sent to remote coroutines either with 'send' or
-        # 'deliver'; 'send' is more efficient but no guarantee data
-        # has been sent successfully whereas 'deliver' indicates
-        # errors right away; alternately, messages can be sent with a
-        # channel, which is more convenient if there are multiple
-        # (unknown) recipients
-        rcoro_avg.send(item)
-        rcoro_save.send(item)
-        yield coro.sleep(0.01)
-    item = (i, None)
-    rcoro_avg.send(item)
-    rcoro_save.send(item)
 
 
 # This coroutine runs on client. It gets trend messages from remote
@@ -101,13 +72,36 @@ def client_proc(computation, coro=None):
     rcoro_save = yield rcoro_scheduler.schedule(rcoro_save_proc)
     assert isinstance(rcoro_save, asyncoro.Coro)
 
-    asyncoro.Coro(data_proc, 1000, rcoro_avg, rcoro_save)
+    # if data is sent frequently (say, many times a second), enable
+    # streaming data to remote peer; this is more efficient as
+    # connections are kept open (so the cost of opening and closing
+    # connections is avoided), but keeping too many connections open
+    # consumes system resources
+    yield asyncoro.AsynCoro.instance().peer(rcoro_avg.location, stream_send=True)
+    yield asyncoro.AsynCoro.instance().peer(rcoro_save.location, stream_send=True)
+
+    # send 1000 items of random data to remote coroutines
+    for i in range(1000):
+        n = random.uniform(-1, 1)
+        item = (i, n)
+        # data can be sent to remote coroutines either with 'send' or
+        # 'deliver'; 'send' is more efficient but no guarantee data
+        # has been sent successfully whereas 'deliver' indicates
+        # errors right away; alternately, messages can be sent with a
+        # channel, which is more convenient if there are multiple
+        # (unknown) recipients
+        rcoro_avg.send(item)
+        rcoro_save.send(item)
+        yield coro.sleep(0.01)
+    item = (i, None)
+    rcoro_avg.send(item)
+    rcoro_save.send(item)
 
     yield rcoro_scheduler.finish(close=True)
 
 
 if __name__ == '__main__':
-    import logging
+    import logging, random
     asyncoro.logger.setLevel(logging.DEBUG)
     # if scheduler is shared (i.e., running as program), nothing needs
     # to be done (its location can optionally be given to 'schedule');

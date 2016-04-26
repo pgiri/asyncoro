@@ -57,29 +57,6 @@ def rcoro_save_proc(channel, coro=None):
     raise StopIteration(0)
 
 
-# This process runs locally. It sends (random) data to remote coroutines.
-def data_proc(data_channel, count, coro=None):
-    import random
-    # if data is sent frequently (say, many times a second), enable
-    # streaming data to remote peer; this is more efficient as
-    # connections are kept open (so the cost of opening and closing
-    # connections is avoided), but keeping too many connections open
-    # consumes system resources
-    i = 0
-    while i < count:
-        i += 1
-        n = random.uniform(-1, 1)
-        item = (i, n)
-        # data can be sent to remote coroutines either with 'send' or
-        # 'deliver'; 'send' is more efficient but no guarantee data
-        # has been sent successfully whereas 'deliver' indicates
-        # errors right away
-        data_channel.send(item)
-        yield coro.sleep(0.02)
-    item = (i, None)
-    data_channel.send(item)
-
-
 # This coroutine runs on client. It gets trend messages from remote
 # coroutine that computes moving window average.
 def trend_proc(coro=None):
@@ -101,7 +78,9 @@ def client_proc(computation, coro=None):
     # in discoro_client6.py, data is sent to each remote coroutine; here, data
     # is broadcast over channel and remote coroutines subscribe to it
     data_channel = asyncoro.Channel('data_channel')
-    data_channel.register()
+    # not necessary to register channel in this case, as it is sent to remote
+    # coroutines; if they were to 'locate' it, it should be registered
+    # data_channel.register()
 
     trend_coro = asyncoro.Coro(trend_proc)
 
@@ -114,16 +93,33 @@ def client_proc(computation, coro=None):
     # should return 2 if they both are)
     assert (yield data_channel.deliver('start', n=2)) == 2
 
+    # if data is sent frequently (say, many times a second), enable
+    # streaming data to remote peer; this is more efficient as
+    # connections are kept open (so the cost of opening and closing
+    # connections is avoided), but keeping too many connections open
+    # consumes system resources
     yield asyncoro.AsynCoro.instance().peer(rcoro_avg.location, stream_send=True)
     yield asyncoro.AsynCoro.instance().peer(rcoro_save.location, stream_send=True)
 
-    asyncoro.Coro(data_proc, data_channel, 1000)
+    # send 1000 items of random data to remote coroutines
+    for i in range(1000):
+        n = random.uniform(-1, 1)
+        item = (i, n)
+        # data can be sent to remote coroutines either with 'send' or
+        # 'deliver'; 'send' is more efficient but no guarantee data
+        # has been sent successfully whereas 'deliver' indicates
+        # errors right away
+        data_channel.send(item)
+        yield coro.sleep(0.02)
+    item = (i, None)
+    data_channel.send(item)
 
     yield rcoro_scheduler.finish(close=True)
+    data_channel.close()
 
 
 if __name__ == '__main__':
-    import logging
+    import logging, random
     asyncoro.logger.setLevel(logging.DEBUG)
     # if scheduler is shared (i.e., running as program), nothing needs
     # to be done (its location can optionally be given to 'schedule');
