@@ -32,7 +32,7 @@ import asyncoro.disasyncoro as asyncoro
 from asyncoro import Coro, logger
 
 __all__ = ['Scheduler', 'Computation', 'DiscoroStatus', 'DiscoroCoroInfo',
-           'DiscoroNodeInfo', 'DiscoroServerInfo']
+           'DiscoroNodeInfo', 'DiscoroServerInfo', 'DiscoroNodeAvailInfo']
 
 MsgTimeout = 10
 MinPulseInterval = 10
@@ -68,7 +68,7 @@ class Computation(object):
     """
 
     def __init__(self, components, status_coro=None, timeout=MsgTimeout,
-                 pulse_interval=(2*MinPulseInterval), zombie_period=(10*MaxPulseInterval)):
+                 pulse_interval=(2*MinPulseInterval), zombie_period=0):
         """'components' should be a list, each element of which is either a
         module, a (generator or normal) function, path name of a file, a class
         or an object (in which case the code for its class is sent).
@@ -94,9 +94,9 @@ class Computation(object):
         automatically closed (on that server). Once closed, the computation
         can't use that server anymore. This discards unused clients so other
         pending (queued) computations can use compute resources. If
-        'zombie_period' is None, the servers don't check for idle period and
+        'zombie_period' is 0, the servers don't check for idle period and
         don't close computation (until the user program explicitly closes
-        it). Default 'zombie_period' is set to 10 * MaxPulseInterval.
+        it).
         """
 
         if status_coro is not None and not isinstance(status_coro, Coro):
@@ -106,7 +106,7 @@ class Computation(object):
         if pulse_interval < MinPulseInterval or pulse_interval > MaxPulseInterval:
             raise Exception('"pulse_interval" must be at least %s and at most %s' %
                             (MinPulseInterval, MaxPulseInterval))
-        if (not isinstance(zombie_period, (int, float)) or zombie_period < MaxPulseInterval):
+        if (not isinstance(zombie_period, (int, float)) or 0 > zombie_period < MaxPulseInterval):
             raise Exception('"zombie_period" must be either 0 or >= %s' % MaxPulseInterval)
 
         if not isinstance(components, list):
@@ -407,8 +407,7 @@ class Computation(object):
             elif msg == 'quit':
                 break
             elif msg is None:
-                logger.debug('scheduler not reachable?')
-                if (time.time() - last_pulse) > self.zombie_period:
+                if self.zombie_period and (time.time() - last_pulse) > self.zombie_period:
                     logger.warning('scheduler is zombie!')
                     if self._auth:
                         self._pulse_coro = None
@@ -651,11 +650,13 @@ class Scheduler(object, metaclass=asyncoro.MetaSingleton):
             if (now - client_pulse) > self.__pulse_interval and self._cur_computation:
                 if self._cur_computation._pulse_coro.send('pulse') == 0:
                     client_pulse = now
-                elif (now - client_pulse) > self._cur_computation.zombie_period:
-                    logger.debug('client %s not responding; closing it', self.__cur_client_auth)
+                elif (self._cur_computation.zombie_period and
+                      (now - client_pulse) > self._cur_computation.zombie_period):
+                    logger.warning('Closing zombie computation %s', self.__cur_client_auth)
                     Coro(self.__close_computation)
 
-            if self._cur_computation and (now - server_check) > self._cur_computation.zombie_period:
+            if (self._cur_computation and self._cur_computation.zombie_period and
+               (now - server_check) > self._cur_computation.zombie_period):
                 server_check = now
                 for node in self._nodes.values():
                     if node.status != Scheduler.NodeInitialized:
