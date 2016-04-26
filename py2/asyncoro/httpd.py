@@ -408,13 +408,12 @@ class HTTPServer(object):
                                  'before quitting', self._poll_sec)
             if asyncoro.AsynCoro().cur_coro():
                 def _shutdown(coro=None):
-                    yield coro.sleep(self._poll_sec)
-                    yield coro.sleep(0.1)
+                    yield coro.sleep(self._poll_sec + 0.2)
                     self._server.shutdown()
                     self._server.server_close()
                 asyncoro.Coro(_shutdown)
             else:
-                time.sleep(self._poll_sec)
+                time.sleep(self._poll_sec + 0.2)
                 self._server.shutdown()
                 self._server.server_close()
         else:
