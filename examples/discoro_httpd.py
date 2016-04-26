@@ -79,7 +79,7 @@ def client_proc(computation, coro=None):
 
 
 if __name__ == '__main__':
-    import os, asyncoro.httpd, sys, logging, random
+    import os, asyncoro.discoro, asyncoro.httpd, sys, logging, random
     # asyncoro.logger.setLevel(logging.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start it (private scheduler):
@@ -88,7 +88,7 @@ if __name__ == '__main__':
     # objects of C)
     # use MinPulseInterval so node status updates are sent more frequently
     # (instead of default 2*MinPulseInterval)
-    computation = Computation([compute, C], pulse_interval=MinPulseInterval)
+    computation = Computation([compute, C], pulse_interval=asyncoro.discoro.MinPulseInterval)
     # create http server to monitor nodes, servers, coroutines
     http_server = asyncoro.httpd.HTTPServer(computation)
     coro = asyncoro.Coro(client_proc, computation)
