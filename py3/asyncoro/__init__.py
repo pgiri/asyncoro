@@ -3632,7 +3632,7 @@ class AsynCoro(object, metaclass=MetaSingleton):
         self._quit = True
         self._notifier.terminate()
         self._lock.release()
-        # logger.debug('AsynCoro terminated')
+        # logger.debug('AsynCoro %sterminated', ('%s ' % self._location) if self._location else '')
         while self._atexit:
             func, fargs, fkwargs = self._atexit.pop()
             try:
