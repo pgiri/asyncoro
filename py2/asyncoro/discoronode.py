@@ -225,6 +225,8 @@ def _discoro_proc():
             asyncoro.logger.debug('computation "%s" from %s with zombie period %s',
                                   _discoro_computation._auth, _discoro_msg['client'].location,
                                   _discoro_zombie_timeout)
+            if not _discoro_zombie_timeout:
+                _discoro_zombie_timeout = None
             _discoro_monitor_coro.send(None)
             _discoro_client.send(0)
         elif _discoro_req == 'close':
@@ -546,14 +548,14 @@ if __name__ == '__main__':
     else:
         _discoro_tcp_ports = [0] * (_discoro_cpus + 1)
 
-    peers, _discoro_config['peers'] = _discoro_config['peers'], []
+    _discoro_peers, _discoro_config['peers'] = _discoro_config['peers'], []
     peer = None
-    for peer in peers:
+    for peer in _discoro_peers:
         peer = peer.split(':')
         if len(peer) != 2:
             raise Exception('peer %s is not valid' % ':'.join(peer))
         _discoro_config['peers'].append(asyncoro.Location(peer[0], peer[1]))
-    del peer, peers
+    _discoro_peers = _discoro_config['peers']
 
     _discoro_name = _discoro_config['name']
     if not _discoro_name:
@@ -587,6 +589,8 @@ if __name__ == '__main__':
 
     def _discoro_timer_proc(coro=None):
         coro.set_daemon()
+        for peer in _discoro_peers:
+            yield asyncoro.AsynCoro.instance().peer(peer)
         last_pulse = last_proc_check = time.time()
         interval = pulse_coro = None
         from asyncoro.discoro import DiscoroNodeAvailInfo
