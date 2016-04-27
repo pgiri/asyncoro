@@ -115,7 +115,6 @@ class Computation(object):
         self._code = ''
         self._xfer_funcs = set()
         self._xfer_files = []
-        self._node_xfers = []
         self.status_coro = status_coro
         self._auth = None
         self.scheduler = None
@@ -705,7 +704,7 @@ class Scheduler(object):
             self.__cur_client_auth = self._cur_computation._auth
             self._cur_computation._auth = Scheduler.auth_code()
             msg = {'resp': 'scheduled', 'auth': self.__cur_client_auth}
-            if (yield client.deliver(msg, timeout=self._cur_computation.timeout)) != 1:
+            if (yield client.deliver(msg, timeout=min(self._cur_computation.timeout, MsgTimeout))) != 1:
                 logger.warning('client not reachable?')
                 self._cur_client_auth = None
                 self._cur_computation = None
