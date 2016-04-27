@@ -171,10 +171,9 @@ class RemoteCoroScheduler(object):
             raise StopIteration(asyncoro.MonitorException(None, (type(rcoro), rcoro)))
 
     def map_results(self, gen, iter):
-        """Execute generator 'gen' with arguments from given iterator. Each
-        element in iterator must be a tuple (i.e., keyword arguments are not
-        allowed). The return value is list of results that correspond to
-        executing 'gen' with arguments in iterator in the same order.
+        """Execute generator 'gen' with arguments from given iterable. The
+        return value is list of results that correspond to executing 'gen' with
+        arguments in iterable in the same order.
 
         Must be used with 'yield', as for example,
         'results = yield scheduler.map_results(generator, list_of_tuples)'.
@@ -182,11 +181,19 @@ class RemoteCoroScheduler(object):
         def exec_proc(gen, *args):
             yield self.execute(gen, *args)
 
-        coros = [Coro(exec_proc, gen, *params) for params in iter]
-        results = []
-        for coro in coros:
+        coros = []
+        append_coro = coros.append
+        for params in iter:
+            if not isinstance(params, tuple):
+                if hasattr(params, '__iter__'):
+                    params = tuple(params)
+                else:
+                    params = (params,)
+            append_coro(Coro(exec_proc, gen, *params))
+        results = [None] * len(coros)
+        for i, coro in enumerate(coros):
             result = yield coro.finish()
-            results.append(result)
+            results[i] = result
         raise StopIteration(results)
 
     def submit_at(self, where, gen, *args, **kwargs):
