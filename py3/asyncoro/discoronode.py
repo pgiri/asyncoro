@@ -429,7 +429,6 @@ def _discoro_process(_discoro_config, _discoro_server_id, _discoro_mp_queue, _di
             req = req_queue.get()
         except KeyboardInterrupt:
             req = {'req': 'terminate', 'auth': _discoro_auth}
-            # TODO: do all processes receive KeyboardInterrupt, or inform others
             req_queue.put(req)
             asyncoro.logger.debug('%s terminating', asyncoro.AsynCoro.instance()._location)
 
@@ -571,6 +570,7 @@ if __name__ == '__main__':
         if len(peer) != 2:
             raise Exception('peer %s is not valid' % ':'.join(peer))
         _discoro_config['peers'].append(asyncoro.Location(peer[0], peer[1]))
+    del peer
     _discoro_peers = _discoro_config['peers']
 
     _discoro_name = _discoro_config['name']
@@ -604,12 +604,12 @@ if __name__ == '__main__':
         _discoro_server_info.Proc.start()
 
     def _discoro_timer_proc(coro=None):
+        from asyncoro.discoro import DiscoroNodeAvailInfo
         coro.set_daemon()
-        for peer in _discoro_peers:
-            yield asyncoro.AsynCoro.instance().peer(peer)
         last_pulse = last_proc_check = time.time()
         interval = pulse_coro = None
-        from asyncoro.discoro import DiscoroNodeAvailInfo
+        for peer in _discoro_peers:
+            yield asyncoro.AsynCoro.instance().peer(peer)
         while 1:
             msg = yield coro.receive(timeout=interval)
             now = time.time()
@@ -680,12 +680,12 @@ if __name__ == '__main__':
             while 1:
                 yield coro.sleep(0.25)
                 try:
-                    print(
+                    _discoro_cmd = yield async_threads.async_task(
+                        input,
                         '\nEnter "status" to get status\n'
                         '  "close" to close current computation (kill any running jobs)\n'
                         '  "quit" to stop accepting new jobs and quit when done\n'
-                        '  "terminate" to kill current jobs and quit: ', end='')
-                    _discoro_cmd = yield async_threads.async_task(input)
+                        '  "terminate" to kill current jobs and quit: ')
                 except:
                     _discoro_cmd = 'terminate'
                 else:
