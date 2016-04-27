@@ -618,31 +618,23 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 raise StopIteration(-1)
             loc = Location(loc, 0)
 
+        if stream_send:
+            self._stream_peers[(loc.addr, loc.port)] = True
+        else:
+            self._stream_peers.pop((loc.addr, loc.port), None)
+
         if loc.port:
             peer = _Peer.peers.get((loc.addr, loc.port), None)
             if peer:
-                stream_peers = [(loc.addr, loc.port, peer)]
-            else:
-                stream_peers = []
+                peer.stream = stream_send
+                if not broadcast:
+                    raise StopIteration(0)
         else:
-            stream_peers = [(addr, port, peer) for (addr, port), peer in _Peer.peers.items()
-                            if (addr == loc.addr and (loc.port == 0 or loc.port == port))]
-
-        if stream_send:
-            for addr, port, peer in stream_peers:
-                peer.stream = True
-            self._stream_peers[(loc.addr, loc.port)] = True
-        else:
-            for addr, port, peer in stream_peers:
-                self._stream_peers.pop((addr, port), None)
-                peer.stream = False
-            self._stream_peers.pop((loc.addr, loc.port), None)
-
-        if stream_peers:
-            for (ip_addr, port, peer) in stream_peers:
-                req = _NetRequest('stream', kwargs={'send': stream_send}, dst=peer.location)
-                _Peer.send_req(req)
-            raise StopIteration(0)
+            for (addr, port), peer in _Peer.peers.items():
+                if addr == loc.addr:
+                    peer.stream = stream_send
+                    if not stream_send:
+                        self._stream_peers.pop((addr, port), None)
 
         if loc.port:
             req = _NetRequest('ping',
@@ -1231,10 +1223,6 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                     _Peer.remove(peer_loc)
                     yield conn.send_msg(serialize('ack'))
                 break
-            elif req.name == 'stream':
-                yield conn.send_msg(serialize('ack'))
-                # if not req.kwargs['send']:
-                #     break
             else:
                 logger.warning('invalid request "%s" ignored', req.name)
 
