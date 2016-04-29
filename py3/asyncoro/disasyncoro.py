@@ -18,6 +18,10 @@ import hashlib
 import collections
 import copy
 import tempfile
+try:
+    import netifaces
+except ImportError:
+    netifaces = None
 
 import asyncoro
 from asyncoro import *
@@ -795,14 +799,29 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
         coro.set_daemon()
 
         if discover_peers:
+            broadcast = '<broadcast>'
+            if netifaces:
+                for iface in netifaces.interfaces():
+                    for addresses in netifaces.ifaddresses(iface).values():
+                        for addr in addresses:
+                            if addr['addr'] == self._location.addr:
+                                broadcast = addr.get('broadcast', '<broadcast>')
+                                break
+                        else:
+                            continue
+                        break
+                    else:
+                        continue
+                    break
             ping_sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
             ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             ping_sock.settimeout(2)
+            ping_sock.bind((self._location.addr, 0))
             ping_msg = {'location': self._location, 'signature': self._signature,
                         'name': self._name, 'version': __version__}
             ping_msg = b'ping:' + serialize(ping_msg)
             try:
-                yield ping_sock.sendto(ping_msg, ('<broadcast>', self._udp_sock.getsockname()[1]))
+                yield ping_sock.sendto(ping_msg, (broadcast, self._udp_sock.getsockname()[1]))
             except:
                 pass
             ping_sock.close()
