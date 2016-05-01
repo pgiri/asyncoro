@@ -924,8 +924,12 @@ class Scheduler(object):
                 timeout = self._cur_computation.timeout
             else:
                 timeout = MsgTimeout
-            server.coro = yield Coro.locate('discoro_server', server.location, timeout=timeout)
-            if not isinstance(server.coro, Coro):
+            for _ in range(3):
+                server.coro = yield Coro.locate('discoro_server', server.location, timeout=timeout)
+                if isinstance(server.coro, Coro):
+                    break
+                yield coro.sleep(0.2)
+            else:
                 # logger.debug('server at %s is not valid', server.location)
                 # TODO: asuume temporary issue instead of removing it?
                 node.servers.pop(server.location, None)
