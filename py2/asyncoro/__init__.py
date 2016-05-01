@@ -1730,7 +1730,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
             try:
                 events = self._poller.poll(poll_timeout)
             except:
-                logger.debug('poll failed')
+                logger.debug('poll failed: %s, %s', poll_timeout, timeout)
                 logger.debug(traceback.format_exc())
                 # prevent tight loops
                 time.sleep(5)
@@ -3362,6 +3362,8 @@ class AsynCoro(object):
             if not self._scheduled:
                 if self._timeouts:
                     timeout = self._timeouts[0][0] - _time()
+                    if timeout < 0.0001:
+                        timeout = 0
                 else:
                     timeout = None
                 self._polling = True
