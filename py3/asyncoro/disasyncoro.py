@@ -529,6 +529,20 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
             logger.info('network server %s@ %s, udp_port=%s',
                         '"%s" ' % name if name else '', self._location,
                         self._udp_sock.getsockname()[1])
+            self._broadcast = '<broadcast>'
+            if netifaces:
+                for iface in netifaces.interfaces():
+                    for addresses in netifaces.ifaddresses(iface).values():
+                        for addr in addresses:
+                            if addr['addr'] == self._location.addr:
+                                self._broadcast = addr.get('broadcast', '<broadcast>')
+                                break
+                        else:
+                            continue
+                        break
+                    else:
+                        continue
+                    break
             self._tcp_coro = Coro(self._tcp_proc)
             self._udp_coro = Coro(self._udp_proc, discover_peers)
 
@@ -685,6 +699,26 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
         """
         return _Peer.get_peers()
 
+    def discover_peers(self, coro=None):
+        """This method can be invoked (periodically?) to broadcast message to
+        discover peers, if there is a chance initial broadcast message may be
+        lost (as these messages are sent over UDP).
+
+        Must be used with a Coro, or yield.
+        """
+        ping_sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+        ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        ping_sock.settimeout(2)
+        ping_sock.bind((self._location.addr, 0))
+        ping_msg = {'location': self._location, 'signature': self._signature,
+                    'name': self._name, 'version': __version__}
+        ping_msg = b'ping:' + serialize(ping_msg)
+        try:
+            yield ping_sock.sendto(ping_msg, (self._broadcast, self._udp_sock.getsockname()[1]))
+        except:
+            pass
+        ping_sock.close()
+
     def send_file(self, location, file, dir=None, overwrite=False, timeout=None):
         """Must be used with 'yield' as
         'val = yield scheduler.send_file(location, "file1")'.
@@ -799,32 +833,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
         coro.set_daemon()
 
         if discover_peers:
-            broadcast = '<broadcast>'
-            if netifaces:
-                for iface in netifaces.interfaces():
-                    for addresses in netifaces.ifaddresses(iface).values():
-                        for addr in addresses:
-                            if addr['addr'] == self._location.addr:
-                                broadcast = addr.get('broadcast', '<broadcast>')
-                                break
-                        else:
-                            continue
-                        break
-                    else:
-                        continue
-                    break
-            ping_sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
-            ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            ping_sock.settimeout(2)
-            ping_sock.bind((self._location.addr, 0))
-            ping_msg = {'location': self._location, 'signature': self._signature,
-                        'name': self._name, 'version': __version__}
-            ping_msg = b'ping:' + serialize(ping_msg)
-            try:
-                yield ping_sock.sendto(ping_msg, (broadcast, self._udp_sock.getsockname()[1]))
-            except:
-                pass
-            ping_sock.close()
+            Coro(self.discover_peers)
 
         while 1:
             msg, addr = yield self._udp_sock.recvfrom(1024)
@@ -860,7 +869,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 ping_msg = b'ping:' + serialize(ping_info)
                 try:
                     yield ping_sock.sendto(ping_msg,
-                                           ('<broadcast>', self._udp_sock.getsockname()[1]))
+                                           (self._broadcast, self._udp_sock.getsockname()[1]))
                 except GeneratorExit:
                     break
                 except:
@@ -1236,7 +1245,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 # synchronous message
                 peer_loc = req.kwargs.get('location', None)
                 if peer_loc:
-                    logger.debug('peer %s terminated', peer_loc)
+                    logger.debug('%s: peer %s terminated', self._location, peer_loc)
                     # TODO: remove from _stream_peers?
                     # self._stream_peers.pop((peer_loc.addr, peer_loc.port), None)
                     _Peer.remove(peer_loc)
