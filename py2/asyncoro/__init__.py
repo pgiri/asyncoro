@@ -27,7 +27,7 @@ __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
 
 import time
 import threading
-import functools
+from functools import partial as partial_func
 import socket
 import inspect
 import traceback
@@ -386,7 +386,7 @@ class _AsyncSocket(object):
                 coro, self._read_coro = self._read_coro, None
                 coro._proceed_(buf)
 
-        self._read_task = functools.partial(_recv, self, bufsize, *args)
+        self._read_task = partial_func(_recv, self, bufsize, *args)
         self._read_coro = AsynCoro.cur_coro()
         self._read_coro._await_()
         self._notifier.add(self, _AsyncPoller._Read)
@@ -444,7 +444,7 @@ class _AsyncSocket(object):
                         if self._timeout:
                             self._notifier._del_timeout(self)
                             self._notifier._add_timeout(self)
-                        self._read_task = functools.partial(_recvall, self, view, *args)
+                        self._read_task = partial_func(_recvall, self, view, *args)
                 else:
                     self._notifier.clear(self, _AsyncPoller._Read)
                     self._read_task = self._read_result = None
@@ -453,7 +453,7 @@ class _AsyncSocket(object):
 
         self._read_result = bytearray(bufsize)
         view = memoryview(self._read_result)
-        self._read_task = functools.partial(_recvall, self, view, *args)
+        self._read_task = partial_func(_recvall, self, view, *args)
         self._read_coro = AsynCoro.cur_coro()
         self._read_coro._await_()
         self._notifier.add(self, _AsyncPoller._Read)
@@ -475,7 +475,7 @@ class _AsyncSocket(object):
                     coro._proceed_(buf)
                 elif recvd:
                     view = view[recvd:]
-                    self._read_task = functools.partial(_recvall, self, view, *args)
+                    self._read_task = partial_func(_recvall, self, view, *args)
 
     def _sync_recvall(self, bufsize, *args):
         """Internal use only; use 'recvall' instead.
@@ -512,7 +512,7 @@ class _AsyncSocket(object):
                 coro, self._read_coro = self._read_coro, None
                 coro._proceed_(res)
 
-        self._read_task = functools.partial(_recvfrom, self, *args)
+        self._read_task = partial_func(_recvfrom, self, *args)
         self._read_coro = AsynCoro.cur_coro()
         self._read_coro._await_()
         self._notifier.add(self, _AsyncPoller._Read)
@@ -544,7 +544,7 @@ class _AsyncSocket(object):
                 coro, self._write_coro = self._write_coro, None
                 coro._proceed_(sent)
 
-        self._write_task = functools.partial(_send, self, *args)
+        self._write_task = partial_func(_send, self, *args)
         self._write_coro = AsynCoro.cur_coro()
         self._write_coro._await_()
         self._notifier.add(self, _AsyncPoller._Write)
@@ -568,7 +568,7 @@ class _AsyncSocket(object):
                 coro, self._write_coro = self._write_coro, None
                 coro._proceed_(sent)
 
-        self._write_task = functools.partial(_sendto, self, *args)
+        self._write_task = partial_func(_sendto, self, *args)
         self._write_coro = AsynCoro.cur_coro()
         self._write_coro._await_()
         self._notifier.add(self, _AsyncPoller._Write)
@@ -616,7 +616,7 @@ class _AsyncSocket(object):
                         self._notifier._add_timeout(self)
 
         self._write_result = buffer(data)
-        self._write_task = functools.partial(_sendall, self, len(data))
+        self._write_task = partial_func(_sendall, self, len(data))
         self._write_coro = AsynCoro.cur_coro()
         self._write_coro._await_()
         self._notifier.add(self, _AsyncPoller._Write)
@@ -695,7 +695,7 @@ class _AsyncSocket(object):
                     conn.close()
                     coro.throw(*sys.exc_info())
                 else:
-                    conn._read_task = conn._write_task = functools.partial(_ssl_handshake, conn, addr)
+                    conn._read_task = conn._write_task = partial_func(_ssl_handshake, conn, addr)
                     conn._read_coro = conn._write_coro = self._read_coro
                     self._read_coro = None
                     conn._notifier.add(conn, _AsyncPoller._Read | _AsyncPoller._Write)
@@ -705,7 +705,7 @@ class _AsyncSocket(object):
                 conn = AsyncSocket(conn, blocking=False)
                 coro._proceed_((conn, addr))
 
-        self._read_task = functools.partial(_accept, self)
+        self._read_task = partial_func(_accept, self)
         self._read_coro = AsynCoro.cur_coro()
         self._read_coro._await_()
         self._notifier.add(self, _AsyncPoller._Read)
@@ -760,7 +760,7 @@ class _AsyncSocket(object):
                     self.close()
                     coro.throw(*sys.exc_info())
                 else:
-                    self._read_task = self._write_task = functools.partial(_ssl_handshake, self)
+                    self._read_task = self._write_task = partial_func(_ssl_handshake, self)
                     self._read_coro = self._write_coro
                     self._notifier.add(self, _AsyncPoller._Read)
                     self._write_task()
@@ -770,7 +770,7 @@ class _AsyncSocket(object):
                 self._notifier.clear(self, _AsyncPoller._Write)
                 coro._proceed_(0)
 
-        self._write_task = functools.partial(_connect, self, *args)
+        self._write_task = partial_func(_connect, self, *args)
         self._write_coro = AsynCoro.cur_coro()
         self._write_coro._await_()
         self._notifier.add(self, _AsyncPoller._Write)
@@ -1053,6 +1053,8 @@ if platform.system() == 'Windows':
 
             @staticmethod
             def _socketpair():
+                if hasattr(socket, 'socketpair'):
+                    return socket.socketpair()
                 srv_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 srv_sock.bind(('127.0.0.1', 0))
                 srv_sock.listen(1)
@@ -1064,6 +1066,7 @@ if platform.system() == 'Windows':
                 conn_thread.start()
                 sock2, caddr = srv_sock.accept()
                 srv_sock.close()
+                conn_thread.join()
                 return (sock1, sock2)
 
         class _AsyncNotifier(object):
@@ -1239,9 +1242,9 @@ if platform.system() == 'Windows':
                                 elif rc:
                                     logger.warning('CancelIo failed?: %x', rc)
                             if self._read_overlap and self._read_overlap.object:
-                                self._read_overlap.object = functools.partial(_cleanup_, self)
+                                self._read_overlap.object = partial_func(_cleanup_, self)
                             if self._write_overlap and self._write_overlap.object:
-                                self._read_overlap.object = functools.partial(_cleanup_, self)
+                                self._read_overlap.object = partial_func(_cleanup_, self)
                             win32file.CancelIo(self._fileno)
                         else:
                             self._read_overlap = self._write_overlap = None
@@ -1305,7 +1308,7 @@ if platform.system() == 'Windows':
                             coro._proceed_(buf)
 
                 self._read_result = win32file.AllocateReadBuffer(bufsize)
-                self._read_overlap.object = functools.partial(_recv, self)
+                self._read_overlap.object = partial_func(_recv, self)
                 self._read_coro = AsynCoro.cur_coro()
                 self._read_coro._await_()
                 if self._timeout:
@@ -1337,7 +1340,7 @@ if platform.system() == 'Windows':
                         if coro:
                             coro._proceed_(n)
 
-                self._write_overlap.object = functools.partial(_send, self)
+                self._write_overlap.object = partial_func(_send, self)
                 self._write_coro = AsynCoro.cur_coro()
                 self._write_coro._await_()
                 if self._timeout:
@@ -1379,8 +1382,7 @@ if platform.system() == 'Windows':
                                 coro._proceed_(buf)
                         else:
                             buf = win32file.AllocateReadBuffer(min(pending, 1048576))
-                            self._read_overlap.object = functools.partial(_recvall, self,
-                                                                          pending, buf)
+                            self._read_overlap.object = partial_func(_recvall, self, pending, buf)
                             err, n = win32file.WSARecv(self._fileno, buf, self._read_overlap, 0)
                             if err and err != winerror.ERROR_IO_PENDING:
                                 if self._timeout and self._notifier:
@@ -1392,7 +1394,7 @@ if platform.system() == 'Windows':
 
                 self._read_result = []
                 buf = win32file.AllocateReadBuffer(min(bufsize, 1048576))
-                self._read_overlap.object = functools.partial(_recvall, self, bufsize, buf)
+                self._read_overlap.object = partial_func(_recvall, self, bufsize, buf)
                 self._read_coro = AsynCoro.cur_coro()
                 self._read_coro._await_()
                 if self._timeout:
@@ -1439,7 +1441,7 @@ if platform.system() == 'Windows':
                                     coro.throw(socket.error(err))
 
                 self._write_result = buffer(data)
-                self._write_overlap.object = functools.partial(_sendall, self)
+                self._write_overlap.object = partial_func(_sendall, self)
                 self._write_coro = AsynCoro.cur_coro()
                 self._write_coro._await_()
                 if self._timeout:
@@ -1505,7 +1507,7 @@ if platform.system() == 'Windows':
                                                           server_side=False,
                                                           do_handshake_on_connect=False)
                             self._read_result = win32file.AllocateReadBuffer(0)
-                            self._read_overlap.object = functools.partial(_ssl_handshake, self)
+                            self._read_overlap.object = partial_func(_ssl_handshake, self)
                             self._read_overlap.object(None, 0)
                         else:
                             if self._timeout and self._notifier:
@@ -1521,7 +1523,7 @@ if platform.system() == 'Windows':
                 except socket.error as exc:
                     if exc[0] != EINVAL:
                         raise
-                self._read_overlap.object = functools.partial(_connect, self)
+                self._read_overlap.object = partial_func(_connect, self)
                 self._read_coro = AsynCoro.cur_coro()
                 self._read_coro._await_()
                 if self._timeout:
@@ -1600,8 +1602,8 @@ if platform.system() == 'Windows':
                                                               do_handshake_on_connect=False)
 
                             self._read_result = win32file.AllocateReadBuffer(0)
-                            self._read_overlap.object = functools.partial(_ssl_handshake, self,
-                                                                          conn, raddr)
+                            self._read_overlap.object = partial_func(_ssl_handshake, self,
+                                                                     conn, raddr)
                             self._read_overlap.object(None, 0)
                         else:
                             if self._timeout and self._notifier:
@@ -1615,7 +1617,7 @@ if platform.system() == 'Windows':
                 conn = AsyncSocket(sock, keyfile=self._keyfile, certfile=self._certfile,
                                    ssl_version=self._ssl_version)
                 self._read_result = win32file.AllocateReadBuffer(win32file.CalculateSocketEndPointSize(sock))
-                self._read_overlap.object = functools.partial(_accept, self, conn)
+                self._read_overlap.object = partial_func(_accept, self, conn)
                 self._read_coro = AsynCoro.cur_coro()
                 self._read_coro._await_()
                 if self._timeout:
@@ -1721,6 +1723,8 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                 poll_timeout = self._timeouts[0][0] - _time()
                 if timeout is not None:
                     poll_timeout = min(timeout, poll_timeout)
+                if poll_timeout < 0.0001:
+                    poll_timeout = 0
                 poll_timeout *= self.timeout_multiplier
             elif timeout is None:
                 poll_timeout = _AsyncPoller._Block
@@ -1861,6 +1865,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
             conn_thread.start()
             sock2, caddr = srv_sock.accept()
             srv_sock.close()
+            conn_thread.join()
             return (sock1, sock2)
 
     class _KQueueNotifier(object):
@@ -3010,7 +3015,7 @@ class CategorizeMessages(object):
             argspec = inspect.getargspec(categorize)
             if len(argspec.args) != 1:
                 categorize = None
-        elif type(categorize) != functools.partial:
+        elif type(categorize) != partial_func:
             categorize = None
 
         if categorize:
@@ -3765,18 +3770,18 @@ class AsyncDBCursor(object):
         """
         yield self._sem.acquire()
         self._thread_pool.async_task(self._exec_task,
-                                     functools.partial(self._cursor.execute, query, args))
+                                     partial_func(self._cursor.execute, query, args))
 
     def executemany(self, query, args):
         """Must be used with 'yield' as 'n = yield cursor.executemany(stmt)'.
         """
         yield self._sem.acquire()
         self._thread_pool.async_task(self._exec_task,
-                                     functools.partial(self._cursor.executemany, query, args))
+                                     partial_func(self._cursor.executemany, query, args))
 
     def callproc(self, proc, args=()):
         """Must be used with 'yield' as 'yield cursor.callproc(proc)'.
         """
         yield self._sem.acquire()
         self._thread_pool.async_task(self._exec_task,
-                                     functools.partial(self._cursor.callproc, proc, args))
+                                     partial_func(self._cursor.callproc, proc, args))
