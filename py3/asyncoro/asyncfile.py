@@ -233,7 +233,7 @@ if platform.system() == 'Windows':
             else:
                 self._handle = path_handle
                 # pipe mode should be either 'r' or 'w'
-                flags = 0 if mode.startswith('r') else os.O_RDONLY
+                flags = os.O_RDONLY if mode.startswith('r') else 0
                 self._fileno = msvcrt.open_osfhandle(self._handle, flags)
 
             self._buflist = []
@@ -705,7 +705,7 @@ class AsyncFile(_AsyncFile):
                 raise StopIteration(buf)
 
         buflist = []
-        while True:
+        while 1:
             if size > 0:
                 pos = buf.find(b'\n', 0, size)
                 size -= len(buf)
@@ -837,7 +837,7 @@ class AsyncPipe(object):
                     read_func = partial_func(os.read, input.fileno())
                 else:
                     read_func = input.read
-                while True:
+                while 1:
                     data = yield read_func(size)
                     if not data:
                         break
@@ -852,7 +852,7 @@ class AsyncPipe(object):
         def read_proc(fd, coro=None):
             size = 16384
             buflist = []
-            while True:
+            while 1:
                 buf = yield fd.read(size)
                 if not buf:
                     break
