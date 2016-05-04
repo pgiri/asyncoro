@@ -625,7 +625,7 @@ class Scheduler(object):
                     else:
                         server = None
                     if server:
-                        yield self.__close_server(server)
+                        yield self.__close_server(server, coro=coro)
                         if all(p.status != Scheduler.ServerInitialized
                                for p in node.servers.itervalues()):
                             node.status = Scheduler.NodeClosed
@@ -984,8 +984,11 @@ class Scheduler(object):
         if not computation:
             logger.warning('Closing node %s ignored', node.addr)
             raise StopIteration(-1)
+        close_coros = []
         for server in node.servers.values():
-            yield self.__close_server(server, coro=coro)
+            close_coros.append(Coro(self.__close_server, server))
+        for close_coro in close_coros:
+            yield close_coro.finish()
 
     def __close_server(self, server, coro=None):
         computation = self._cur_computation
@@ -1003,6 +1006,11 @@ class Scheduler(object):
         else:
             yield server.coro.deliver({'req': 'close', 'auth': computation._auth},
                                       timeout=computation.timeout)
+        if server.rcoros:  # wait a bit for server to terminate coros
+            for _ in range(5):
+                yield coro.sleep(0.1)
+                if not server.rcoros:
+                    break
         if server.rcoros:
             logger.warning('%s coros running at %s', len(server.rcoros), server.location)
             if computation and computation.status_coro:
@@ -1012,8 +1020,7 @@ class Scheduler(object):
 
         server.status = Scheduler.ServerClosed
         server.xfer_files = []
-        server.rcoros = {}
-        server.done = {}
+        server.rcoros.clear()
         if computation and computation.status_coro:
             computation.status_coro.send(DiscoroStatus(server.status, server.location))
         if disconnected and not node.servers:
@@ -1026,8 +1033,11 @@ class Scheduler(object):
 
     def __close_computation(self, coro=None):
         computation = self._cur_computation
+        close_coros = []
         for node in self._nodes.values():
-            yield self.__close_node(node)
+            close_coros.append(Coro(self.__close_node, node))
+        for close_coro in close_coros:
+            yield close_coro.finish()
         if self.__cur_client_auth:
             computation_path = os.path.join(self.__dest_path, self.__cur_client_auth)
             if os.path.isdir(computation_path):
