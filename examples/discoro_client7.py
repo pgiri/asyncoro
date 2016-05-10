@@ -20,11 +20,23 @@ def rcoro_proc(n, coro=None):
 def status_proc(computation, njobs, coro=None):
     npending = njobs
 
+    # in this example at most one coroutine is submitted at a server; depending
+    # on computation / needs, many coroutines can be simlutaneously submitted /
+    # running at a server.
     while True:
         msg = yield coro.receive()
-        if isinstance(msg, asyncoro.MonitorException):
+        if isinstance(msg, DiscoroStatus):
+            # print('Status: %s / %s' % (msg.info, msg.status))
+            if msg.status == Scheduler.ServerInitialized and njobs > 0: # submit a job
+                n = random.uniform(5, 10)
+                rcoro = yield computation.run_at(msg.info, rcoro_proc, n)
+                if isinstance(rcoro, asyncoro.Coro):
+                    print('  rcoro_proc started at %s with %s' % (rcoro.location, n))
+                    njobs -= 1
+        elif isinstance(msg, asyncoro.MonitorException):
+            # previously submitted remote coroutine finished
             rcoro = msg.args[0]
-            if msg.args[1][0] == StopIteration:
+            if msg.args[1][0] == StopIteration: # exit status type
                 print('      rcoro_proc at %s finished with %s' % (rcoro.location, msg.args[1][1]))
             else:
                 print('      rcoro_proc at %s failed: %s / %s' %
@@ -36,14 +48,6 @@ def status_proc(computation, njobs, coro=None):
             if njobs > 0: # submit another job
                 n = random.uniform(5, 10)
                 rcoro = yield computation.run_at(rcoro.location, rcoro_proc, n)
-                if isinstance(rcoro, asyncoro.Coro):
-                    print('  rcoro_proc started at %s with %s' % (rcoro.location, n))
-                    njobs -= 1
-        elif isinstance(msg, DiscoroStatus):
-            # print('Status: %s / %s' % (msg.info, msg.status))
-            if msg.status == Scheduler.ServerInitialized and njobs > 0: # submit a job
-                n = random.uniform(5, 10)
-                rcoro = yield computation.run_at(msg.info, rcoro_proc, n)
                 if isinstance(rcoro, asyncoro.Coro):
                     print('  rcoro_proc started at %s with %s' % (rcoro.location, n))
                     njobs -= 1

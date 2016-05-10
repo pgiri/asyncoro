@@ -6,10 +6,11 @@ from asyncoro.discoro import *
 from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
 # The computation is simulated with 'time.sleep', during which entire asyncoro
-# framework is suspended as well. To avoid blocking the framework (which would
-# prevent it from accepting messages from client), the computation is executed
-# in a thread. Coroutine sends messages to thread with Queue (thread function
-# can't receive messages from client directly).
+# framework is suspended as well (as asyncoro doesn't preempt running task). To
+# avoid blocking the framework (which would prevent it from accepting messages
+# from client), the computation is executed in a thread. Coroutine sends
+# messages to thread with Queue (thread function can't receive messages from
+# client directly).
 
 def compute_coro(coro=None):
     import threading, time

@@ -111,7 +111,7 @@ if __name__ == '__main__':
     # if scheduler is not already running (on a node as a program),
     # start private scheduler:
     Scheduler()
-    program = 'discoro_client5_proc.py'
+    program = 'discoro_client5_proc.py' # program to distribute and execute
     # send rcoro_proc and program
     computation = Computation([rcoro_proc, os.path.join(os.path.dirname(sys.argv[0]), program)])
     # use RemoteCoroScheduler to run jobs

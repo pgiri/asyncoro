@@ -14,6 +14,7 @@ def writer(apipe, inp, coro=None):
     apipe.stdin.close()
 
 def line_reader(apipe, coro=None):
+    nlines = 0
     while True:
         try:
             line = yield apipe.readline()
@@ -21,6 +22,7 @@ def line_reader(apipe, coro=None):
             asyncoro.logger.debug('read failed')
             asyncoro.logger.debug(traceback.format_exc())
             break
+        nlines += 1
         if not line:
             break
         print('%s' % line),

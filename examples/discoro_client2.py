@@ -13,20 +13,27 @@ import asyncoro.httpd
 
 
 # The computation in this example is simulated with 'time.sleep' (during which
-# entire asyncoro framework is suspended as well). Usually executing CPU bound
-# tasks (such as 'time.sleep') shouldn't be executed in coroutines, as asyncoro
-# framework is not responsive to any messages being sent to it (say, from
-# client). In this example, no messages are not sent to/from computation, so
-# computation can be executed in coroutine; see other discomro_client*.py
-# examples where computations are executed with threads.
+# entire asyncoro framework is suspended as well). Usually CPU bound tasks that
+# don't 'yield' (such as 'time.sleep') shouldn't be executed in coroutines, as
+# asyncoro doesn't preempt currently running task, the framework is not
+# responsive to any messages being sent to it (say, from client). In this
+# example, no messages are not sent to/from computation, so it is okay to block
+# asyncoro while computation is executed; see other discomro_client*.py examples
+# where computations are executed with threads.
 
 # discoronode expects user computations to be generator functions (that have at
 # least one 'yield' statement) to create coroutines.
 def compute(i, n, coro=None):
-    import time
-    time.sleep(n)
-    # coroutines should've at least one 'yield'
-    yield (i, time.asctime()) # value yielded here is sent as result to client
+    # compute factorial of n; during this evaluation asyncoro framework cannot
+    # receive / send messages, switch coroutines etc.
+    factorial = 1
+    for k in range(2, n):
+        factorial *= k
+    # coroutines should've at least one 'yield'. Note that factorial computed is
+    # rather large and sending it to client may take time, which may casue
+    # timeout issues over slow networks; instead of sending large amount of data
+    # as messages, it may be preferable to send as file transfer
+    yield (n, factorial) # value yielded here is sent as result to client
 
 def client_proc(computation, njobs, coro=None):
 
@@ -44,8 +51,8 @@ def client_proc(computation, njobs, coro=None):
                 rcoro = msg.args[0]
                 result = msg.args[1][1]
                 if msg.args[1][0] == StopIteration:
-                    print('    result for job %s from %s: %s' %
-                          (result[0], rcoro.location, result[1]))
+                    print('    result for job %s from %s' %
+                          (result[0], rcoro.location))
                 else:
                     print('    %s failed: %s' % (rcoro.location, str(result)))
 
@@ -61,7 +68,7 @@ def client_proc(computation, njobs, coro=None):
 
     # submit jobs
     for i in range(njobs):
-        rcoro = yield rcoro_scheduler.schedule(compute, i, random.uniform(10, 20))
+        rcoro = yield rcoro_scheduler.schedule(compute, i, 100000 + i)
         if isinstance(rcoro, asyncoro.Coro):
             print('  job %s processed by %s' % (i, rcoro.location))
         else:

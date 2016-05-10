@@ -10,7 +10,7 @@ from asyncoro.discoro_schedulers import RemoteCoroScheduler
 def compute(i, n, coro=None):
     import time
     yield coro.sleep(n)
-    raise StopIteration((i, time.asctime())) # result of 'compute' is current time
+    raise StopIteration((i, coro.location, time.asctime())) # result of 'compute' is current time
 
 # client (local) coroutine submits computations
 def client_proc(computation, njobs, coro=None):
@@ -29,7 +29,7 @@ def client_proc(computation, njobs, coro=None):
     # Coroutines may not be executed in the order of given list of args, but
     # results would be in the same order of given list of args
     for result in results:
-        print('    result for %d: %s' % result)
+        print('    result for %d from %s: %s' % result)
     yield rcoro_scheduler.finish(close=True)
 
 

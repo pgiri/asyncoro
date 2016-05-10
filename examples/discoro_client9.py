@@ -20,6 +20,21 @@ def proc_available(location, coro=None):
     # available. 'location' is Location instance of server. When this coroutine
     # is executed, 'depends' of computation would've been transferred.
 
+    # In this case, 'setup_server' is executed at remote server process to read
+    # the data in given file (transferred by client) in to memory (global
+    # variable). 'compute' then uses the data in memory instead of reading from
+    # file every time.
+    def setup_server(data_file, coro=None):  # executed on remote server
+        global hashlib, data
+        import os, hashlib
+        with open(data_file, 'rb') as fd:
+            data = fd.read()
+        os.remove(data_file)  # data_file is not needed anymore
+        # generator functions must have at least one 'yield'
+        yield 0 # indicate successful initialization with exit value 0
+
+    # rest is executed locally
+    import os
     # data_file could've been sent with the computation 'depends'; however, to
     # illustrate how files can be sent separately, file is transferred during
     # setup. Different servers can also be sent different files, for example, to
@@ -28,21 +43,8 @@ def proc_available(location, coro=None):
         print('Could not send data file "%s" to %s' % (data_file, location))
         raise StopIteration(-1)
 
-    # In this case, 'setup_server' is executed at remote server process to read
-    # the data in given file (transferred by client) in to memory (global
-    # variable). 'compute' then uses the data in memory instead of reading from
-    # file every time.
-    def setup_server(data_file, coro=None):  # executed on remote server
-        global os, hashlib, data
-        import os, hashlib
-        with open(data_file, 'rb') as fd:
-            data = fd.read()
-        os.remove(data_file)  # data_file is not needed anymore
-        # generator functions must have at least one 'yield'
-        yield 0 # indicate successful initialization with exit value 0
-
-    # run 'setup_server' to read file in to memory
-    if (yield rcoro_scheduler.execute_at(location, setup_server, data_file)) != 0:
+    # run 'setup_server' to read file in to memory (on remote server)
+    if (yield rcoro_scheduler.execute_at(location, setup_server, os.path.basename(data_file))) != 0:
         print('Could not setup %s, %s' % (data_file, location))
         raise StopIteration(-1)
     raise StopIteration(0)
@@ -86,11 +88,11 @@ def client_proc(computation, coro=None):
     algorithms = ['md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512']
     args = [(algorithms[i % len(algorithms)], random.uniform(1, 3)) for i in range(10)]
     results = yield rcoro_scheduler.map_results(compute, args)
-    for result in results:
+    for i, result in enumerate(results):
         if isinstance(result, tuple) and len(result) == 2:
             print('    %ssum: %s' % (result[0], result[1]))
         else:
-            print('  rcoro failed: %s' % str(result))
+            print('  rcoro failed for %s: %s' % (args[i][0], str(result)))
 
     yield rcoro_scheduler.finish(close=True)
 
