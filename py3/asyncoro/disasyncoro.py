@@ -32,6 +32,7 @@ __all__ = asyncoro.__all__ + ['RCI']
 # if connections to a peer are not successful consecutively
 # MaxConnectionErrors times, peer is assumed dead and removed
 MaxConnectionErrors = 10
+MsgTimeout = asyncoro.MsgTimeout
 
 
 class _NetRequest(object):
@@ -110,7 +111,7 @@ class _Peer(object):
     @staticmethod
     def send_req(req):
         peer = _Peer.peers.get((req.dst.addr, req.dst.port), None)
-        if peer is None:
+        if not peer:
             logger.debug('invalid peer: %s, %s', req.dst, req.name)
             return -1
         peer.reqs.append(req)
@@ -121,7 +122,7 @@ class _Peer(object):
     def send_req_to(req, dst):
         if dst:
             peer = _Peer.peers.get((dst.addr, dst.port), None)
-            if peer is None:
+            if not peer:
                 logger.debug('invalid peer: %s, %s', dst, req.name)
                 return -1
             peer.reqs.append(req)
@@ -391,7 +392,7 @@ class RCI(object):
         instance.
         """
         req = _NetRequest('run_rci', kwargs={'name': self._name, 'args': args, 'kwargs': kwargs},
-                          dst=self._location, timeout=2)
+                          dst=self._location, timeout=MsgTimeout)
         reply = yield RCI._asyncoro._sync_reply(req)
         if isinstance(reply, Coro):
             raise StopIteration(reply)
@@ -1126,38 +1127,34 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=MetaSingleton):
                 assert req.dst == self._location
                 reply = -1
                 channel = req.kwargs.get('channel', None)
-                if channel:
-                    channel = self._channels.get(channel, None)
-                    if isinstance(channel, Channel) and channel._location == self._location:
-                        subscriber = req.kwargs.get('subscriber', None)
-                        if subscriber:
-                            if isinstance(subscriber, Coro):
-                                if subscriber._location == self._location:
-                                    subscriber = self._coros.get(int(subscriber._id), None)
-                                reply = yield channel.subscribe(subscriber)
-                            elif isinstance(subsriber, Channel):
-                                if subscriber._location == self._location:
-                                    subscriber = self._channels.get(subscriber._name, None)
-                                reply = yield channel.subscribe(subscriber)
+                channel = self._channels.get(channel, None)
+                if isinstance(channel, Channel) and channel._location == self._location:
+                    subscriber = req.kwargs.get('subscriber', None)
+                    if isinstance(subscriber, Coro):
+                        if subscriber._location == self._location:
+                            subscriber = self._coros.get(int(subscriber._id), None)
+                        reply = yield channel.subscribe(subscriber)
+                    elif isinstance(subsriber, Channel):
+                        if subscriber._location == self._location:
+                            subscriber = self._channels.get(subscriber._name, None)
+                        reply = yield channel.subscribe(subscriber)
                 yield conn.send_msg(serialize(reply))
             elif req.name == 'unsubscribe':
                 # synchronous message
                 assert req.dst == self._location
                 reply = -1
                 channel = req.kwargs.get('channel', None)
-                if channel:
-                    channel = self._channels.get(channel, None)
-                    if isinstance(channel, Channel) and channel._location == self._location:
-                        subscriber = req.kwargs.get('subscriber', None)
-                        if subscriber is not None:
-                            if isinstance(subscriber, Coro):
-                                if subscriber._location == self._location:
-                                    subscriber = self._coros.get(int(subscriber._id), None)
-                                reply = yield channel.unsubscribe(subscriber)
-                            elif isinstance(subsriber, Channel):
-                                if subscriber._location == self._location:
-                                    subscriber = self._channels.get(subscriber._name, None)
-                                reply = yield channel.unsubscribe(subscriber)
+                channel = self._channels.get(channel, None)
+                if isinstance(channel, Channel) and channel._location == self._location:
+                    subscriber = req.kwargs.get('subscriber', None)
+                    if isinstance(subscriber, Coro):
+                        if subscriber._location == self._location:
+                            subscriber = self._coros.get(int(subscriber._id), None)
+                        reply = yield channel.unsubscribe(subscriber)
+                    elif isinstance(subsriber, Channel):
+                        if subscriber._location == self._location:
+                            subscriber = self._channels.get(subscriber._name, None)
+                        reply = yield channel.unsubscribe(subscriber)
                 yield conn.send_msg(serialize(reply))
             elif req.name == 'locate_peer':
                 if req.kwargs['name'] == self._name:

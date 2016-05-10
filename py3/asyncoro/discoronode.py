@@ -20,7 +20,7 @@ __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 
 
-def _discoro_proc():
+def _discoro_server_proc():
     # coroutine
     """Server process receives computations and runs coroutines for it.
     """
@@ -52,6 +52,7 @@ def _discoro_proc():
         MinPulseInterval = _discoro_config['min_pulse_interval']
     if _discoro_config['max_pulse_interval'] > 0:
         MaxPulseInterval = _discoro_config['max_pulse_interval']
+    _discoro_msg_timeout = _discoro_config.pop('msg_timeout')
 
     _discoro_name = asyncoro.AsynCoro.instance().name
     asyncoro.AsynCoro.instance().dest_path = os.path.join('discoro', _discoro_name)
@@ -133,7 +134,7 @@ def _discoro_proc():
             msg = yield coro.receive(timeout=_discoro_zombie_timeout)
             if isinstance(msg, asyncoro.MonitorException):
                 _discoro_busy_time = time.time()
-                asyncoro.logger.debug('job %s done', msg.args[0])
+                asyncoro.logger.debug('coro %s done', msg.args[0])
                 _discoro_job_coros.discard(msg.args[0])
             elif ((not _discoro_job_coros) and _discoro_zombie_timeout and
                   ((time.time() - _discoro_busy_time) > _discoro_zombie_timeout)):
@@ -142,7 +143,7 @@ def _discoro_proc():
                 _discoro_coro.send({'req': 'close', 'auth': _discoro_config['auth']})
 
     def _discoro_schedule_proc(client, job_coro, coro=None):
-        if (yield client.deliver(job_coro, timeout=5)) == 1:
+        if (yield client.deliver(job_coro, timeout=_discoro_msg_timeout)) == 1:
             Coro._asyncoro._add(job_coro)
         else:
             _discoro_job_coros.discard(job_coro)
@@ -178,7 +179,7 @@ def _discoro_proc():
                             traceback.format_exc())
                 _discoro_client.send(job_coro)
             else:
-                asyncoro.logger.debug('job %s created', job_coro)
+                asyncoro.logger.debug('coro %s created', job_coro)
                 _discoro_job_coros.add(job_coro)
                 job_coro.notify(_discoro_monitor_coro)
                 _discoro_var = _discoro_msg.get('notify', None)
@@ -413,12 +414,13 @@ def _discoro_process(_discoro_config, _discoro_server_id, _discoro_mp_queue, _di
                            'phoenix': _discoro_config.pop('phoenix', False),
                            'serve': _discoro_config.pop('serve', -1),
                            'peers': _discoro_config.pop('peers', []),
+                           'msg_timeout': _discoro_config.pop('msg_timeout', asyncoro.MsgTimeout),
                            'min_pulse_interval': _discoro_config.pop('min_pulse_interval'),
                            'max_pulse_interval': _discoro_config.pop('max_pulse_interval'),
                            'auth': _discoro_auth, 'mp_queue': _discoro_mp_queue}
 
     _discoro_scheduler = asyncoro.AsynCoro(**_discoro_config)
-    _discoro_coro = asyncoro.Coro(_discoro_proc)
+    _discoro_coro = asyncoro.Coro(_discoro_server_proc)
     # delete variables created in main
     for _discoro_var in list(globals().keys()):
         if _discoro_var.startswith('_discoro_'):
@@ -434,7 +436,6 @@ def _discoro_process(_discoro_config, _discoro_server_id, _discoro_mp_queue, _di
         except KeyboardInterrupt:
             req = {'req': 'terminate', 'auth': _discoro_auth}
             req_queue.put(req)
-            asyncoro.logger.debug('%s terminating', asyncoro.AsynCoro.instance()._location)
 
         if not isinstance(req, dict) or req.get('auth') != _discoro_auth:
             asyncoro.logger.warning('Ignoring invalid request: "%s"', type(req))
@@ -512,6 +513,8 @@ if __name__ == '__main__':
                         help='file containing SSL key')
     parser.add_argument('--serve', dest='serve', default=-1, type=int,
                         help='number of clients to serve before exiting')
+    parser.add_argument('--msg_timeout', dest='msg_timeout', default=asyncoro.MsgTimeout, type=int,
+                        help='timeout for delivering messages')
     parser.add_argument('--min_pulse_interval', dest='min_pulse_interval', default=0, type=int,
                         help='minimum pulse interval clients can use in number of seconds')
     parser.add_argument('--max_pulse_interval', dest='max_pulse_interval', default=0, type=int,
@@ -529,8 +532,11 @@ if __name__ == '__main__':
                         help='if given, debug messages are printed')
     _discoro_config = vars(parser.parse_args(sys.argv[1:]))
 
-    if _discoro_config['min_pulse_interval'] and _discoro_config['min_pulse_interval'] < 1:
-        raise Exception('min_pulse_interval must be at least 1')
+    if _discoro_config['msg_timeout'] < 1:
+        raise Exception('msg_timeout must be at least 1')
+    if _discoro_config['min_pulse_interval']:
+        if _discoro_config['min_pulse_interval'] < _discoro_config['msg_timeout']:
+            raise Exception('min_pulse_interval must be at least msg_timeout')
     if (_discoro_config['max_pulse_interval'] and _discoro_config['min_pulse_interval'] and
        _discoro_config['max_pulse_interval'] < _discoro_config['min_pulse_interval']):
         raise Exception('max_pulse_interval must be at least min_pulse_interval')
@@ -566,6 +572,7 @@ if __name__ == '__main__':
             _discoro_tcp_ports.append(tcp_port)
     else:
         _discoro_tcp_ports = [0] * (_discoro_cpus + 1)
+    del tcp_port, tcp_ports
 
     peers, _discoro_config['peers'] = _discoro_config['peers'], []
     peer = None
@@ -591,6 +598,12 @@ if __name__ == '__main__':
             pass
     _discoro_auth = hashlib.sha1(''.join(hex(_)[2:] for _ in os.urandom(10)).encode()).hexdigest()
 
+    # delete variables not needed anymore
+    del parser
+    for _discoro_var in ['argparse', 'socket', 'os']:
+        del sys.modules[_discoro_var], globals()[_discoro_var]
+    del _discoro_var
+
     _discoro_server_infos = []
     _discoro_ServerInfo = collections.namedtuple('DiscoroServerInfo', ['Proc', 'Queue'])
     _discoro_mp_queue = None
@@ -606,7 +619,7 @@ if __name__ == '__main__':
         _discoro_server_infos.append(_discoro_server_info)
         _discoro_server_info.Proc.start()
 
-    def _discoro_timer_proc(coro=None):
+    def _discoro_timer_proc(msg_timeout, coro=None):
         from asyncoro.discoro import DiscoroNodeAvailInfo
         coro.set_daemon()
         last_pulse = last_proc_check = time.time()
@@ -631,8 +644,6 @@ if __name__ == '__main__':
                 if cur_peer != scheduler_coro.location:
                     cur_peer = scheduler_coro.location
                     yield asyncoro.AsynCoro.instance().peer(cur_peer)
-                continue
-                # TODO: monitor servers
             if not scheduler_coro:
                 continue
 
@@ -644,7 +655,7 @@ if __name__ == '__main__':
                     100.0 - psutil.swap_memory().percent)
 
             now = time.time()
-            if (yield scheduler_coro.deliver(msg, timeout=2)) == 1:
+            if (yield scheduler_coro.deliver(msg, timeout=msg_timeout)) == 1:
                 last_pulse = now
             elif (now - last_pulse) > (5 * interval):
                 asyncoro.logger.warning('scheduler is not reachable; closing computation')
@@ -666,6 +677,7 @@ if __name__ == '__main__':
     _discoro_config.pop('phoenix', False)
     _discoro_config.pop('serve', -1)
     _discoro_config.pop('peers', [])
+    _discoro_msg_timeout = _discoro_config.pop('msg_timeout')
     _discoro_config.pop('min_pulse_interval')
     _discoro_config.pop('max_pulse_interval')
     _discoro_config['discover_peers'] = False
@@ -675,14 +687,11 @@ if __name__ == '__main__':
         asyncoro.logger.setLevel(logging.INFO)
     del _discoro_config['loglevel']
     _discoro_scheduler = asyncoro.AsynCoro(**_discoro_config)
-    _discoro_timer_coro = asyncoro.Coro(_discoro_timer_proc)
+    _discoro_timer_coro = asyncoro.Coro(_discoro_timer_proc, _discoro_msg_timeout)
     for _discoro_server_info in _discoro_server_infos:
         _discoro_server_info.Queue.put({'req': 'start', 'auth': _discoro_auth,
                                         'timer_coro': _discoro_timer_coro})
-
-    # delete variables not needed anymore
-    del _discoro_mp_queue, _discoro_tcp_ports, tcp_port, tcp_ports, _discoro_config
-    del parser, argparse, multiprocessing, socket, collections, os
+    del multiprocessing, collections, _discoro_mp_queue, _discoro_tcp_ports, _discoro_config
 
     if not _discoro_daemon:
         def _discoro_cmd_reader(coro=None):

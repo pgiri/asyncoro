@@ -34,7 +34,7 @@ from asyncoro import Coro, logger
 __all__ = ['Scheduler', 'Computation', 'DiscoroStatus', 'DiscoroCoroInfo',
            'DiscoroNodeInfo', 'DiscoroServerInfo', 'DiscoroNodeAvailInfo']
 
-MsgTimeout = 10
+MsgTimeout = asyncoro.MsgTimeout
 MinPulseInterval = 10
 MaxPulseInterval = 10 * MinPulseInterval
 

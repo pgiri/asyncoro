@@ -25,6 +25,9 @@ __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'CategorizeMessages', 'AsyncThreadPool', 'AsyncDBCursor',
            'MetaSingleton', 'logger', 'serialize', 'unserialize']
 
+# timeout in seconds used when sending messages
+MsgTimeout = 10
+
 import time
 import threading
 from functools import partial as partial_func
@@ -2385,7 +2388,7 @@ class Coro(object):
             return Coro._asyncoro._resume(self, message, AsynCoro._AwaitMsg_)
         else:
             request = _NetRequest('send', kwargs={'coro': self._id, 'message': message},
-                                  dst=self._location, timeout=5)
+                                  dst=self._location, timeout=MsgTimeout)
             # request is queued for asynchronous processing
             if _Peer.send_req(request) != 0:
                 logger.warning('remote coro at %s may not be valid', self._location)
@@ -2500,7 +2503,7 @@ class Coro(object):
             return Coro._asyncoro._terminate_coro(self)
         else:
             request = _NetRequest('terminate_coro', kwargs={'coro': self._id},
-                                  dst=self._location, timeout=5)
+                                  dst=self._location, timeout=MsgTimeout)
             if _Peer.send_req(request) != 0:
                 logger.warning('remote coro at %s may not be valid', self._location)
                 return -1
@@ -2553,7 +2556,7 @@ class Coro(object):
         else:
             # remote coro
             request = _NetRequest('monitor', kwargs={'monitor': self, 'coro': observe._id},
-                                  dst=observe._location, timeout=5)
+                                  dst=observe._location, timeout=MsgTimeout)
             reply = yield Coro._asyncoro._sync_reply(request)
         raise StopIteration(reply)
 
@@ -2871,7 +2874,7 @@ class Channel(object):
         else:
             # remote channel
             request = _NetRequest('send', kwargs={'channel': self._name, 'message': message},
-                                  dst=self._location, timeout=5)
+                                  dst=self._location, timeout=MsgTimeout)
             # request is queued for asynchronous processing
             if _Peer.send_req(request) != 0:
                 logger.warning('remote channel at %s may not be valid', self._location)
@@ -3617,7 +3620,7 @@ class AsynCoro(object):
 
             self._complete.wait()
             if self._location:
-                Coro(_Peer.shutdown, timeout=5)
+                Coro(_Peer.shutdown, timeout=MsgTimeout)
                 self._complete.wait()
 
             self._lock.acquire()
