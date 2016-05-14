@@ -2315,9 +2315,9 @@ class Coro(object):
 
     _asyncoro = None
 
-    def __init__(self, target, *args, **kwargs):
-        self._generator = Coro.__get_generator(self, target, *args, **kwargs)
-        self._name = target.__name__
+    def __init__(self, *args, **kwargs):
+        self._generator = Coro.__get_generator(self, *args, **kwargs)
+        self._name = self._generator.__name__
         self._id = id(self)
         self._state = None
         self._value = None
@@ -2579,8 +2579,8 @@ class Coro(object):
             logger.warning('hot_swappable must be called from running coro')
             return -1
 
-    def hot_swap(self, target, *args, **kwargs):
-        """Replaces coro's generator function with given target(*args, **kwargs).
+    def hot_swap(self, *args, **kwargs):
+        """Replaces coro's generator function with given generator.
 
         The new generator starts executing from the beginning. If
         there are any pending messages, they will not be reset, so new
@@ -2589,9 +2589,9 @@ class Coro(object):
         'alarm_value').
         """
         try:
-            generator = Coro.__get_generator(self, target, *args, **kwargs)
+            generator = Coro.__get_generator(self, *args, **kwargs)
         except:
-            logger.warning('%s is not a generator!', target.__name__)
+            logger.warning('hot_swap is called with non-generator!')
             return -1
         self._swap_generator = generator
         return Coro._asyncoro._swap_generator(self)
@@ -2637,12 +2637,16 @@ class Coro(object):
         return Coro._asyncoro._resume(self, update, AsynCoro._AwaitIO_)
 
     @staticmethod
-    def __get_generator(coro, target, *args, **kwargs):
-        if not inspect.isgeneratorfunction(target):
-            raise Exception('%s is not a generator!' % target.__name__)
-        if not args and kwargs:
+    def __get_generator(coro, *args, **kwargs):
+        if args:
+            target = args[0]
+            args = args[1:]
+        else:
+            target = kwargs.pop('target', None)
             args = kwargs.pop('args', ())
             kwargs = kwargs.pop('kwargs', kwargs)
+        if not inspect.isgeneratorfunction(target):
+            raise Exception('%s is not a generator!' % target.__name__)
         if target.__defaults__ and \
            'coro' in target.__code__.co_varnames[:target.__code__.co_argcount][-len(target.__defaults__):]:
             kwargs['coro'] = coro
