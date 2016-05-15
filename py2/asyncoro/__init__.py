@@ -1633,6 +1633,9 @@ if platform.system() == 'Windows':
 
 
 if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSingleton):
+    import os
+    import fcntl
+
     class _AsyncPoller(object):
         """Internal use only.
         """
@@ -1706,14 +1709,11 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                 self._fds = {}
                 self._events = {}
                 self._timeouts = []
-                self.cmd_rsock, self.cmd_wsock = _AsyncPoller._socketpair()
-                self.cmd_wsock.setblocking(0)
-                self.cmd_rsock = AsyncSocket(self.cmd_rsock)
-                setattr(self.cmd_rsock, '_read_task', lambda: self.cmd_rsock._rsock.recv(128))
-                self.add(self.cmd_rsock, _AsyncPoller._Read)
+                self.cmd_read, self.cmd_write = _AsyncPoller._cmd_read_write_fds()
+                self.add(self.cmd_read, _AsyncPoller._Read)
 
         def interrupt(self):
-            self.cmd_wsock.send('I')
+            os.write(self.cmd_write._fileno, 'I')
 
         def poll(self, timeout):
             """Calls 'task' method of registered fds when there is a
@@ -1780,8 +1780,8 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                         fd._timed_out()
 
         def terminate(self):
-            self.cmd_wsock.close()
-            self.cmd_rsock.close()
+            self.cmd_write.close()
+            self.cmd_read.close()
             if len(self._timeouts):
                 logger.warning('pending timeouts: %s', len(self._timeouts))
             if hasattr(self._poller, 'terminate'):
@@ -1854,22 +1854,24 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                     self._del_timeout(fd)
 
         @staticmethod
-        def _socketpair():
-            if hasattr(socket, 'socketpair'):
-                return socket.socketpair()
-            srv_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            srv_sock.bind(('127.0.0.1', 0))
-            srv_sock.listen(1)
+        def _cmd_read_write_fds():
+            class PipeFD(object):
 
-            sock1 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            conn_thread = threading.Thread(target=lambda sock, addr_port: sock.connect(addr_port),
-                                           args=(sock1, srv_sock.getsockname()))
-            conn_thread.daemon = True
-            conn_thread.start()
-            sock2, caddr = srv_sock.accept()
-            srv_sock.close()
-            conn_thread.join()
-            return (sock1, sock2)
+                def __init__(self, fileno):
+                    self._fileno = fileno
+                    self._timeout = None
+                    self._timeout_id = None
+                    flags = fcntl.fcntl(self._fileno, fcntl.F_GETFL)
+                    fcntl.fcntl(self._fileno, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+                def _read_task(self):
+                    os.read(self._fileno, 128)
+
+                def close(self):
+                    os.close(self._fileno)
+
+            pipein, pipeout = os.pipe()
+            return (PipeFD(pipein), PipeFD(pipeout))
 
     class _KQueueNotifier(object):
         """Internal use only.
