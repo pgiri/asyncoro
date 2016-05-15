@@ -25,9 +25,6 @@ __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'CategorizeMessages', 'AsyncThreadPool', 'AsyncDBCursor',
            'MetaSingleton', 'logger', 'serialize', 'unserialize']
 
-# timeout in seconds used when sending messages
-MsgTimeout = 10
-
 import time
 import threading
 from functools import partial as partial_func
@@ -62,6 +59,10 @@ else:
     from errno import EWOULDBLOCK
     from errno import EINVAL
     from time import time as _time
+
+
+# timeout in seconds used when sending messages
+MsgTimeout = 10
 
 
 def serialize(obj):
@@ -121,14 +122,19 @@ class Logger(object):
                               (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now)),
                                self.name, message))
 
-    debug = lambda self, message, *args: \
-            self.log(message, *args) if self.level <= logging.DEBUG else None
+    def debug(self, message, *args):
+        if self.level <= logging.DEBUG:
+            self.log(message, *args)
 
-    info = lambda self, message, *args: \
-           self.log(message, *args) if self.level <= logging.INFO else None
+    def info(self, message, *args):
+        if self.level <= logging.INFO:
+            self.log(message, *args)
 
-    warn = warning = lambda self, message, *args: \
-           self.log(message, *args) if self.level <= logging.WARNING else None
+    def warning(self, message, *args):
+        if self.level <= logging.WARNING:
+            self.log(message, *args)
+
+    warn = warning
 
     def flush(self):
         self.stream.flush()
@@ -1861,6 +1867,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                     self._fileno = fileno
                     self._timeout = None
                     self._timeout_id = None
+                    self._notifier = _AsyncNotifier.instance()
                     flags = fcntl.fcntl(self._fileno, fcntl.F_GETFL)
                     fcntl.fcntl(self._fileno, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
@@ -1868,6 +1875,7 @@ if not isinstance(getattr(sys.modules[__name__], '_AsyncNotifier', None), MetaSi
                     os.read(self._fileno, 128)
 
                 def close(self):
+                    self._notifier.unregister(self)
                     os.close(self._fileno)
 
             pipein, pipeout = os.pipe()
