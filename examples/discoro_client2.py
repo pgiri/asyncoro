@@ -18,8 +18,9 @@ import asyncoro.httpd
 # asyncoro doesn't preempt currently running task, the framework is not
 # responsive to any messages being sent to it (say, from client). In this
 # example, no messages are not sent to/from computation, so it is okay to block
-# asyncoro while computation is executed; see other discomro_client*.py examples
-# where computations are executed with threads.
+# asyncoro while computation is executed; see discomro_client8.py where
+# computations are executed with threads so messages can be sent/received while
+# computation is executed.
 
 # discoronode expects user computations to be generator functions (that have at
 # least one 'yield' statement) to create coroutines.
@@ -56,8 +57,8 @@ def client_proc(computation, njobs, coro=None):
                 else:
                     print('    %s failed: %s' % (rcoro.location, str(result)))
 
-    # to illustrate passing status messages to multiple coroutines,
-    # httpd is also used in this example:
+    # to illustrate relaying of status messages to multiple coroutines, httpd is
+    # also used in this example:
     httpd = asyncoro.httpd.HTTPServer(computation)
     # replace computation's status_coro (from rcoro_scheduler's status_coro) to
     # 'status_proc' above

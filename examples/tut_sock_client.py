@@ -17,5 +17,6 @@ def client(host, port, n, coro=None):
     sock.close()
 
 # run 10 client coroutines
-for i in range(10):
-    asyncoro.Coro(client, '127.0.0.1', 8010, n)
+n = 10 if len(sys.argv) < 1 else int(sys.argv[1])
+for i in range(n):
+    asyncoro.Coro(client, '127.0.0.1', 8010, i)

@@ -5,55 +5,25 @@ import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *
 from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
-# The computation is simulated with 'time.sleep', during which entire asyncoro
-# framework is suspended as well (as asyncoro doesn't preempt running task). To
-# avoid blocking the framework (which would prevent it from accepting messages
-# from client), the computation is executed in a thread. Coroutine sends
-# messages to thread with Queue (thread function can't receive messages from
-# client directly).
+# Unlike in earlier versions of asyncoro, computations can now take time - even
+# if computations don't "yield" to scheduler, asyncoro can still send/receive
+# messages, respond to timer events in scheduler etc. In this case, computation
+# is simulated with 'time.sleep' which blocks user asyncoro thread, but another
+# (reactive) asycoro thread processes network traffic, run scheduler coroutines.
 
 def compute_coro(coro=None):
-    import threading, time
-    if sys.version_info.major >= 3:
-        import queue
-    else:
-        import Queue as queue
+    import time
 
     client = yield coro.receive() # first message is client coroutine
 
-    # requests from client are received by this coroutine and sent to thread
-    # function with Queue. Thread function can't receive from client, as message
-    # passing is not available in threads.
-    thread_queue = queue.Queue()
-    # thread process sets thread_done asyncoro event that the compute_coro waits
-    # for (setting the asynchronous event and sending messages are regular
-    # functions, so they can be used in thread)
-    thread_done = asyncoro.Event()
-
-    def compute_func(): # executed in a thread
-        result = 0
-        while True:
-            n = thread_queue.get()
-            if n is None:  # end of requests
-                client.send(result)
-                break
-            time.sleep(n)
-            result += n
-        thread_done.set()
-
-    thread = threading.Thread(target=compute_func)
-    thread.start()
-
-    # receive requests from client and put them in thread_queue so thread can
-    # process them
+    result = 0
     while True:
-        req = yield coro.receive()
-        thread_queue.put(req)
-        if req is None:
+        n = yield coro.receive()
+        if n is None:  # end of requests
+            client.send(result)
             break
-
-    # wait for thread to finish
-    yield thread_done.wait()
+        time.sleep(n) # computation is simulated with 'time.sleep'
+        result += n
 
 # client (local) coroutine submits computations
 def client_proc(computation, njobs, coro=None):
@@ -66,9 +36,9 @@ def client_proc(computation, njobs, coro=None):
         # first send this local coroutine (to whom rcoro sends result)
         rcoro.send(coro)
         for i in range(5):
-            rcoro.send(random.uniform(2, 10))
+            rcoro.send(random.uniform(10, 20))
             # assume delay in input availability
-            yield coro.sleep(random.uniform(0, 2))
+            yield coro.sleep(random.uniform(2, 5))
         # end of input is indicated with None
         rcoro.send(None)
         result = yield coro.receive() # get result

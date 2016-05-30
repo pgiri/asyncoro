@@ -13,13 +13,6 @@ of Popen in subprocess module.
 See 'pipe_csum.py', 'pipe_grep.py' and 'socket_afile.py' for examples.
 """
 
-__author__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
-__copyright__ = "Copyright (c) 2014 Giridhar Pemmasani"
-__license__ = "MIT"
-__url__ = "http://asyncoro.sourceforge.net"
-
-__all__ = ['AsyncFile', 'AsyncPipe']
-
 import subprocess
 import os
 import sys
@@ -29,6 +22,13 @@ from functools import partial as partial_func
 
 import asyncoro
 from asyncoro import _AsyncPoller, AsynCoro, Coro
+
+__author__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
+__copyright__ = "Copyright (c) 2014 Giridhar Pemmasani"
+__license__ = "MIT"
+__url__ = "http://asyncoro.sourceforge.net"
+
+__all__ = ['AsyncFile', 'AsyncPipe']
 
 if platform.system() == 'Windows':
     __all__ += ['pipe', 'Popen']
@@ -181,9 +181,9 @@ if platform.system() == 'Windows':
             per 'open' Python function, although limited to
             basic/common modes.
             """
-            if _AsyncFile._notifier is None:
+            if not _AsyncFile._notifier:
                 _AsyncFile._notifier = asyncoro._AsyncNotifier.instance()
-
+            self._asyncoro = AsynCoro.scheduler()
             self._overlap = pywintypes.OVERLAPPED()
             if isinstance(path_handle, str):
                 self._path = path_handle
@@ -320,7 +320,9 @@ if platform.system() == 'Windows':
                 count = size
             self._read_result = win32file.AllocateReadBuffer(count)
             self._overlap.object = partial_func(_read, self, size, full)
-            self._read_coro = AsynCoro.cur_coro()
+            if not self._asyncoro:
+                self._asyncoro = AsynCoro.scheduler()
+            self._read_coro = AsynCoro.cur_coro(self._asyncoro)
             self._read_coro._await_()
             try:
                 rc, _ = win32file.ReadFile(self._handle, self._read_result, self._overlap)
@@ -395,7 +397,9 @@ if platform.system() == 'Windows':
 
             self._write_result = buffer(buf)
             self._overlap.object = partial_func(_write, self, 0, full)
-            self._write_coro = AsynCoro.cur_coro()
+            if not self._asyncoro:
+                self._asyncoro = AsynCoro.scheduler()
+            self._write_coro = AsynCoro.cur_coro(self._asyncoro)
             self._write_coro._await_()
             try:
                 rc, _ = win32file.WriteFile(self._handle, self._write_result, self._overlap)
@@ -501,6 +505,7 @@ else:
             """
             if _AsyncFile._notifier is None:
                 _AsyncFile._notifier = asyncoro._AsyncNotifier.instance()
+            self._asyncoro = AsynCoro.scheduler()
             if hasattr(fd, 'fileno'):
                 if hasattr(fd, '_fileno'):
                     _AsyncFile._notifier.unregister(fd)
@@ -585,7 +590,9 @@ else:
                 size -= len(buf)
             self._timeout = timeout
             self._read_task = partial_func(_read, self, size, full)
-            self._read_coro = AsynCoro.cur_coro()
+            if not self._asyncoro:
+                self._asyncoro = AsynCoro.scheduler()
+            self._read_coro = AsynCoro.cur_coro(self._asyncoro)
             self._read_coro._await_()
             _AsyncFile._notifier.add(self, _AsyncPoller._Read)
 
@@ -631,7 +638,9 @@ else:
                 view = buf
             self._timeout = timeout
             self._write_task = partial_func(_write, self, view, 0, full)
-            self._write_coro = AsynCoro.cur_coro()
+            if not self._asyncoro:
+                self._asyncoro = AsynCoro.scheduler()
+            self._write_coro = AsynCoro.cur_coro(self._asyncoro)
             self._write_coro._await_()
             _AsyncFile._notifier.add(self, _AsyncPoller._Write)
 

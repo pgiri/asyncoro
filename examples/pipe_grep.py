@@ -10,7 +10,7 @@ def writer(apipe, inp, coro=None):
         line = fd.readline()
         if not line:
             break
-        yield apipe.stdin.write(line)
+        yield apipe.stdin.write(line.encode())
     apipe.stdin.close()
 
 def line_reader(apipe, coro=None):
@@ -25,7 +25,7 @@ def line_reader(apipe, coro=None):
         nlines += 1
         if not line:
             break
-        print('%s' % line),
+        print(line.decode())
     raise StopIteration(nlines)
 
 # asyncoro.logger.setLevel(logging.DEBUG)
@@ -37,10 +37,6 @@ if platform.system() == 'Windows':
     async_pipe = asyncoro.asyncfile.AsyncPipe(p1, p2)
     asyncoro.Coro(writer, async_pipe, r'\tmp\grep.inp')
     asyncoro.Coro(line_reader, async_pipe)
-    # in Windows child process may not terminate when input is closed -
-    # so terminate it explicitly when pipe is done with:
-    # p1.terminate()
-    # p2.terminate()
 else:
     p1 = subprocess.Popen(['grep', '-i', 'error'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     p2 = subprocess.Popen(['wc'], stdin=p1.stdout, stdout=subprocess.PIPE)

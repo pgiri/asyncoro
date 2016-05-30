@@ -2,26 +2,24 @@ asyncoro
 ########
 
 `asyncoro <http://asyncoro.sourceforge.net>`_ is a Python framework for
-concurrent, distributed, asynchronous network programming with coroutines,
-asynchronous completions and message passing.
+asynchronous, concurrent, distributed programming with coroutines, asynchronous
+completions and message passing.
 
-Unlike with other asynchronous frameworks, programs developed with
-asyncoro have **same logic and structure** as programs with threads,
-except for a few syntactic changes - mostly using *yield* with
-asynchronous completions that give control to asyncoro's scheduler,
-which interleaves executions of coroutines, similar to the way an
-operating system executes multiple processes. In addition, asyncoro
-has many additional features, including message passing for
+Unlike with other asynchronous frameworks, programs developed with asyncoro have
+**same logic and structure** as programs with threads, except for a few
+syntactic changes - mostly using *yield* with asynchronous completions that give
+control to asyncoro's scheduler, which interleaves executions of coroutines,
+similar to the way an operating system executes multiple processes. In addition,
+asyncoro has many additional features, including message passing for
 communication, distributed computing/programming etc.
 
 Unlike threads, creating processes (coroutines) with asyncoro is very
-efficient. Moreover, with asyncoro context switch occurs only when
-coroutines use *yield* (typically with an asychronous call), so there
-is no need for locking and there is no overhead of unnecessary context
-switches.
+efficient. Moreover, with asyncoro context switch occurs only when coroutines
+use *yield* (typically with an asychronous call), so there is no need for
+locking and there is no overhead of unnecessary context switches.
 
-asyncoro works with Python versions 2.7+ and 3.1+. It has been tested
-with Linux, Mac OS X and Windows; it may work on other platforms, too.
+asyncoro works with Python versions 2.7+ and 3.1+. It has been tested with
+Linux, Mac OS X and Windows; it may work on other platforms, too.
 
 Features
 --------
@@ -37,8 +35,6 @@ Features
 
 * SSL for security,
 
-* Asynchronous timers, including non-blocking sleep,
-
 * Asynchronous locking primitives similar to Python threading module,
 
 * `Message passing <http://en.wikipedia.org/wiki/Message_passing>`_
@@ -52,9 +48,6 @@ Features
   <http://en.wikipedia.org/wiki/Location_transparency>`_ with naming
   and locating (local and remote) resources,
 
-* Monitoring and restarting of (local or remote) coroutines, for
-  fault detection and fault-tolerance,
-
 * Distributing computation components (code and data) for execution of
   distributed communicating processes, for wide range of use cases, covering
   `SIMD, MISD, MIMD <https://en.wikipedia.org/wiki/Flynn%27s_taxonomy>`_ system
@@ -64,11 +57,13 @@ Features
   <https://en.wikipedia.org/wiki/In-memory_processing>`_, data streaming,
   real-time (live) analytics and cloud computing are supported as well,
 
-* Hot-swapping of coroutine functions, for dynamic system
-  reconfiguration,
+* Monitoring and restarting of (local or remote) coroutines, for fault detection
+  and fault-tolerance,
 
-* Thread pools with asynchronous task completions, for executing
-  (external) synchronous tasks, e.g., reading standard input.
+* Hot-swapping of coroutine functions, for dynamic system reconfiguration,
+
+* Thread pools with asynchronous task completions, for executing (external)
+  synchronous tasks, such as reading standard input.
 
 Dependencies
 ------------

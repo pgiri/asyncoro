@@ -18,7 +18,7 @@ import inspect
 
 import asyncoro.disasyncoro as asyncoro
 import asyncoro.discoro as discoro
-from asyncoro import Coro
+from asyncoro import Coro, ReactCoro
 from asyncoro.discoro import DiscoroStatus, DiscoroServerInfo, DiscoroNodeInfo
 
 
@@ -102,6 +102,7 @@ class RemoteCoroScheduler(object):
             computation.status_coro = self.status_coro
         self._rcoros = {}
         self._rcoros_done = asyncoro.Event()
+        self._askew_results = {}
         self._servers = {}
         self._server_avail = asyncoro.Event()
 
@@ -121,6 +122,10 @@ class RemoteCoroScheduler(object):
         rcoro = yield self.computation.run_at(loc, gen, *args, **kwargs)
         if isinstance(rcoro, Coro):
             self._rcoros[rcoro] = (None, 1)
+            if self._askew_results:
+                msg = self._askew_results.pop(rcoro, None)
+                if msg:
+                    self.status_coro.send(msg)
         else:
             self._servers[sloc] = loc
             self._server_avail.set()
@@ -145,6 +150,10 @@ class RemoteCoroScheduler(object):
         if isinstance(rcoro, Coro):
             client = asyncoro.AsynCoro.cur_coro()
             self._rcoros[rcoro] = (client, 1)
+            if self._askew_results:
+                msg = self._askew_results.pop(rcoro, None)
+                if msg:
+                    self.status_coro.send(msg)
             client._await_()
         else:
             self._servers[sloc] = loc
@@ -166,6 +175,10 @@ class RemoteCoroScheduler(object):
         if isinstance(rcoro, Coro):
             client = asyncoro.AsynCoro.cur_coro()
             self._rcoros[rcoro] = (client, 0)
+            if self._askew_results:
+                msg = self._askew_results.pop(rcoro, None)
+                if msg:
+                    self.status_coro.send(msg)
             client._await_()
         else:
             raise StopIteration(asyncoro.MonitorException(None, (type(rcoro), rcoro)))
@@ -214,6 +227,10 @@ class RemoteCoroScheduler(object):
         rcoro = yield self.computation.run_at(where, gen, *args, **kwargs)
         if isinstance(rcoro, Coro):
             self._rcoros[rcoro] = (None, 0)
+            if self._askew_results:
+                msg = self._askew_results.pop(rcoro, None)
+                if msg:
+                    self.status_coro.send(msg)
         raise StopIteration(rcoro)
 
     def submit(self, gen, *args, **kwargs):
@@ -242,6 +259,7 @@ class RemoteCoroScheduler(object):
             yield self._rcoros_done.wait()
         if close:
             yield self.computation.close()
+            self._askew_results.clear()
 
     def _status_proc(self, coro=None):
         """Internal use only. Coroutine to process discoro scheduler messages.
@@ -253,7 +271,8 @@ class RemoteCoroScheduler(object):
             if isinstance(msg, asyncoro.MonitorException):
                 if msg.args[1][0] == discoro.Scheduler.ServerClosed:
                     continue
-                client, use_count = self._rcoros.pop(msg.args[0], ('missing', 0))
+                rcoro = msg.args[0]
+                client, use_count = self._rcoros.pop(rcoro, ('missing', 0))
                 if client is None:
                     pass
                 elif isinstance(client, Coro):
@@ -261,27 +280,17 @@ class RemoteCoroScheduler(object):
                 elif client == 'missing':
                     # Due to 'yield' used to create rcoro, scheduler may not
                     # have updated self._rcoros before the coroutine's
-                    # MonitorException is received, so put it back in message
-                    # queue with a marker added to 'args' to indicate number of
-                    # times it went through the loop. If it loops through 5
-                    # times, assume rcoro is not scheduled (by either 'schedule'
-                    # or 'execute')
-                    if len(msg.args) > 2:
-                        if msg.args[2] > 5:
-                            asyncoro.logger.debug('Inavlid rcoro %s exit status ignored: %s',
-                                                  msg.args[0], msg.args[2])
-                            continue
-                        msg.args = (msg.args[0], msg.args[1], (msg.args[2] + 1))
-                    else:
-                        msg.args = (msg.args[0], msg.args[1], 1)
-                    coro.send(msg)
+                    # MonitorException is received, so put it in
+                    # 'askew_results'. The scheduling coroutine will resend it
+                    # when it receives rcoro
+                    self._askew_results[rcoro] = msg
                     continue
 
                 else:
                     asyncoro.logger.warning('RemoteCoroScheduler: invalid status message ignored')
                     continue
                 if use_count:
-                    self._servers[msg.args[0].location] = msg.args[0].location
+                    self._servers[rcoro.location] = rcoro.location
                     self._server_avail.set()
                 if not self._rcoros:
                     self._rcoros_done.set()
