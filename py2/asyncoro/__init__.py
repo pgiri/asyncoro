@@ -147,6 +147,16 @@ class Logger(object):
 
     warn = warning
 
+    def error(self, message, *args):
+        if self.level <= logging.ERROR:
+            self.log(message, *args)
+
+    def fatal(self, message, *args):
+        if self.level <= logging.FATAL:
+            self.log(message, *args)
+
+    critical = fatal
+
     def flush(self):
         self.stream.flush()
 
