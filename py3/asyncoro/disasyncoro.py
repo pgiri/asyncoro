@@ -58,7 +58,7 @@ class _NetRequest(object):
         return state
 
     def __setstate__(self, state):
-        for k, v in state.iteritems():
+        for k, v in state.items():
             setattr(self, k, v)
 
 
@@ -110,7 +110,7 @@ class _Peer(object):
     @staticmethod
     def get_peers():
         _Peer._lock.acquire()
-        peers = [Location(addr, port) for (addr, port) in _Peer.peers.iterkeys()]
+        peers = [Location(addr, port) for (addr, port) in _Peer.peers.keys()]
         _Peer._lock.release()
         return peers
 
@@ -146,7 +146,7 @@ class _Peer(object):
             peer.reqs_pending.set()
         else:
             _Peer._lock.acquire()
-            for peer in _Peer.peers.itervalues():
+            for peer in _Peer.peers.values():
                 peer.reqs.append(req)
                 peer.reqs_pending.set()
             _Peer._lock.release()
@@ -162,7 +162,7 @@ class _Peer(object):
     @staticmethod
     def shutdown(timeout=MsgTimeout):
         _Peer._lock.acquire()
-        for peer in _Peer.peers.itervalues():
+        for peer in _Peer.peers.values():
             ReactCoro(_Peer.close_peer, peer, timeout)
         _Peer._lock.release()
 
@@ -231,7 +231,8 @@ class _Peer(object):
                 else:
                     req.reply = reply
             except socket.error as exc:
-                logger.debug('could not send "%s" to %s', req.name, self.location)
+                logger.debug('%s: Could not send "%s" to %s', _Peer._asyncoro._location, req.name,
+                             self.location)
                 # logger.debug(traceback.format_exc())
                 if len(exc.args) == 1 and exc.args[0] == 'hangup':
                     logger.warning('peer "%s" not reachable', self.location)
@@ -303,7 +304,7 @@ class _Peer(object):
         _Peer._lock.acquire()
         if isinstance(coro, Coro):
             # if there is another status_coro, add or replace?
-            for peer in _Peer.peers.itervalues():
+            for peer in _Peer.peers.values():
                 try:
                     coro.send(PeerStatus(peer.location, peer.name, PeerStatus.Online))
                 except:
@@ -446,7 +447,7 @@ class RCI(object):
         return s
 
 
-class AsynCoro(asyncoro.AsynCoro):
+class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
     """This adds network services to asyncoro.AsynCoro so it can
     communicate with peers.
 
@@ -482,8 +483,6 @@ class AsynCoro(asyncoro.AsynCoro):
     transferred files. If it is 0 or None (default), there is no
     limit.
     """
-
-    __metaclass__ = Singleton
 
     _instance = None
     _react_asyncoro = None
@@ -725,11 +724,9 @@ class ReactCoro(asyncoro.Coro):
         super(ReactCoro, self).__init__(*args, **kwargs)
 
 
-class _ReactAsynCoro_(asyncoro.AsynCoro):
+class _ReactAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
     """Internal use only.
     """
-
-    __metaclass__ = Singleton
 
     _instance = None
     _asyncoro = None
@@ -796,16 +793,15 @@ class _ReactAsynCoro_(asyncoro.AsynCoro):
             self._signature = None
             self._auth_code = None
         else:
-            self._signature = os.urandom(20).encode('hex')
-            self._auth_code = hashlib.sha1(self._signature + secret).hexdigest()
-
+            self._signature = ''.join(hex(_)[2:] for _ in os.urandom(20))
+            self._auth_code = hashlib.sha1((self._signature + secret).encode()).hexdigest()
         self._tcp_sock.listen(32)
         logger.info('network server %s@ %s, udp_port=%s', '"%s" ' % name if name else '',
                     self._location, self._udp_sock.getsockname()[1])
         self._broadcast = '<broadcast>'
         if netifaces:
             for iface in netifaces.interfaces():
-                for addresses in netifaces.ifaddresses(iface).values():
+                for addresses in list(netifaces.ifaddresses(iface).values()):
                     for addr in addresses:
                         if addr['addr'] == self._location.addr:
                             self._broadcast = addr.get('broadcast', '<broadcast>')
@@ -867,7 +863,7 @@ class _ReactAsynCoro_(asyncoro.AsynCoro):
                         raise StopIteration(0)
             else:
                 _Peer._lock.acquire()
-                for (addr, port), peer in _Peer.peers.iteritems():
+                for (addr, port), peer in _Peer.peers.items():
                     if addr == loc.addr:
                         peer.stream = stream_send
                         if not stream_send:
@@ -910,7 +906,7 @@ class _ReactAsynCoro_(asyncoro.AsynCoro):
     def peer_location(self, name):
         def peer_loc(coro=None):
             _Peer._lock.acquire()
-            for peer in _Peer.peers.itervalues():
+            for peer in _Peer.peers.values():
                 if peer.name == name:
                     loc = peer.location
                     break
@@ -957,11 +953,11 @@ class _ReactAsynCoro_(asyncoro.AsynCoro):
 
         while 1:
             msg, addr = yield self._udp_sock.recvfrom(1024)
-            if not msg.startswith('ping:'):
+            if not msg.startswith(b'ping:'):
                 logger.warning('ignoring UDP message from %s:%s', addr[0], addr[1])
                 continue
             try:
-                ping_info = unserialize(msg[len('ping:'):])
+                ping_info = unserialize(msg[len(b'ping:'):])
             except:
                 continue
             req_peer = ping_info['location']
@@ -974,7 +970,7 @@ class _ReactAsynCoro_(asyncoro.AsynCoro):
             if self._secret is None:
                 auth_code = None
             else:
-                auth_code = hashlib.sha1(ping_info['signature'] + self._secret).hexdigest()
+                auth_code = hashlib.sha1((ping_info['signature'] + self._secret).encode()).hexdigest()
             _Peer._lock.acquire()
             peer = _Peer.peers.get((req_peer.addr, req_peer.port), None)
             _Peer._lock.release()
@@ -1000,7 +996,7 @@ class _ReactAsynCoro_(asyncoro.AsynCoro):
                     ping_sock.close()
             elif ping_info.pop('propagate', None):
                 _Peer._lock.acquire()
-                for peer in [peer for peer in _Peer.peers.itervalues()
+                for peer in [peer for peer in _Peer.peers.values()
                              if peer.location.addr == self._location.addr and
                              peer.location.port != self._location.port]:
                     ReactCoro(send_ping_req, peer.location, peer.auth)
@@ -1187,7 +1183,8 @@ class _ReactAsynCoro_(asyncoro.AsynCoro):
                     if self._secret is None:
                         auth_code = None
                     else:
-                        auth_code = hashlib.sha1(req.kwargs['signature'] + self._secret).hexdigest()
+                        auth_code = hashlib.sha1((req.kwargs['signature'] +
+                                                  self._secret).encode()).hexdigest()
                 except:
                     # logger.debug(traceback.format_exc())
                     break
@@ -1209,7 +1206,7 @@ class _ReactAsynCoro_(asyncoro.AsynCoro):
                     yield sock.connect((peer_loc.addr, peer_loc.port))
                     yield sock.send_msg(serialize(pong))
                     reply = yield sock.recv_msg()
-                    assert reply == 'ack'
+                    assert reply == b'ack'
                 except:
                     logger.debug('%s: ignoring peer: %s', self._location, peer_loc)
                     break
@@ -1230,7 +1227,7 @@ class _ReactAsynCoro_(asyncoro.AsynCoro):
                    (peer_loc.addr, 0) in _ReactAsynCoro_._asyncoro._stream_peers:
                     peer.stream = True
 
-                for loc_req in _ReactAsynCoro_._asyncoro._pending_reqs.itervalues():
+                for loc_req in _ReactAsynCoro_._asyncoro._pending_reqs.values():
                     if loc_req.name == 'locate_peer' and \
                        loc_req.kwargs['name'] == req.kwargs['name']:
                         loc_req.reply = peer.location
@@ -1238,7 +1235,7 @@ class _ReactAsynCoro_(asyncoro.AsynCoro):
                         break
 
                 # send pending (async) requests
-                for pending_req in _ReactAsynCoro_._asyncoro._pending_reqs.itervalues():
+                for pending_req in _ReactAsynCoro_._asyncoro._pending_reqs.values():
                     if pending_req.dst:
                         if pending_req.dst == peer_loc:
                             _Peer.send_req(pending_req)
@@ -1256,15 +1253,16 @@ class _ReactAsynCoro_(asyncoro.AsynCoro):
                     if self._secret is None:
                         auth_code = None
                     else:
-                        auth_code = hashlib.sha1(req.kwargs['signature'] + self._secret).hexdigest()
+                        auth_code = hashlib.sha1((req.kwargs['signature'] +
+                                                  self._secret).encode()).hexdigest()
                     _Peer._lock.acquire()
                     peer = _Peer.peers.get((peer_loc.addr, peer_loc.port), None)
                     _Peer._lock.release()
                     if peer and peer.auth == auth_code:
                         # logger.debug('%s: ignoring peer: %s', self._location, peer_loc)
-                        yield conn.send_msg('nak')
+                        yield conn.send_msg(b'nak')
                         break
-                    yield conn.send_msg('ack')
+                    yield conn.send_msg(b'ack')
                 except:
                     logger.debug('%s: ignoring peer: %s', self._location, peer_loc)
                     # logger.debug(traceback.format_exc())
@@ -1284,7 +1282,7 @@ class _ReactAsynCoro_(asyncoro.AsynCoro):
                     peer.stream = True
 
                 # send pending (async) requests
-                for pending_req in _ReactAsynCoro_._asyncoro._pending_reqs.itervalues():
+                for pending_req in _ReactAsynCoro_._asyncoro._pending_reqs.values():
                     if pending_req.dst:
                         if pending_req.dst == peer_loc:
                             _Peer.send_req(pending_req)

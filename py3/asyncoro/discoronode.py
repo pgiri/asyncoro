@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
 """This file is part of asyncoro; see http://asyncoro.sourceforge.net for
 details.
@@ -208,7 +208,7 @@ def _discoro_server_proc():
             try:
                 _discoro_func = asyncoro.unserialize(_discoro_func)
                 if _discoro_func.code:
-                    exec(_discoro_func.code) in globals()
+                    exec(_discoro_func.code, globals())
             except:
                 asyncoro.logger.debug('invalid computation to run')
                 job_coro = (sys.exc_info()[0], getattr(_discoro_func, 'name', _discoro_func),
@@ -248,9 +248,11 @@ def _discoro_server_proc():
             os.chdir(_discoro_dest_path)
             try:
                 _discoro_computation = _discoro_msg['computation']
-                exec('import asyncoro.disasyncoro as asyncoro') in globals()
+                exec('import asyncoro.disasyncoro as asyncoro', globals())
                 if _discoro_computation._code:
-                    exec(_discoro_computation._code) in globals()
+                    exec(_discoro_computation._code, globals())
+                if __name__ == '__mp_main__':  # Windows multiprocessing process
+                    sys.modules['__mp_main__'].__dict__.update(globals())
             except:
                 _discoro_computation = None
                 asyncoro.logger.warning('invalid computation')
@@ -291,12 +293,20 @@ def _discoro_server_proc():
             asyncoro.logger.debug('%s: Closing computation "%s"',
                                   _discoro_coro.location, _discoro_computation._auth)
 
-            for _discoro_var in list(globals()):
-                if _discoro_var not in _discoro_globals:
-                    globals().pop(_discoro_var, None)
-            globals().update(_discoro_globals)
+            if __name__ == '__mp_main__':  # Windows multiprocessing process
+                for _discoro_var in list(globals()):
+                    if _discoro_var not in _discoro_globals:
+                        globals().pop(_discoro_var, None)
+                        sys.modules['__mp_main__'].__dict__.pop(_discoro_var, None)
+                globals().update(_discoro_globals)
+                sys.modules['__mp_main__'].__dict__.update(_discoro_globals)
+            else:
+                for _discoro_var in list(globals()):
+                    if _discoro_var not in _discoro_globals:
+                        globals().pop(_discoro_var, None)
+                globals().update(_discoro_globals)
 
-            for _discoro_var in sys.modules.keys():
+            for _discoro_var in list(sys.modules.keys()):
                 if _discoro_var not in _discoro_modules:
                     sys.modules.pop(_discoro_var, None)
             sys.modules.update(_discoro_modules)
@@ -405,10 +415,18 @@ def _discoro_server_proc():
             asyncoro.logger.debug('%s deleting computation "%s"',
                                   _discoro_coro.location, _discoro_computation._auth)
 
-            for _discoro_var in list(globals()):
-                if _discoro_var not in _discoro_globals:
-                    globals().pop(_discoro_var, None)
-            globals().update(_discoro_globals)
+            if __name__ == '__mp_main__':  # Windows multiprocessing process
+                for _discoro_var in list(globals()):
+                    if _discoro_var not in _discoro_globals:
+                        globals().pop(_discoro_var, None)
+                        sys.modules['__mp_main__'].__dict__.pop(_discoro_var, None)
+                globals().update(_discoro_globals)
+                sys.modules['__mp_main__'].__dict__.update(_discoro_globals)
+            else:
+                for _discoro_var in list(globals()):
+                    if _discoro_var not in _discoro_globals:
+                        globals().pop(_discoro_var, None)
+                globals().update(_discoro_globals)
 
             break
         else:
@@ -460,7 +478,7 @@ def _discoro_process(_discoro_config, _discoro_server_id, _discoro_auth,
     _discoro_scheduler = asyncoro.AsynCoro(**_discoro_config)
     _discoro_coro = asyncoro.ReactCoro(_discoro_server_proc)
     # delete variables created in main
-    for _discoro_var in globals().keys():
+    for _discoro_var in list(globals().keys()):
         if _discoro_var.startswith('_discoro_'):
             globals().pop(_discoro_var)
 
@@ -628,7 +646,7 @@ if __name__ == '__main__':
                 _discoro_daemon = True
         except:
             pass
-    _discoro_auth = hashlib.sha1(os.urandom(10).encode('hex')).hexdigest()
+    _discoro_auth = hashlib.sha1(''.join(hex(_)[2:] for _ in os.urandom(10)).encode()).hexdigest()
 
     # delete variables not needed anymore
     del parser
@@ -664,7 +682,7 @@ if __name__ == '__main__':
                 yield coro.sleep(0.25)
                 try:
                     _discoro_cmd = yield async_threads.async_task(
-                        raw_input,
+                        input,
                         '\nEnter "status" to get status\n'
                         '  "close" to close current computation (kill any running jobs)\n'
                         '  "quit" to stop accepting new jobs and quit when done\n'
