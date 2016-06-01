@@ -2493,6 +2493,10 @@ class Coro(object):
             Coro._asyncoro = AsynCoro.instance()
         if not location or location == Coro._asyncoro._location:
             rcoro = Coro._asyncoro._rcoros.get(name, None)
+            if not rcoro and Coro._asyncoro._location:
+                Coro._asyncoro._react_asyncoro._lock.acquire()
+                rcoro = Coro._asyncoro._react_asyncoro._rcoros.get(name, None)
+                Coro._asyncoro._react_asyncoro._lock.release()
             if rcoro or location == Coro._asyncoro._location:
                 raise StopIteration(rcoro)
         req = _NetRequest('locate_coro', kwargs={'name': name}, dst=location, timeout=timeout)
@@ -2792,24 +2796,25 @@ class Coro(object):
         return target(*args, **kwargs)
 
     def __getstate__(self):
-        state = {'_name': self._name, '_id': str(self._id), '_location': self._location,
-                 '_scheduler': id(self._scheduler)}
+        state = {'_name': self._name, '_id': str(self._id), '_location': self._location}
+        if self._location == Coro._asyncoro._location:
+            state['_scheduler'] = id(self._scheduler)
+        else:
+            state['_scheduler'] = self._scheduler
         return state
 
     def __setstate__(self, state):
         self._name = state['_name']
         self._location = state['_location']
         self._id = state['_id']
+        self._scheduler = state['_scheduler']
         if self._location == Coro._asyncoro._location:
-            if state['_scheduler'] == id(Coro._asyncoro):
+            if self._scheduler == id(Coro._asyncoro):
                 self._scheduler = Coro._asyncoro
-            elif state['_scheduler'] == id(Coro._asyncoro._react_asyncoro):
+            elif self._location and self._scheduler == id(Coro._asyncoro._react_asyncoro):
                 self._scheduler = Coro._asyncoro._react_asyncoro
             else:
-                # this will fail elsewhere!
-                self._scheduler = state['_scheduler']
-        else:
-            self._scheduler = state['_scheduler']
+                logger.warning('invalid scheduler: %s', self._scheduler)
 
     def __repr__(self):
         s = '%s/%s' % (self._name, self._id)
@@ -2890,6 +2895,8 @@ class Channel(object):
             Channel._asyncoro = AsynCoro.instance()
         self._name = name
         self._scheduler = AsynCoro.scheduler()
+        if not self._scheduler:
+            self._scheduler = Channel._asyncoro
         self._location = Channel._asyncoro._location
         if transform is not None:
             try:
@@ -2902,12 +2909,11 @@ class Channel(object):
         self._subscribers = set()
         self._subscribe_event = Event()
         self._scheduler._lock.acquire()
-        if name in Channel._asyncoro._channels:
-            self._scheduler._lock.release()
+        if name in self._scheduler._channels:
             logger.warning('duplicate channel "%s"!', name)
         else:
             self._scheduler._channels[name] = self
-            self._scheduler._lock.release()
+        self._scheduler._lock.release()
 
     @property
     def location(self):
@@ -2942,15 +2948,15 @@ class Channel(object):
         req = _NetRequest('locate_channel', kwargs={'name': name}, dst=location, timeout=timeout)
         req.event = Event()
         req_id = id(req)
-        self._scheduler._lock.acquire()
+        Channel._asyncoro._lock.acquire()
         Channel._asyncoro._pending_reqs[req_id] = req
-        self._scheduler._lock.release()
+        Channel._asyncoro._lock.release()
         _Peer.send_req_to(req, location)
         if (yield req.event.wait(timeout)) is False:
             req.reply = None
-        self._scheduler._lock.acquire()
+        Channel._asyncoro._lock.acquire()
         Channel._asyncoro._pending_reqs.pop(req_id, None)
-        self._scheduler._lock.release()
+        Channel._asyncoro._lock.release()
         rchannel = req.reply
         raise StopIteration(rchannel)
 
@@ -3210,15 +3216,25 @@ class Channel(object):
             Channel._asyncoro._lock.release()
 
     def __getstate__(self):
-        state = {'_name': self._name, '_location': self._location,
-                 '_scheduler': id(self._scheduler)}
+        state = {'_name': self._name, '_location': self._location}
+        if self._location == Channel._asyncoro._location:
+            state['_scheduler'] = id(self._scheduler)
+        else:
+            state['_scheduler'] = self._scheduler
         return state
 
     def __setstate__(self, state):
         self._name = state['_name']
         self._location = state['_location']
-        self._scheduler = state['_scheduler']
         self._transform = None
+        self._scheduler = state['_scheduler']
+        if self._location == Channel._asyncoro._location:
+            if self._scheduler == id(Channel._asyncoro):
+                self._scheduler = Channel._asyncoro
+            elif self._location and self._scheduler == id(Channel._asyncoro._react_asyncoro):
+                self._scheduler = Channel._asyncoro._react_asyncoro
+            else:
+                logger.warning('invalid scheduler: %s', self._scheduler)
 
     def __repr__(self):
         s = '%s' % (self._name)
@@ -3463,6 +3479,10 @@ class AsynCoro(object, metaclass=Singleton):
         """Internal use only. See sleep/suspend in Coro.
         """
         self._lock.acquire()
+        if self.__cur_coro != coro:
+            self._lock.release()
+            logger.warning('invalid "suspend" - "%s" != "%s"', coro, self.__cur_coro)
+            return -1
         cid = coro._id
         if state == AsynCoro._AwaitMsg_ and coro._msgs:
             s, update = coro._msgs[0]
