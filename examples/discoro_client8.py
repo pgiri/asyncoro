@@ -22,7 +22,10 @@ def compute_coro(coro=None):
         if n is None:  # end of requests
             client.send(result)
             break
-        time.sleep(n) # computation is simulated with 'time.sleep'
+        # long-running computation is simulated with 'time.sleep'; during this
+        # time client may send messages to this coroutine, which will be
+        # received and put in this coroutine's message queue (by _ReactAsynCoro_)
+        time.sleep(n)
         result += n
 
 # client (local) coroutine submits computations
@@ -36,6 +39,11 @@ def client_proc(computation, njobs, coro=None):
         # first send this local coroutine (to whom rcoro sends result)
         rcoro.send(coro)
         for i in range(5):
+            # even if recipient doesn't use "yield" (such as executing long-run
+            # computation, or thread-blocking function such as 'time.sleep' as
+            # in this case), the message is accepted by another scheduler
+            # (_ReactAsynCoro_) at the receiver and put in recipient's message
+            # queue
             rcoro.send(random.uniform(10, 20))
             # assume delay in input availability
             yield coro.sleep(random.uniform(2, 5))

@@ -541,7 +541,14 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
         """
         if not self._react_asyncoro:
             raise StopIteration(None)
-        loc = yield self._react_asyncoro.peer_location(name)
+        _Peer._lock.acquire()
+        for peer in _Peer.peers.itervalues():
+            if peer.name == name:
+                loc = peer.location
+                break
+        else:
+            loc = None
+        _Peer._lock.release()
         if not loc:
             req = _NetRequest('locate_peer', kwargs={'name': name})
             req.event = Event()
@@ -558,7 +565,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
             self._lock.release()
         raise StopIteration(loc)
 
-    def peer(self, *args, **kwargs):
+    def peer(self, loc, udp_port=0, stream_send=False, broadcast=False):
         """Must be used with 'yield', as
         'status = yield scheduler.peer("loc")'.
 
@@ -584,7 +591,11 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
         if not self._react_asyncoro:
             raise StopIteration(-1)
 
-        yield self._react_asyncoro.peer(*args, **kwargs)
+        def _peer(coro=None):
+            ReactCoro(self._react_asyncoro.peer, coro, loc, udp_port, stream_send, broadcast)
+            yield coro.recv()
+
+        yield Coro(_peer).finish()
 
     def peer_status(self, coro):
         """This method can be used to be notified of status of peers
@@ -600,16 +611,25 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
         """
         return _Peer.get_peers()
 
-    def discover_peers(self, coro=None):
+    def close_peer(self, location, timeout=MsgTimeout):
+        """Close peer at 'location'.
+        """
+        if not isinstance(location, Location):
+            return
+        _Peer._lock.acquire()
+        peer = _Peer.peers.pop((location.addr, location.port), None)
+        _Peer._lock.release()
+        if peer:
+            ReactCoro(_Peer.close_peer, peer, timeout)
+
+    def discover_peers(self):
         """This method can be invoked (periodically?) to broadcast message to
         discover peers, if there is a chance initial broadcast message may be
         lost (as these messages are sent over UDP).
-
-        Must be used with a Coro, or yield.
         """
         if not self._react_asyncoro:
-            raise StopIteration
-        yield self._react_asyncoro.discover_peers()
+            return
+        ReactCoro(self._react_asyncoro.discover_peers)
 
     def send_file(self, location, file, dir=None, overwrite=False, timeout=None):
         """Must be used with 'yield' as
@@ -703,6 +723,12 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
             reply = -1
         raise StopIteration(reply)
 
+    def _react_call_(self, method, *args, **kwargs):
+        swing = {'result': None, 'event': Event()}
+        ReactCoro(self._react_asyncoro._swing_call_, swing, method, *args, **kwargs)
+        yield swing['event'].wait()
+        yield swing['result']
+
 
 class ReactCoro(asyncoro.Coro):
     """Coroutine meant for reactive components, always ready to respond to
@@ -717,10 +743,9 @@ class ReactCoro(asyncoro.Coro):
     """
 
     _asyncoro = None
-    _scheduler = None
 
     def __init__(self, *args, **kwargs):
-        self._scheduler = ReactCoro._scheduler
+        self._scheduler = ReactCoro._asyncoro
         super(ReactCoro, self).__init__(*args, **kwargs)
 
 
@@ -736,7 +761,7 @@ class _ReactAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
                  secret='', certfile=None, keyfile=None, notifier=None,
                  dest_path=None, max_file_size=None):
         super(self.__class__, self).__init__()
-        ReactCoro._scheduler = _Peer._asyncoro = ReactCoro._asyncoro = self
+        ReactCoro._asyncoro = _Peer._asyncoro = ReactCoro._asyncoro = self
         if node:
             node = socket.gethostbyname(node)
         else:
@@ -828,16 +853,17 @@ class _ReactAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
         self.__dest_path = path
 
     def finish(self):
-        self._complete.wait()
-        _Peer.shutdown()
         super(self.__class__, self).finish()
         if self._tcp_sock:
             self._tcp_sock.close()
         if self._udp_sock:
             self._udp_sock.close()
 
-    def peer(self, loc, udp_port=0, stream_send=False, broadcast=False):
-        def peer_coro(loc, udp_port, stream_send, broadcast, coro=None):
+    def peer(self, client, loc, udp_port=0, stream_send=False, broadcast=False, coro=None):
+        """
+        _Must_ be called with ReactCoro
+        """
+        def _peer(loc, udp_port, stream_send, broadcast):
             if not isinstance(loc, Location):
                 try:
                     loc = socket.gethostbyname(loc)
@@ -901,20 +927,8 @@ class _ReactAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
                 sock.close()
             raise StopIteration(0)
 
-        yield ReactCoro(peer_coro, loc, udp_port, stream_send, broadcast).finish()
-
-    def peer_location(self, name):
-        def peer_loc(coro=None):
-            _Peer._lock.acquire()
-            for peer in _Peer.peers.values():
-                if peer.name == name:
-                    loc = peer.location
-                    break
-            else:
-                loc = None
-            _Peer._lock.release()
-            yield loc
-        yield ReactCoro(peer_loc).finish()
+        ret = yield _peer(loc, udp_port, stream_send, broadcast)
+        client.send(ret)
 
     def discover_peers(self, coro=None):
         ping_sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
@@ -1053,9 +1067,11 @@ class _ReactAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
                             coro = self._coros.get(int(req.kwargs['coro']))
                             if isinstance(coro, ReactCoro):
                                 reply = coro.send(req.kwargs['message'])
+                        else:
+                            logger.warning('invalid "send" message ignored')
                     else:
                         channel = req.kwargs.get('channel', None)
-                        if channel:
+                        if channel and scheduler:
                             if scheduler == id(Channel._asyncoro):
                                 Channel._asyncoro._lock.acquire()
                                 channel = Channel._asyncoro._channels.get(channel)
@@ -1066,6 +1082,8 @@ class _ReactAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
                                 channel = self._channels.get(req.kwargs['channel'])
                                 if isinstance(channel, Channel):
                                     reply = channel.send(req.kwargs['message'])
+                            else:
+                                logger.warning('invalid "send" message ignored')
                         else:
                             logger.warning('ignoring invalid recipient to "send"')
                 yield conn.send_msg(serialize(reply))
@@ -1088,6 +1106,8 @@ class _ReactAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
                             coro = self._coros.get(int(req.kwargs['coro']))
                             if coro and coro.send(req.kwargs['message']) == 0:
                                 reply = 1
+                        else:
+                            logger.warning('invalid "deliver" message ignored')
                     else:
                         channel = req.kwargs.get('channel')
                         if channel and scheduler:
@@ -1105,6 +1125,10 @@ class _ReactAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
                                     reply = yield channel.deliver(
                                         req.kwargs['message'], timeout=req.timeout,
                                         n=req.kwargs['n'])
+                            else:
+                                logger.warning('invalid "deliver" message ignored')
+                        else:
+                            logger.warning('invalid "deliver" message ignored')
                 yield conn.send_msg(serialize(reply))
             elif req.name == 'run_rci':
                 # synchronous message
@@ -1439,6 +1463,10 @@ class _ReactAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
         if (yield req.event.wait(req.timeout)) is False:
             raise StopIteration(alarm_value)
         raise StopIteration(req.reply)
+
+    def _swing_call_(self, swing, method, *args, **kwargs):
+        swing['result'] = yield method(*args, **kwargs)
+        swing['event'].set()
 
     def __repr__(self):
         s = str(self._location)

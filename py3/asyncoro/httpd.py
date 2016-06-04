@@ -309,7 +309,7 @@ class HTTPServer(object):
         self._httpd_thread = threading.Thread(target=self._server.serve_forever)
         self._httpd_thread.daemon = True
         self._httpd_thread.start()
-        self.status_coro = asyncoro.Coro(self.status_proc)
+        self.status_coro = asyncoro.ReactCoro(self.status_proc)
         self.computation = computation
         if not computation.status_coro:
             computation.status_coro = self.status_coro
@@ -324,9 +324,9 @@ class HTTPServer(object):
                 rcoro = msg.args[0]
                 node = self._nodes.get(rcoro.location.addr)
                 if node:
-                    server = node.servers.get(str(rcoro.location))
+                    server = node.servers.get(rcoro.location)
                     if server:
-                        if server.coros.pop(str(rcoro), None) is not None:
+                        if server.coros.pop(rcoro, None) is not None:
                             server.coros_done += 1
                             node.coros_done += 1
                             node.update_time = time.time()
@@ -336,9 +336,9 @@ class HTTPServer(object):
                     rcoro = msg.info
                     node = self._nodes.get(rcoro.coro.location.addr)
                     if node:
-                        server = node.servers.get(str(rcoro.coro.location))
+                        server = node.servers.get(rcoro.coro.location)
                         if server:
-                            server.coros[str(rcoro.coro)] = rcoro
+                            server.coros[rcoro.coro] = rcoro
                             server.coros_submitted += 1
                             node.coros_submitted += 1
                             node.update_time = time.time()
@@ -354,11 +354,11 @@ class HTTPServer(object):
                             else:
                                 host_name = msg.info.name
                             node = HTTPServer._Node(host_name, msg.info.location.addr)
-                            node.status = HTTPServer.NodeStatus[msg.status]
+                            node.status = HTTPServer.NodeStatus[discoro.Scheduler.NodeDiscovered]
                             self._nodes[msg.info.location.addr] = node
                         server = HTTPServer._Server(msg.info.name, msg.info.location)
                         server.status = HTTPServer.ServerStatus[msg.status]
-                        node.servers[str(server.location)] = server
+                        node.servers[server.location] = server
                         node.update_time = time.time()
                         self._updates[node.addr] = node
                 elif msg.status in (discoro.Scheduler.ServerInitialized,
@@ -369,7 +369,7 @@ class HTTPServer(object):
                         # node.servers.pop(str(msg.info), None)
                         # if not node.servers:
                         #     self._nodes.pop(msg.info.addr)
-                        server = node.servers.get(str(msg.info), None)
+                        server = node.servers.get(msg.info, None)
                         if server:
                             server.status = HTTPServer.ServerStatus[msg.status]
                             node.update_time = time.time()
@@ -408,12 +408,12 @@ class HTTPServer(object):
                                  'before quitting', self._poll_sec)
             if asyncoro.AsynCoro().cur_coro():
                 def _shutdown(coro=None):
-                    yield coro.sleep(self._poll_sec + 0.2)
+                    yield coro.sleep(self._poll_sec + 0.5)
                     self._server.shutdown()
                     self._server.server_close()
                 asyncoro.Coro(_shutdown)
             else:
-                time.sleep(self._poll_sec + 0.2)
+                time.sleep(self._poll_sec + 0.5)
                 self._server.shutdown()
                 self._server.server_close()
         else:

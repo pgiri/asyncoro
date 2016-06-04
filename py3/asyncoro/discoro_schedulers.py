@@ -7,19 +7,19 @@ computations. This file implements special purpose schedulers using the same
 'run' method.
 """
 
-__author__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
-__copyright__ = "Copyright (c) 2015 Giridhar Pemmasani"
-__license__ = "MIT"
-__url__ = "http://asyncoro.sourceforge.net"
-
-__all__ = ['RemoteCoroScheduler']
-
 import inspect
 
 import asyncoro.disasyncoro as asyncoro
 import asyncoro.discoro as discoro
 from asyncoro import Coro, ReactCoro
 from asyncoro.discoro import DiscoroStatus, DiscoroServerInfo, DiscoroNodeInfo
+
+__author__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
+__copyright__ = "Copyright (c) 2015 Giridhar Pemmasani"
+__license__ = "MIT"
+__url__ = "http://asyncoro.sourceforge.net"
+
+__all__ = ['RemoteCoroScheduler']
 
 
 class RemoteCoroScheduler(object):
@@ -97,7 +97,7 @@ class RemoteCoroScheduler(object):
 
         self.computation = computation
         self.computation_sign = None
-        self.status_coro = Coro(self._status_proc)
+        self.status_coro = ReactCoro(self._status_proc)
         if not computation.status_coro:
             computation.status_coro = self.status_coro
         self._rcoros = {}
@@ -266,6 +266,7 @@ class RemoteCoroScheduler(object):
         """
 
         coro.set_daemon()
+        ReactCoro.scheduler().atexit(15, lambda: ReactCoro(self.finish, True).value())
         while 1:
             msg = yield coro.receive()
             if isinstance(msg, asyncoro.MonitorException):

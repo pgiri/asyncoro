@@ -62,7 +62,7 @@ __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
            'HotSwapException', 'MonitorException', 'Location', 'Channel',
            'CategorizeMessages', 'AsyncThreadPool', 'AsyncDBCursor',
-           'Singleton', 'logger', 'serialize', 'unserialize']
+           'Singleton', 'logger', 'serialize', 'unserialize', 'Logger']
 
 # timeout in seconds used when sending messages
 MsgTimeout = 10
@@ -123,10 +123,10 @@ class Logger(object):
 
     def log(self, message, *args):
         now = time.time()
-        if len(args) == 1:
-            args = args[0]
         if args:
             message = message % args
+        elif len(args) == 1:
+            message = message % args[0]
         if self.log_ms:
             self.stream.write('%s.%03d %s - %s\n' %
                               (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now)),
@@ -2480,6 +2480,10 @@ class Coro(object):
         """
         return self._name
 
+    @classmethod
+    def scheduler(cls):
+        return cls._asyncoro
+
     @staticmethod
     def locate(name, location=None, timeout=None):
         """Must be used with 'yield' as
@@ -2553,10 +2557,7 @@ class Coro(object):
         If suspend times out (no other coroutine resumes it), AsynCoro
         resumes it with the value 'alarm_value'.
         """
-        if AsynCoro.cur_coro() == self:
-            return self._scheduler._suspend(self, timeout, alarm_value, AsynCoro._Suspended)
-        else:
-            return -1
+        return self._scheduler._suspend(self, timeout, alarm_value, AsynCoro._Suspended)
 
     sleep = suspend
 
@@ -3519,10 +3520,6 @@ class AsynCoro(object, metaclass=Singleton):
             self._lock.release()
             logger.warning('invalid coroutine %s to resume', cid)
             return -1
-        if state == AsynCoro._AwaitMsg_ and coro._state != state:
-            coro._msgs.append((state, update))
-            self._lock.release()
-            return 0
         if coro._state == state:
             coro._timeout = None
             coro._value = update
@@ -3531,8 +3528,12 @@ class AsynCoro(object, metaclass=Singleton):
             coro._state = AsynCoro._Scheduled
             if self._polling and len(self._scheduled) == 1:
                 self._poll_event.set()
+        elif state == AsynCoro._AwaitMsg_:
+            coro._msgs.append((state, update))
+            self._lock.release()
+            return 0
         else:
-            logger.warning('ignoring resume for %s/%s: %s', coro._name, cid, coro._state)
+            logger.warning('ignoring resume for %s: %s', coro, coro._state)
         self._lock.release()
         return 0
 
@@ -3667,8 +3668,10 @@ class AsynCoro(object, metaclass=Singleton):
             self._lock.release()
 
             for coro in scheduled:
+                self._lock.acquire()
                 coro._state = AsynCoro._Running
                 self.__cur_coro = coro
+                self._lock.release()
 
                 try:
                     if coro._exceptions:
@@ -3757,9 +3760,7 @@ class AsynCoro(object, metaclass=Singleton):
                                     exc = MonitorException(coro, coro._exceptions[0])
                                 else:
                                     exc = MonitorException(coro, (StopIteration, coro._value))
-                                if self._coros.get(monitor._id, None) == monitor:
-                                    monitor.send(exc)
-                                else:
+                                if monitor.send(exc):
                                     logger.warning('monitor for %s/%s is not valid!',
                                                    coro._name, coro._id)
                                     coro._monitors.discard(monitor)
@@ -3854,13 +3855,6 @@ class AsynCoro(object, metaclass=Singleton):
             logger.debug('AsynCoro %s terminated', self._location)
         else:
             logger.debug('AsynCoro terminated')
-        while self._atexit:
-            func, fargs, fkwargs = self._atexit.pop()
-            try:
-                func(*fargs, **fkwargs)
-            except:
-                logger.warning('running %s failed:', func.__name__)
-                logger.warning(traceback.format_exc())
         self._complete.set()
 
     def _exit(self, await_non_daemons):
@@ -3884,6 +3878,19 @@ class AsynCoro(object, metaclass=Singleton):
             self._lock.release()
 
         self._complete.wait()
+
+        if self._atexit:
+            while self._atexit:
+                priority, func, fargs, fkwargs = self._atexit.pop()
+                try:
+                    func(*fargs, **fkwargs)
+                except:
+                    logger.warning('running %s failed:', func.__name__)
+                    logger.warning(traceback.format_exc())
+            self._complete.wait()
+        if self._location and AsynCoro._instance != self:
+            _Peer.shutdown()
+            self._complete.wait()
 
         self._lock.acquire()
         if not self._quit:
@@ -3931,11 +3938,17 @@ class AsynCoro(object, metaclass=Singleton):
             self._lock.release()
         self._complete.wait()
 
-    def atexit(self, func, *fargs, **fkwargs):
+    def atexit(self, priority, func, *fargs, **fkwargs):
         """Function 'func' will be called after the scheduler has
-        terminated.
+        terminated. 'priority' indicates the order in which all queued functions
+        will be called; higher priority functions are called before lower
+        priority functions.
         """
-        self._atexit.append((func, fargs, fkwargs))
+        item = (priority, func, fargs, fkwargs)
+        self._lock.acquire()
+        i = bisect_left(self._atexit, item)
+        self._atexit.insert(i, item)
+        self._lock.release()
 
     def _register_channel(self, channel, name):
         """Internal use only.

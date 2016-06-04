@@ -45,6 +45,8 @@ def _discoro_server_proc():
     _discoro_config = yield _discoro_coro.receive()
     assert _discoro_config['req'] == 'config'
     _discoro_coro.register('discoro_server')
+    _discoro_timer_coro = _discoro_config['timer_coro']
+    yield asyncoro.AsynCoro.instance().peer(_discoro_timer_coro.location)
 
     if _discoro_config['min_pulse_interval'] > 0:
         MinPulseInterval = _discoro_config['min_pulse_interval']
@@ -106,8 +108,7 @@ def _discoro_server_proc():
                          _discoro_name, _discoro_coro.location, _discoro_dest_path)
     _discoro_req = _discoro_client = _discoro_auth = _discoro_msg = None
     _discoro_scheduler_status = _discoro_scheduler_notify = _discoro_peer_status = None
-    _discoro_timer_coro = _discoro_timer_proc = _discoro_node_status = None
-    _discoro_monitor_coro = _discoro_monitor_proc = None
+    _discoro_monitor_coro = _discoro_monitor_proc = _discoro_cur_peer = None
     _discoro_computation = _discoro_func = _discoro_var = None
     _discoro_job_coros = set()
     _discoro_jobs_done = asyncoro.Event()
@@ -116,46 +117,6 @@ def _discoro_server_proc():
     _discoro_modules = dict(sys.modules)
     _discoro_globals.update(globals())
     _discoro_locals.update(locals())
-
-    def _discoro_timer_proc(coro=None):
-        coro.set_daemon()
-        last_pulse = time.time()
-        interval = None
-        while 1:
-            reset = yield coro.sleep(interval)
-            if reset:
-                if not isinstance(_discoro_scheduler_status, Coro):
-                    interval = None
-                    continue
-                interval = reset
-                last_pulse = time.time()
-                continue
-            if not _discoro_scheduler_status:
-                continue
-
-            now = time.time()
-            msg = {'location': coro.location}
-            if psutil:
-                msg['node_status'] = DiscoroNodeAvailInfo(
-                    coro.location.addr, 100.0 - psutil.cpu_percent(),
-                    psutil.virtual_memory().available, psutil.disk_usage(_discoro_dest_path).free,
-                    100.0 - psutil.swap_memory().percent)
-
-            if (yield _discoro_scheduler_status.deliver(msg, timeout=_discoro_msg_timeout)) == 1:
-                last_pulse = now
-            elif (now - last_pulse) > (5 * interval) and _discoro_computation:
-                asyncoro.logger.warning('Scheduler at %s is not reachable; closing computation "%s"',
-                                        _discoro_scheduler_status.location, _discoro_computation._auth)
-                _discoro_config['mp_queue'].put({'req': 'close', 'auth': _discoro_computation._auth,
-                                                 'proc_auth': _discoro_config['auth']})
-
-            if ((not _discoro_ntotal_coros.value) and _discoro_computation and
-                _discoro_computation.zombie_period and
-               ((now - _discoro_busy_time.value) > _discoro_computation.zombie_period)):
-                asyncoro.logger.warning('%s: Closing zombie computation "%s"',
-                                        coro.location, _discoro_computation._auth)
-                _discoro_config['mp_queue'].put({'req': 'close', 'auth': _discoro_computation._auth,
-                                                 'proc_auth': _discoro_config['auth']})
 
     def _discoro_peer_status(coro=None):
         coro.set_daemon()
@@ -183,10 +144,10 @@ def _discoro_server_proc():
                     _discoro_ntotal_coros.value -= 1
                     _discoro_busy_time.value = int(time.time())
             else:
-                asyncoro.logger.warning('%s: invalid monitor message ignored', coro.location)
+                asyncoro.logger.warning('%s: invalid monitor message %s ignored',
+                                        coro.location, type(msg))
 
-    _discoro_monitor_coro = Coro(_discoro_monitor_proc)
-    _discoro_timer_coro = ReactCoro(_discoro_timer_proc)
+    _discoro_monitor_coro = ReactCoro(_discoro_monitor_proc)
     asyncoro.AsynCoro.instance().peer_status(ReactCoro(_discoro_peer_status))
 
     while 1:
@@ -245,6 +206,10 @@ def _discoro_server_proc():
                 asyncoro.logger.debug('invalid "setup" - busy')
                 _discoro_client.send(-1)
                 continue
+            if _discoro_cur_peer != _discoro_scheduler_status.location:
+                # asyncoro.AsynCoro.instance().close_peer(_discoro_cur_peer)
+                yield asyncoro.AsynCoro.instance().peer(_discoro_scheduler_status.location)
+                _discoro_cur_peer = _discoro_scheduler_status.location
             os.chdir(_discoro_dest_path)
             try:
                 _discoro_computation = _discoro_msg['computation']
@@ -264,11 +229,11 @@ def _discoro_server_proc():
                 _discoro_computation.pulse_interval = _discoro_computation.pulse_interval
             else:
                 _discoro_computation.pulse_interval = MinPulseInterval
-            if _discoro_msg.get('node_status', None):
-                _discoro_node_status = True
-                _discoro_timer_coro.resume(_discoro_computation.pulse_interval)
-            else:
-                _discoro_node_status = None
+            _discoro_timer_coro.send({'scheduler_coro': _discoro_scheduler_status,
+                                      'auth': _discoro_computation._auth,
+                                      'interval': _discoro_computation.pulse_interval,
+                                      'zombie_period': _discoro_computation.zombie_period,
+                                      'disk_path': _discoro_dest_path})
             _discoro_busy_time.value = int(time.time())
             asyncoro.logger.debug('%s: Computation "%s" from %s with zombie period %s',
                                   _discoro_coro.location, _discoro_computation._auth,
@@ -336,12 +301,18 @@ def _discoro_server_proc():
             if _discoro_auth != _discoro_computation._auth and _discoro_scheduler_status:
                 _discoro_scheduler_status.send({'status': 'ServerClosed',
                                                 'location': _discoro_coro.location})
-            _discoro_node_status = None
-            _discoro_timer_coro.resume(MinPulseInterval)
+            _discoro_timer_coro.send({'scheduler_coro': None, 'interval': None,
+                                      'disk_path': '', 'auth': _discoro_computation._auth})
             os.chdir(_discoro_dest_path)
             asyncoro.AsynCoro.instance().dest_path = _discoro_dest_path
             _discoro_computation = _discoro_client = None
             _discoro_scheduler_status = _discoro_scheduler_notify = None
+            _discoro_var = _discoro_msg.get('client', None)
+            if isinstance(_discoro_var, Coro):
+                _discoro_var.send(0)
+            if _discoro_msg.get('proc_auth', None):
+                asyncoro.AsynCoro.instance().close_peer(_discoro_cur_peer)
+                _discoro_cur_peer = None
             if _discoro_config['serve'] > 0:
                 _discoro_config['serve'] -= 1
                 if _discoro_config['serve'] == 0:
@@ -353,8 +324,6 @@ def _discoro_server_proc():
                                                     psutil.virtual_memory().available,
                                                     psutil.disk_usage(_discoro_dest_path).free,
                                                     100.0 - psutil.swap_memory().percent)
-                if _discoro_msg.get('node_status', False):
-                    _discoro_node_status = True
             else:
                 _discoro_var = None
             # _discoro_name is host name followed by '-' and ID
@@ -482,8 +451,7 @@ def _discoro_process(_discoro_config, _discoro_server_id, _discoro_auth,
         if _discoro_var.startswith('_discoro_'):
             globals().pop(_discoro_var)
 
-    _discoro_coro.send(_discoro_config_msg)
-    del logging, os, _discoro_config, _discoro_config_msg, _discoro_var
+    del logging, os, _discoro_config, _discoro_var
 
     req_queue, _discoro_mp_queue = _discoro_mp_queue, None
 
@@ -501,6 +469,10 @@ def _discoro_process(_discoro_config, _discoro_server_id, _discoro_auth,
         cmd = req.get('req')
         if cmd == 'status' or cmd == 'close':
             _discoro_coro.send(req)
+        elif cmd == 'start':
+            _discoro_config_msg['timer_coro'] = req.get('timer_coro', None)
+            _discoro_coro.send(_discoro_config_msg)
+            del _discoro_config_msg
         elif cmd == 'quit' or cmd == 'terminate':
             _discoro_coro.send(req)
             break
@@ -517,17 +489,19 @@ if __name__ == '__main__':
     """
 
     import sys
+    import time
     import argparse
     import multiprocessing
     import socket
     import os
     import collections
     import hashlib
+    import logging
     try:
         import readline
     except:
         pass
-    import asyncoro
+    import asyncoro.disasyncoro as asyncoro
 
     try:
         import psutil
@@ -618,10 +592,11 @@ if __name__ == '__main__':
 
     if _discoro_tcp_ports:
         for tcp_port in range(_discoro_tcp_ports[-1] + 1,
-                              _discoro_tcp_ports[-1] + 1 + _discoro_cpus - len(_discoro_tcp_ports)):
+                              _discoro_tcp_ports[-1] + 1 +
+                              (_discoro_cpus + 1) - len(_discoro_tcp_ports)):
             _discoro_tcp_ports.append(tcp_port)
     else:
-        _discoro_tcp_ports = [0] * _discoro_cpus
+        _discoro_tcp_ports = [0] * (_discoro_cpus + 1)
     del tcp_port, tcp_ports
 
     peers, _discoro_config['peers'] = _discoro_config['peers'], []
@@ -659,7 +634,7 @@ if __name__ == '__main__':
     _discoro_mp_queue = None
     _discoro_ntotal_coros = multiprocessing.Value('L', 0)
     _discoro_busy_time = multiprocessing.Value('I', 0)
-    for _discoro_server_id in range(1, _discoro_cpus+1):
+    for _discoro_server_id in range(1, _discoro_cpus + 1):
         _discoro_config['name'] = '%s-%s' % (_discoro_name, _discoro_server_id)
         _discoro_config['tcp_port'] = _discoro_tcp_ports[_discoro_server_id - 1]
         _discoro_mp_queue = multiprocessing.Queue()
@@ -671,6 +646,99 @@ if __name__ == '__main__':
             _discoro_mp_queue)
         _discoro_server_infos.append(_discoro_server_info)
         _discoro_server_info.Proc.start()
+
+    def _discoro_timer_proc(msg_timeout, _discoro_ntotal_coros, _discoro_busy_time, coro=None):
+        from asyncoro.discoro import DiscoroNodeAvailInfo
+        coro.set_daemon()
+        async_scheduler = asyncoro.AsynCoro.instance()
+        last_pulse = last_proc_check = time.time()
+        interval = peer_coro = cur_peer = cur_auth = zombie_period = None
+        while 1:
+            msg = yield coro.receive(timeout=interval)
+            if msg:
+                auth = msg.get('auth', None)
+                if cur_auth and (auth != cur_auth):
+                    asyncoro.logger.warning('Timer: invalid computation authentication: %s != %s',
+                                            cur_auth, auth)
+                    continue
+                if peer_coro == msg.get('scheduler_coro', None):
+                    continue
+                peer_coro = msg.get('scheduler_coro', None)
+                if not isinstance(peer_coro, asyncoro.Coro):
+                    asyncoro.logger.debug('Computation is done: %s', _discoro_ntotal_coros.value)
+                    interval = peer_coro = cur_auth = None
+                    continue
+                cur_auth = auth
+                interval = msg.get('interval', None)
+                disk_path = msg.get('disk_path', '.')
+                zombie_period = msg.get('zombie_period', None)
+                if cur_peer != peer_coro.location:
+                    # scheduler.close_peer(cur_peer)
+                    cur_peer = peer_coro.location
+                    yield async_scheduler.peer(cur_peer)
+                    yield coro.sleep(0.5) # wait a bit for peer to be discovered
+                last_pulse = time.time()
+            if not peer_coro:
+                continue
+
+            msg = {'location': coro.location, 'ncoros': _discoro_ntotal_coros.value}
+            if psutil:
+                msg['node_status'] = DiscoroNodeAvailInfo(
+                    coro.location.addr, 100.0 - psutil.cpu_percent(),
+                    psutil.virtual_memory().available, psutil.disk_usage(disk_path).free,
+                    100.0 - psutil.swap_memory().percent)
+
+            now = time.time()
+            sent = yield peer_coro.deliver(msg, timeout=msg_timeout)
+            if sent == 1:
+                last_pulse = now
+            elif (now - last_pulse) > (5 * interval) and cur_auth:
+                asyncoro.logger.warning('Scheduler is not reachable; closing computation "%s"',
+                                        cur_auth)
+                for _discoro_server_info in _discoro_server_infos:
+                    _discoro_server_info.Queue.put({'req': 'close', 'auth': cur_auth,
+                                                    'proc_auth': _discoro_auth})
+                scheduler.close_peer(cur_peer)
+                cur_peer = None
+
+            if ((not _discoro_ntotal_coros.value) and cur_auth and zombie_period and
+                ((now - _discoro_busy_time.value) > zombie_period)):
+                asyncoro.logger.warning('Closing zombie computation "%s"', cur_auth)
+                for _discoro_server_info in _discoro_server_infos:
+                    _discoro_server_info.Queue.put({'req': 'close', 'auth': cur_auth,
+                                                    'proc_auth': _discoro_auth})
+                scheduler.close_peer(cur_peer)
+                cur_peer = None
+            if (now - last_proc_check) > (3 * interval):
+                last_proc_check = now
+                for _discoro_server_info in _discoro_server_infos:
+                    if not _discoro_server_info.Proc.is_alive():
+                        # TODO: inform scheduler, start new process?
+                        asyncoro.logger.warning('Process %s is dead?: %s',
+                                                _discoro_server_info.Proc.pid,
+                                                _discoro_server_info.Proc.exitcode)
+
+    _discoro_server_id = 0
+    _discoro_config['name'] = '%s-%s' % (_discoro_name, _discoro_server_id)
+    _discoro_config['tcp_port'] = _discoro_tcp_ports[_discoro_server_id]
+    _discoro_config.pop('phoenix', False)
+    _discoro_config.pop('serve', -1)
+    _discoro_config.pop('peers', [])
+    _discoro_msg_timeout = _discoro_config.pop('msg_timeout')
+    _discoro_config.pop('min_pulse_interval')
+    _discoro_config.pop('max_pulse_interval')
+    _discoro_config['discover_peers'] = False
+    if _discoro_config['loglevel']:
+        asyncoro.logger.setLevel(logging.DEBUG)
+    else:
+        asyncoro.logger.setLevel(logging.INFO)
+    del _discoro_config['loglevel']
+    _discoro_scheduler = asyncoro.AsynCoro(**_discoro_config)
+    _discoro_timer_coro = asyncoro.Coro(_discoro_timer_proc, _discoro_msg_timeout,
+                                        _discoro_ntotal_coros, _discoro_busy_time)
+    for _discoro_server_info in _discoro_server_infos:
+        _discoro_server_info.Queue.put({'req': 'start', 'proc_auth': _discoro_auth,
+                                        'timer_coro': _discoro_timer_coro})
 
     del multiprocessing, collections, _discoro_mp_queue, _discoro_tcp_ports, _discoro_config
 
@@ -687,6 +755,8 @@ if __name__ == '__main__':
                         '  "close" to close current computation (kill any running jobs)\n'
                         '  "quit" to stop accepting new jobs and quit when done\n'
                         '  "terminate" to kill current jobs and quit: ')
+                except GeneratorExit:
+                    break
                 except:
                     _discoro_cmd = ''
                 else:
