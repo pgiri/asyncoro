@@ -493,7 +493,7 @@ class AsynCoro(asyncoro.AsynCoro):
         AsynCoro._instance = self
         atexit.register(self.finish)
         super(self.__class__, self).__init__()
-        ReactCoro._asyncoro = RCI._asyncoro = _ReactAsynCoro_._asyncoro = self
+        RCI._asyncoro = _ReactAsynCoro_._asyncoro = self
         self._react_asyncoro = _ReactAsynCoro_(*args, **kwargs)
         self.__class__._react_asyncoro = self._react_asyncoro
         self._location = self._react_asyncoro._location
@@ -747,6 +747,8 @@ class ReactCoro(asyncoro.Coro):
     _asyncoro = None
 
     def __init__(self, *args, **kwargs):
+        if not ReactCoro._asyncoro:
+            AsynCoro.instance()
         self._scheduler = ReactCoro._asyncoro
         super(ReactCoro, self).__init__(*args, **kwargs)
 
@@ -765,7 +767,7 @@ class _ReactAsynCoro_(asyncoro.AsynCoro):
                  secret='', certfile=None, keyfile=None, notifier=None,
                  dest_path=None, max_file_size=None):
         super(self.__class__, self).__init__()
-        ReactCoro._asyncoro = _Peer._asyncoro = ReactCoro._asyncoro = self
+        ReactCoro._asyncoro = _Peer._asyncoro = self
         if node:
             node = socket.gethostbyname(node)
         else:
