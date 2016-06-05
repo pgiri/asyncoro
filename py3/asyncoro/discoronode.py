@@ -673,7 +673,7 @@ if __name__ == '__main__':
                 disk_path = msg.get('disk_path', '.')
                 zombie_period = msg.get('zombie_period', None)
                 if cur_peer != peer_coro.location:
-                    # scheduler.close_peer(cur_peer)
+                    # async_scheduler.close_peer(cur_peer)
                     cur_peer = peer_coro.location
                     yield async_scheduler.peer(cur_peer)
                     yield coro.sleep(0.5) # wait a bit for peer to be discovered
@@ -698,7 +698,7 @@ if __name__ == '__main__':
                 for _discoro_server_info in _discoro_server_infos:
                     _discoro_server_info.Queue.put({'req': 'close', 'auth': cur_auth,
                                                     'proc_auth': _discoro_auth})
-                scheduler.close_peer(cur_peer)
+                async_scheduler.close_peer(cur_peer)
                 cur_peer = None
 
             if ((not _discoro_ntotal_coros.value) and cur_auth and zombie_period and
@@ -707,7 +707,7 @@ if __name__ == '__main__':
                 for _discoro_server_info in _discoro_server_infos:
                     _discoro_server_info.Queue.put({'req': 'close', 'auth': cur_auth,
                                                     'proc_auth': _discoro_auth})
-                scheduler.close_peer(cur_peer)
+                async_scheduler.close_peer(cur_peer)
                 cur_peer = None
             if (now - last_proc_check) > (3 * interval):
                 last_proc_check = now
