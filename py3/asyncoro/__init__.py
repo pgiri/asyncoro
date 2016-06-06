@@ -2585,8 +2585,8 @@ class Coro(object):
         if self._location == Coro._asyncoro._location:
             return self._scheduler._resume(self, message, AsynCoro._AwaitMsg_)
         else:
-            request = _NetRequest('send', kwargs={'message': message, 'coro': self._id,
-                                                  '_scheduler': self._scheduler},
+            request = _NetRequest('send', kwargs={'message': message, 'name': self._name,
+                                                  'coro': self._id},
                                   dst=self._location, timeout=MsgTimeout)
             # request is queued for asynchronous processing
             if _Peer.send_req(request) != 0:
@@ -2610,8 +2610,8 @@ class Coro(object):
             if reply == 0:
                 reply = 1
         else:
-            request = _NetRequest('deliver', kwargs={'message': message, 'coro': self._id,
-                                                     '_scheduler': self._scheduler},
+            request = _NetRequest('deliver', kwargs={'message': message, 'name': self._name,
+                                                     'coro': self._id},
                                   dst=self._location, timeout=timeout)
             request.reply = -1
             reply = yield Coro._asyncoro._react_asyncoro._sync_reply(request, alarm_value=0)
@@ -2702,7 +2702,7 @@ class Coro(object):
         if self._location == Coro._asyncoro._location:
             return self._scheduler._terminate_coro(self)
         else:
-            request = _NetRequest('terminate_coro', kwargs={'coro': self._id},
+            request = _NetRequest('terminate_coro', kwargs={'coro': self._id, 'name': self._name},
                                   dst=self._location, timeout=MsgTimeout)
             if _Peer.send_req(request) != 0:
                 logger.warning('remote coro at %s may not be valid', self._location)
@@ -2755,8 +2755,8 @@ class Coro(object):
             reply = self._scheduler._monitor(self, observe)
         else:
             # remote coro
-            request = _NetRequest('monitor', kwargs={'monitor': self, 'coro': observe._id,
-                                                     '_scheduler': observe._scheduler},
+            request = _NetRequest('monitor', kwargs={'monitor': self, 'name': observe._name,
+                                                     'coro': observe._id},
                                   dst=observe._location, timeout=MsgTimeout)
             reply = yield Coro._asyncoro._react_asyncoro._sync_reply(request)
         raise StopIteration(reply)
@@ -2796,30 +2796,45 @@ class Coro(object):
             kwargs['coro'] = coro
         return target(*args, **kwargs)
 
-    def __getstate__(self):
-        state = {'_name': self._name, '_id': str(self._id), '_location': self._location}
-        if self._location == Coro._asyncoro._location:
-            state['_scheduler'] = id(self._scheduler)
+    def _canonical_name(self):
+        """Internal use only.
+        """
+        if self._scheduler == Coro._asyncoro:
+            name = '~' + self._name
+        elif self._location and self._scheduler == Coro._asyncoro._react_asyncoro:
+            name = '!' + self._name
         else:
-            state['_scheduler'] = self._scheduler
+            name = self._name
+        return name
+
+    def __getstate__(self):
+        state = {'name': self._canonical_name(), 'id': str(self._id), 'location': self._location}
         return state
 
     def __setstate__(self, state):
-        self._name = state['_name']
-        self._location = state['_location']
-        self._id = state['_id']
-        self._scheduler = state['_scheduler']
+        self._name = state['name']
+        self._location = state['location']
+        self._id = state['id']
         if self._location == Coro._asyncoro._location:
-            if self._scheduler == id(Coro._asyncoro):
+            if self._name[0] == '~':
+                self._name = self._name[1:]
+                self._id = int(self._id)
                 self._scheduler = Coro._asyncoro
-            elif self._location and self._scheduler == id(Coro._asyncoro._react_asyncoro):
+            elif self._location and self._name[0] == '!':
+                self._name = self._name[1:]
+                self._id = int(self._id)
                 self._scheduler = Coro._asyncoro._react_asyncoro
             else:
                 logger.warning('invalid scheduler: %s', self._scheduler)
+                self._scheduler = None
+        else:
+            self._scheduler = None
 
     def __repr__(self):
-        s = '%s/%s' % (self._name, self._id)
-        if self._location:
+        if self._location == Coro._asyncoro._location:
+            s = '%s/%s' % (self._canonical_name(), self._id)
+        else:
+            s = '%s/%s' % (self._name, self._id)
             s = '%s@%s' % (s, self._location)
         return s
 
@@ -2895,6 +2910,12 @@ class Channel(object):
         if not Channel._asyncoro:
             Channel._asyncoro = AsynCoro.instance()
         self._name = name
+        if self._name[0] in ('~', '!'):
+            while not name[0].isalnum():
+                name = name[1:]
+            logger.warning('Channel name "%s" should begin with alpha-numeric character;'
+                           'it is changed to "%s"', self._name, name)
+            self._name = name
         self._scheduler = AsynCoro.scheduler()
         if not self._scheduler:
             self._scheduler = Channel._asyncoro
@@ -3103,8 +3124,7 @@ class Channel(object):
                     Coro(_unsub, self, subscriber)
         else:
             # remote channel
-            request = _NetRequest('send', kwargs={'message': message, 'channel': self._name,
-                                                  '_scheduler': self._scheduler},
+            request = _NetRequest('send', kwargs={'message': message, 'channel': self._name},
                                   dst=self._location, timeout=MsgTimeout)
             # request is queued for asynchronous processing
             if _Peer.send_req(request) != 0:
@@ -3197,7 +3217,7 @@ class Channel(object):
         else:
             # remote channel
             request = _NetRequest('deliver', kwargs={'message': message, 'channel': self._name,
-                                                     '_scheduler': self._scheduler, 'n': n},
+                                                     'n': n},
                                   dst=self._location, timeout=timeout)
             request.reply = -1
             reply = yield Channel._asyncoro._react_asyncoro._sync_reply(request, alarm_value=0)
@@ -3216,32 +3236,47 @@ class Channel(object):
             Channel._asyncoro._channels.pop(self._name, None)
             Channel._asyncoro._lock.release()
 
-    def __getstate__(self):
-        state = {'_name': self._name, '_location': self._location}
+    @property
+    def _canonical_name(self):
+        """Internal use only.
+        """
         if self._location == Channel._asyncoro._location:
-            state['_scheduler'] = id(self._scheduler)
+            if self._scheduler == Channel._asyncoro:
+                name = '~' + self._name
+            elif self._location and self._scheduler == Channel._asyncoro._react_asyncoro:
+                name = '!' + self._name
+            else:
+                name = self._name
         else:
-            state['_scheduler'] = self._scheduler
+            name = self._name
+        return name
+
+    def __getstate__(self):
+        state = {'name': self._canonical_name, 'location': self._location}
         return state
 
     def __setstate__(self, state):
-        self._name = state['_name']
-        self._location = state['_location']
+        self._name = state['name']
+        self._location = state['location']
         self._transform = None
-        self._scheduler = state['_scheduler']
         if self._location == Channel._asyncoro._location:
-            if self._scheduler == id(Channel._asyncoro):
+            if self._name[0] == '~':
                 self._scheduler = Channel._asyncoro
-            elif self._location and self._scheduler == id(Channel._asyncoro._react_asyncoro):
+                self._name = self._name[1:]
+            elif self._location and self._name[0] == '!':
                 self._scheduler = Channel._asyncoro._react_asyncoro
+                self._name = self._name[1:]
             else:
                 logger.warning('invalid scheduler: %s', self._scheduler)
+                self._scheduler = None
+        else:
+            self._scheduler = None
 
     def __repr__(self):
-        s = '%s' % (self._name)
-        if self._location:
-            s = '%s@%s' % (s, self._location)
-        return s
+        if self._location == Channel._asyncoro._location:
+            return self._canonical_name
+        else:
+            return '%s@%s' % (self._name, self._location)
 
 
 class CategorizeMessages(object):
@@ -3375,11 +3410,8 @@ class AsynCoro(object, metaclass=Singleton):
         AsynCoro._schedulers[self._scheduler] = self
         self._scheduler.daemon = True
         self._scheduler.start()
-        if not AsynCoro._instance:
-            AsynCoro._instance = self
-            atexit.register(self.finish)
         if AsynCoro._instance == self:
-            Coro._asyncoro = Channel._asyncoro = self
+            atexit.register(self.finish)
             logger.info('version %s with %s I/O notifier', __version__, self._notifier._poller_name)
 
     @classmethod
@@ -3575,12 +3607,12 @@ class AsynCoro(object, metaclass=Singleton):
         else:
             self._suspended.discard(cid)
             self._scheduled.add(cid)
+            coro._state = AsynCoro._Scheduled
+            coro._timeout = None
+            coro._callers = []
+            if self._polling and len(self._scheduled) == 1:
+                self._poll_event.set()
         coro._exceptions.append((GeneratorExit, GeneratorExit('close')))
-        coro._timeout = None
-        coro._state = AsynCoro._Scheduled
-        coro._callers = []
-        if self._polling and len(self._scheduled) == 1:
-            self._poll_event.set()
         self._lock.release()
         return 0
 
