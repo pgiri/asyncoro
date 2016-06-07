@@ -1068,24 +1068,30 @@ class _ReactAsynCoro_(asyncoro.AsynCoro):
                             Coro._asyncoro._lock.acquire()
                             coro = Coro._asyncoro._coros.get(int(coro), None)
                             Coro._asyncoro._lock.release()
-                            if coro and coro._name == name[1:]:
+                            if coro and coro._name == name:
                                 reply = coro.send(req.kwargs['message'])
+                            else:
+                                logger.warning('ignoring invalid recipient to "send"')
                         elif name[0] == '!':
                             coro = self._coros.get(int(coro))
-                            if coro and coro._name == name[1:]:
+                            if coro and coro._name == name:
                                 reply = coro.send(req.kwargs['message'])
+                            else:
+                                logger.warning('ignoring invalid recipient to "send"')
                         else:
                             logger.warning('invalid "send" message ignored')
                     else:
                         channel = req.kwargs.get('channel', None)
                         if channel[0] == '~':
                             Channel._asyncoro._lock.acquire()
-                            channel = Channel._asyncoro._channels.get(channel[1:])
+                            channel = Channel._asyncoro._channels.get(channel)
                             Channel._asyncoro._lock.release()
                             if channel:
                                 reply = channel.send(req.kwargs['message'])
+                            else:
+                                logger.warning('ignoring invalid recipient to "send"')
                         elif channel[0] == '!':
-                            channel = self._channels.get(channel[1:])
+                            channel = self._channels.get(channel)
                             if isinstance(channel, Channel):
                                 reply = channel.send(req.kwargs['message'])
                             else:
@@ -1119,14 +1125,14 @@ class _ReactAsynCoro_(asyncoro.AsynCoro):
                         if channel:
                             if channel[0] == '~':
                                 Channel._asyncoro._lock.acquire()
-                                channel = Channel._asyncoro._channels.get(channel[1:])
+                                channel = Channel._asyncoro._channels.get(channel)
                                 Channel._asyncoro._lock.release()
                                 if channel:
                                     reply = yield channel.deliver(
                                         req.kwargs['message'], timeout=req.timeout,
                                         n=req.kwargs['n'])
                             elif channel[0] == '!':
-                                channel = self._channels.get(channel[1:])
+                                channel = self._channels.get(channel)
                                 if isinstance(channel, Channel):
                                     reply = yield channel.deliver(
                                         req.kwargs['message'], timeout=req.timeout,
@@ -1163,10 +1169,10 @@ class _ReactAsynCoro_(asyncoro.AsynCoro):
                 yield conn.send_msg(serialize(coro))
             elif req.name == 'locate_channel':
                 Channel._asyncoro._lock.acquire()
-                channel = Channel._asyncoro._rchannels.get(req.kwargs['name'], None)
+                channel = Channel._asyncoro._rchannels.get('~' + req.kwargs['name'], None)
                 Channel._asyncoro._lock.release()
                 if not channel:
-                    channel = self._rchannels.get(req.kwargs['name'], None)
+                    channel = self._rchannels.get('!' + req.kwargs['name'], None)
                 yield conn.send_msg(serialize(channel))
             elif req.name == 'locate_rci':
                 RCI._asyncoro._lock.acquire()
@@ -1184,12 +1190,12 @@ class _ReactAsynCoro_(asyncoro.AsynCoro):
                     if name[0] == '~':
                         Coro._asyncoro._lock.acquire()
                         coro = Coro._asyncoro._coros.get(int(coro), None)
-                        if coro and coro._name == name[1:]:
+                        if coro and coro._name == name:
                             reply = Coro._asyncoro._monitor(monitor, coro)
                         Coro._asyncoro._lock.release()
                     elif name == '!':
                         coro = self._coros.get(int(coro), None)
-                        if coro and coro._name == name[1:]:
+                        if coro and coro._name == name:
                             reply = self._monitor(monitor, coro)
                 yield conn.send_msg(serialize(reply))
             elif req.name == 'terminate_coro':
@@ -1328,10 +1334,10 @@ class _ReactAsynCoro_(asyncoro.AsynCoro):
                 channel = req.kwargs.get('channel', ' ')
                 if channel[0] == '~':
                     Channel._asyncoro._lock.acquire()
-                    channel = Channel._asyncoro._channels.get(channel[1:], None)
+                    channel = Channel._asyncoro._channels.get(channel, None)
                     Channel._asyncoro._lock.release()
                 elif channel[0] == '!':
-                    channel = self._channels.get(channel[1:], None)
+                    channel = self._channels.get(channel, None)
                 if isinstance(channel, Channel) and channel._location == self._location:
                     subscriber = req.kwargs.get('subscriber', None)
                     if isinstance(subscriber, Coro):
@@ -1354,10 +1360,10 @@ class _ReactAsynCoro_(asyncoro.AsynCoro):
                 channel = req.kwargs.get('channel', ' ')
                 if channel[0] == '~':
                     Channel._asyncoro._lock.acquire()
-                    channel = Channel._asyncoro._channels.get(channel[1:], None)
+                    channel = Channel._asyncoro._channels.get(channel, None)
                     Channel._asyncoro._lock.release()
                 elif channel[0] == '!':
-                    channel = self._channels.get(channel[1:], None)
+                    channel = self._channels.get(channel, None)
                 if isinstance(channel, Channel) and channel._location == self._location:
                     subscriber = req.kwargs.get('subscriber', None)
                     if isinstance(subscriber, Coro):

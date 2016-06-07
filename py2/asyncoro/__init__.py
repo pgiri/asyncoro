@@ -1101,12 +1101,12 @@ if platform.system() == 'Windows':
                 self.xset = set()
                 self.cmd_rsock.close()
                 self.cmd_wsock.close()
+                self.__class__._instance = None
 
             def terminate(self):
                 self._terminate = True
                 self.cmd_wsock.send('x')
-                self.poll_thread.join()
-                self.__class__._instance = None
+                self.poll_thread.join(0.2)
 
             @staticmethod
             def _socketpair():
@@ -1213,10 +1213,10 @@ if platform.system() == 'Windows':
                     while err != winerror.WAIT_TIMEOUT:
                         if overlap and overlap.object:
                             overlap.object(err, n)
-                        elif err == winerror.INVALID_HANDLE:
+                        elif err == winerror.ERROR_INVALID_HANDLE and not self.iocp:
                             return
                         else:
-                            logger.warning('invalid overlap!')
+                            logger.warning('invalid overlap: %s', err)
                             break
                         err, n, key, overlap = win32file.GetQueuedCompletionStatus(self.iocp, 0)
 
@@ -1268,6 +1268,7 @@ if platform.system() == 'Windows':
                     logger.warning('pending timeouts: %s', len(self._timeouts))
                 win32file.CloseHandle(self.iocp)
                 self.iocp = None
+                self.poll_thread.join(0.2)
                 self.cmd_rsock_buf = None
                 self.__class__._instance = None
 
@@ -1875,7 +1876,7 @@ if not hasattr(sys.modules[__name__], '_AsyncNotifier'):
             self._run = False
             self._interrupt()
             self._lock.release()
-            self.poll_thread.join()
+            self.poll_thread.join(0.2)
 
         def _add_timeout(self, fd):
             self._lock.acquire()
@@ -2405,6 +2406,11 @@ class Coro(object):
             self._scheduler = Coro._asyncoro
         self._location = self._scheduler._location
         self._scheduler._add(self)
+        if self._scheduler == Coro._asyncoro:
+            self._name = '~' + self._name
+        else:
+            # assert self._location and self._scheduler == Coro._asyncoro._react_asyncoro
+            self._name = '!' + self._name
 
     @property
     def location(self):
@@ -2420,7 +2426,7 @@ class Coro(object):
 
         Can also be used on remotely running coroutines.
         """
-        return self._name
+        return self._name[1:]
 
     @classmethod
     def scheduler(cls):
@@ -2468,7 +2474,7 @@ class Coro(object):
         if self._location != Coro._asyncoro._location:
             return -1
         if not name:
-            name = self._name
+            name = self.name
         return self._scheduler._register_coro(self, name)
 
     def unregister(self, name=None):
@@ -2477,7 +2483,7 @@ class Coro(object):
         if self._location != Coro._asyncoro._location:
             return -1
         if not name:
-            name = self._name
+            name = self.name
         return self._scheduler._unregister_coro(self, name)
 
     def set_daemon(self, flag=True):
@@ -2738,19 +2744,8 @@ class Coro(object):
             kwargs['coro'] = coro
         return target(*args, **kwargs)
 
-    def _canonical_name(self):
-        """Internal use only.
-        """
-        if self._scheduler == Coro._asyncoro:
-            name = '~' + self._name
-        elif self._location and self._scheduler == Coro._asyncoro._react_asyncoro:
-            name = '!' + self._name
-        else:
-            name = self._name
-        return name
-
     def __getstate__(self):
-        state = {'name': self._canonical_name(), 'id': str(self._id), 'location': self._location}
+        state = {'name': self._name, 'id': str(self._id), 'location': self._location}
         return state
 
     def __setstate__(self, state):
@@ -2759,11 +2754,9 @@ class Coro(object):
         self._id = state['id']
         if self._location == Coro._asyncoro._location:
             if self._name[0] == '~':
-                self._name = self._name[1:]
                 self._id = int(self._id)
                 self._scheduler = Coro._asyncoro
             elif self._location and self._name[0] == '!':
-                self._name = self._name[1:]
                 self._id = int(self._id)
                 self._scheduler = Coro._asyncoro._react_asyncoro
             else:
@@ -2773,10 +2766,8 @@ class Coro(object):
             self._scheduler = None
 
     def __repr__(self):
-        if self._location == Coro._asyncoro._location:
-            s = '%s/%s' % (self._canonical_name(), self._id)
-        else:
-            s = '%s/%s' % (self._name, self._id)
+        s = '%s/%s' % (self._name, self._id)
+        if self._location != Coro._asyncoro._location:
             s = '%s@%s' % (s, self._location)
         return s
 
@@ -2851,13 +2842,6 @@ class Channel(object):
 
         if not Channel._asyncoro:
             Channel._asyncoro = AsynCoro.instance()
-        self._name = name
-        if self._name[0] in ('~', '!'):
-            while not name[0].isalnum():
-                name = name[1:]
-            logger.warning('Channel name "%s" should begin with alpha-numeric character;'
-                           'it is changed to "%s"', self._name, name)
-            self._name = name
         self._scheduler = AsynCoro.scheduler()
         if not self._scheduler:
             self._scheduler = Channel._asyncoro
@@ -2870,13 +2854,25 @@ class Channel(object):
                 logger.warning('invalid "transform" function ignored')
                 transform = None
         self._transform = transform
+        self._name = name
+        if not name[0].isalnum():
+            while not name[0].isalnum():
+                name = name[1:]
+            logger.warning('Channel name "%s" should begin with alpha-numeric character;'
+                           'it is changed to "%s"', self._name, name)
+            self._name = name
+        if self._scheduler == Channel._asyncoro:
+            self._name = '~' + self._name
+        else:
+            # assert self._location and self._scheduler == Channel._asyncoro._react_asyncoro
+            self._name = '!' + self._name
         self._subscribers = set()
         self._subscribe_event = Event()
         self._scheduler._lock.acquire()
-        if name in self._scheduler._channels:
-            logger.warning('duplicate channel "%s"!', name)
+        if self._name in self._scheduler._channels:
+            logger.warning('duplicate channel "%s"!', self._name)
         else:
-            self._scheduler._channels[name] = self
+            self._scheduler._channels[self._name] = self
         self._scheduler._lock.release()
 
     @property
@@ -2893,7 +2889,7 @@ class Channel(object):
 
         Can also be used on remote channel.
         """
-        return self._name
+        return self._name[1:]
 
     @staticmethod
     def locate(name, location=None, timeout=None):
@@ -2906,7 +2902,7 @@ class Channel(object):
         if not Channel._asyncoro:
             Channel._asyncoro = AsynCoro.instance()
         if not location or location == Channel._asyncoro._location:
-            rchannel = Channel._asyncoro._channels.get(name, None)
+            rchannel = Channel._asyncoro._channels.get('~' + name, None)
             if rchannel or location == Channel._asyncoro._location:
                 raise StopIteration(rchannel)
         req = _NetRequest('locate_channel', kwargs={'name': name}, dst=location, timeout=timeout)
@@ -3049,7 +3045,7 @@ class Channel(object):
 
             if transform:
                 try:
-                    message = transform(self._name, message)
+                    message = transform(self.name, message)
                 except:
                     message = None
                 if message is None:
@@ -3095,7 +3091,7 @@ class Channel(object):
 
             if transform:
                 try:
-                    message = transform(self._name, message)
+                    message = transform(self.name, message)
                 except:
                     message = None
                 if message is None:
@@ -3174,27 +3170,12 @@ class Channel(object):
         if self._location == Channel._asyncoro._location:
             self.unregister()
             self._subscribers = set()
-            Channel._asyncoro._lock.acquire()
-            Channel._asyncoro._channels.pop(self._name, None)
-            Channel._asyncoro._lock.release()
-
-    @property
-    def _canonical_name(self):
-        """Internal use only.
-        """
-        if self._location == Channel._asyncoro._location:
-            if self._scheduler == Channel._asyncoro:
-                name = '~' + self._name
-            elif self._location and self._scheduler == Channel._asyncoro._react_asyncoro:
-                name = '!' + self._name
-            else:
-                name = self._name
-        else:
-            name = self._name
-        return name
+            self._scheduler._lock.acquire()
+            self._scheduler._channels.pop(self._name, None)
+            self._scheduler._lock.release()
 
     def __getstate__(self):
-        state = {'name': self._canonical_name, 'location': self._location}
+        state = {'name': self._name, 'location': self._location}
         return state
 
     def __setstate__(self, state):
@@ -3204,10 +3185,8 @@ class Channel(object):
         if self._location == Channel._asyncoro._location:
             if self._name[0] == '~':
                 self._scheduler = Channel._asyncoro
-                self._name = self._name[1:]
             elif self._location and self._name[0] == '!':
                 self._scheduler = Channel._asyncoro._react_asyncoro
-                self._name = self._name[1:]
             else:
                 logger.warning('invalid scheduler: %s', self._scheduler)
                 self._scheduler = None
@@ -3216,7 +3195,7 @@ class Channel(object):
 
     def __repr__(self):
         if self._location == Channel._asyncoro._location:
-            return self._canonical_name
+            return self._name
         else:
             return '%s@%s' % (self._name, self._location)
 
