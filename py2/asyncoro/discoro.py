@@ -597,13 +597,7 @@ class Scheduler(object):
                     node = self._nodes.get(msg.location.addr, None)
                     if not node:
                         node = Scheduler._Node(msg.name, msg.location.addr, self)
-                        node.status = Scheduler.NodeDiscovered
                         self._nodes[msg.location.addr] = node
-                        if self._cur_computation and self._cur_computation.status_coro:
-                            status_msg = DiscoroStatus(
-                                node.status, DiscoroNodeInfo(node.name, node.addr, node.avail_info)
-                                )
-                            self._cur_computation.status_coro.send(status_msg)
                     node.servers[msg.location] = server
                     if node.status != Scheduler.NodeIgnore:
                         ReactCoro(self.__setup_server, server)
@@ -624,7 +618,7 @@ class Scheduler(object):
 
     def __timer_proc(self, coro=None):
         coro.set_daemon()
-        server_check = client_pulse = last_ping = time.time()
+        server_check = client_pulse = time.time()
         while 1:
             try:
                 msg = yield coro.receive(timeout=self.__pulse_interval)
@@ -956,17 +950,15 @@ class Scheduler(object):
         node = self._nodes.get(server.location.addr, None)
         if not node:
             raise StopIteration(0)
+        computation = self._cur_computation
         if not server.coro:
-            if self._cur_computation:
-                timeout = self._cur_computation.timeout
+            if computation:
+                timeout = computation.timeout
             else:
                 timeout = MsgTimeout
             for _ in range(3):
                 server.coro = yield Coro.locate('discoro_server', server.location, timeout=timeout)
                 if isinstance(server.coro, Coro):
-                    server.status = Scheduler.ServerDiscovered
-                    if node.status != Scheduler.NodeDiscovered:
-                        node.status = Scheduler.NodeDiscovered
                     break
                 yield coro.sleep(0.2)
             else:
@@ -980,19 +972,24 @@ class Scheduler(object):
                 if node_info and not node.avail_info:
                     node.avail_info = node_info.avail_info
                     node.name = node_info.name
-                    if self._cur_computation and self._cur_computation.status_coro:
+                    node.status = Scheduler.NodeDiscovered
+                    if computation and computation.status_coro:
                         status_msg = DiscoroStatus(
                             node.status, DiscoroNodeInfo(node.name, node.addr, node.avail_info)
                             )
-                        self._cur_computation.status_coro.send(status_msg)
-            if not self._cur_computation:
+                        computation.status_coro.send(status_msg)
+                        status_msg = DiscoroStatus(
+                            Scheduler.ServerDiscovered,
+                            DiscoroServerInfo(server.name, server.location))
+                        computation.status_coro.send(status_msg)
+            if not computation:
+                server.status = Scheduler.ServerDiscovered
                 raise StopIteration(0)
-            if self._cur_computation.status_coro:
-                status = DiscoroStatus(Scheduler.ServerDiscovered,
-                                       DiscoroServerInfo(server.name, server.location))
-                self._cur_computation.status_coro.send(status)
+            if computation.status_coro:
+                status_msg = DiscoroStatus(Scheduler.ServerDiscovered,
+                                           DiscoroServerInfo(server.name, server.location))
+                computation.status_coro.send(status_msg)
 
-        computation = self._cur_computation
         server.coro.send({'req': 'setup', 'client': coro, 'computation': computation,
                           'status': self.__timer_coro, 'notify': self._status_coro})
         ret = yield coro.receive(timeout=computation.timeout, alarm_value=-1)
