@@ -11,7 +11,7 @@ import inspect
 
 import asyncoro.disasyncoro as asyncoro
 import asyncoro.discoro as discoro
-from asyncoro import Coro, ReactCoro
+from asyncoro import Coro
 from asyncoro.discoro import DiscoroStatus, DiscoroServerInfo, DiscoroNodeInfo
 
 __author__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
@@ -97,7 +97,7 @@ class RemoteCoroScheduler(object):
 
         self.computation = computation
         self.computation_sign = None
-        self.status_coro = ReactCoro(self._status_proc)
+        self.status_coro = Coro(self._status_proc)
         if not computation.status_coro:
             computation.status_coro = self.status_coro
         self._rcoros = {}
@@ -245,6 +245,9 @@ class RemoteCoroScheduler(object):
         Must be used with 'yield' as 'yield job_scheduler.finish()'.
         """
 
+        self._rcoros_done.clear()
+        if self._rcoros:
+            yield self._rcoros_done.wait()
         if close:
             if self._proc_close:
                 coros = [Coro(self._proc_close, discoro.Scheduler.ServerInitialized, location)
@@ -254,8 +257,8 @@ class RemoteCoroScheduler(object):
                     yield coro.finish()
             else:
                 self._close_servers = {}
+        self._rcoros_done.clear()
         if self._rcoros:
-            self._rcoros_done.clear()
             yield self._rcoros_done.wait()
         if close:
             yield self.computation.close()
@@ -266,7 +269,7 @@ class RemoteCoroScheduler(object):
         """
 
         coro.set_daemon()
-        ReactCoro.scheduler().atexit(15, lambda: ReactCoro(self.finish, True).value())
+        coro.scheduler().atexit(15, lambda: Coro(self.finish, True).value())
         while 1:
             msg = yield coro.receive()
             if isinstance(msg, asyncoro.MonitorException):
