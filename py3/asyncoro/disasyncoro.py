@@ -1032,23 +1032,18 @@ class _ReactAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
                 break
             if not msg:
                 break
-            req = None
             try:
                 req = unserialize(msg)
-                assert req.auth == self._auth_code
             except:
-                if not req:
-                    logger.debug('invalid message from %s:%s', addr[0], addr[1])
-                    logger.debug(traceback.format_exc())
-                    break
-                if req.name != 'ping':
-                    logger.warning('invalid request %s ignored: "%s", "%s"',
-                                   req.name, req.auth, self._auth_code)
-                    break
-
-            if req.dst and req.dst != self._location:
-                logger.debug('invalid request "%s" to %s (%s)', req.name, req.dst, self._location)
+                logger.debug('%s ignoring invalid message', self._location)
                 break
+            if req.auth != self._auth_code and req.name != 'ping':
+                logger.warning('invalid request %s ignored: "%s", "%s"',
+                               req.name, req.auth, self._auth_code)
+                break
+            # if req.dst and req.dst != self._location:
+            #     logger.debug('invalid request "%s" to %s (%s)', req.name, req.dst, self._location)
+            #     break
 
             if req.name == 'send':
                 # synchronous message

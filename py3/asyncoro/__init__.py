@@ -1118,12 +1118,14 @@ if platform.system() == 'Windows':
                 self.xset = set()
                 self.cmd_rsock.close()
                 self.cmd_wsock.close()
+                self.cmd_rsock = self.cmd_wsock = None
                 self.__class__._instance = None
 
             def terminate(self):
-                self._terminate = True
-                self.cmd_wsock.send(b'x')
-                self.poll_thread.join(0.2)
+                if not self._terminate:
+                    self._terminate = True
+                    self.cmd_wsock.send(b'x')
+                    self.poll_thread.join(0.2)
 
             @staticmethod
             def _socketpair():
@@ -1229,7 +1231,12 @@ if platform.system() == 'Windows':
                     while err != winerror.WAIT_TIMEOUT:
                         if overlap and overlap.object:
                             overlap.object(err, n)
-                        elif err == winerror.ERROR_INVALID_HANDLE and not self.iocp:
+                        elif not self.iocp:
+                            if (err == winerror.ERROR_INVALID_HANDLE or
+                                err == winerror.ERROR_ABANDONED_WAIT_0):
+                                pass
+                            else:
+                                logger.warning('IOCP handle closed error: %d', err)
                             return
                         else:
                             logger.warning('invalid overlap: %s', err)
@@ -1277,16 +1284,17 @@ if platform.system() == 'Windows':
                     self._lock.release()
 
             def terminate(self):
-                self.async_poller.terminate()
-                self.cmd_rsock.close()
-                self.cmd_wsock.close()
-                if len(self._timeouts):
-                    logger.warning('pending timeouts: %s', len(self._timeouts))
-                win32file.CloseHandle(self.iocp)
-                self.iocp = None
-                self.cmd_rsock_buf = None
-                self.poll_thread.join(0.2)
-                self.__class__._instance = None
+                if self.iocp:
+                    self.async_poller.terminate()
+                    self.cmd_rsock.close()
+                    self.cmd_wsock.close()
+                    self.cmd_rsock_buf = None
+                    iocp, self.iocp = self.iocp, None
+                    win32file.CloseHandle(iocp)
+                    self.poll_thread.join(0.2)
+                    self._timeouts = []
+                    self.cmd_rsock = self.cmd_wsock = None
+                    self.__class__._instance = None
 
         class AsyncSocket(_AsyncSocket):
             """AsyncSocket with I/O Completion Ports (under
@@ -1894,11 +1902,12 @@ if not hasattr(sys.modules[__name__], '_AsyncNotifier'):
             self._lock.release()
 
         def terminate(self):
-            self._lock.acquire()
-            self._run = False
-            self._interrupt()
-            self._lock.release()
-            self.poll_thread.join(0.2)
+            if self._run:
+                self._lock.acquire()
+                self._run = False
+                self._interrupt()
+                self._lock.release()
+                self.poll_thread.join(0.2)
 
         def _add_timeout(self, fd):
             self._lock.acquire()
@@ -2825,7 +2834,7 @@ class Coro(object):
 
     def __repr__(self):
         s = '%s/%s' % (self._name, self._id)
-        if self._location != Coro._asyncoro._location:
+        if self._location:
             s = '%s@%s' % (s, self._location)
         return s
 
@@ -3252,10 +3261,10 @@ class Channel(object):
             self._scheduler = None
 
     def __repr__(self):
-        if self._location == Channel._asyncoro._location:
-            return self._name
-        else:
+        if self._location:
             return '%s@%s' % (self._name, self._location)
+        else:
+            return self._name
 
 
 class CategorizeMessages(object):
@@ -3873,9 +3882,6 @@ class AsynCoro(object, metaclass=Singleton):
         """
         if self._quit:
             return
-        if platform.system() == 'Windows':
-            # under Windows printing to sys.stdout raises exception, so disable logging
-            logger.debug = logger.info = logger.warning = logger.error = lambda obj, *args : None
         if await_non_daemons:
             if len(self._coros) > self._daemons:
                 logger.debug('waiting for %s coroutines to terminate',
