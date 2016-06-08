@@ -21,7 +21,6 @@ import collections
 import time
 import socket
 import shutil
-import atexit
 import operator
 
 import asyncoro.disasyncoro as asyncoro
@@ -69,7 +68,7 @@ class Computation(object):
     """
 
     def __init__(self, components, status_coro=None, timeout=MsgTimeout,
-                 pulse_interval=(2*MinPulseInterval), zombie_period=0):
+                 pulse_interval=(2*MinPulseInterval), ping_interval=None, zombie_period=0):
         """'components' should be a list, each element of which is either a
         module, a (generator or normal) function, path name of a file, a class
         or an object (in which case the code for its class is sent).
@@ -107,6 +106,8 @@ class Computation(object):
         if pulse_interval < MinPulseInterval or pulse_interval > MaxPulseInterval:
             raise Exception('"pulse_interval" must be at least %s and at most %s' %
                             (MinPulseInterval, MaxPulseInterval))
+        if ping_interval and ping_interval < MinPulseInterval:
+            raise Exception('"ping_interval" must be at least %s', MinPulseInterval)
         if (not isinstance(zombie_period, (int, float)) or 0 > zombie_period < MaxPulseInterval):
             raise Exception('"zombie_period" must be either 0 or >= %s' % MaxPulseInterval)
 
@@ -120,7 +121,8 @@ class Computation(object):
         self._auth = None
         self.scheduler = None
         self._pulse_coro = None
-        self.pulse_interval = pulse_interval
+        self._pulse_interval = pulse_interval
+        self._ping_interval = ping_interval
         self.timeout = timeout
         self.zombie_period = zombie_period
         depends = set()
@@ -401,7 +403,7 @@ class Computation(object):
         coro.set_daemon()
         last_pulse = time.time()
         while 1:
-            msg = yield coro.receive(timeout=(2 * self.pulse_interval))
+            msg = yield coro.receive(timeout=(2 * self._pulse_interval))
             if msg == 'pulse':
                 last_pulse = time.time()
             elif msg == 'quit':
@@ -443,9 +445,11 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
     directly.
     """
 
+    __status_coro = None
+
     class _Node(object):
 
-        def __init__(self, name, addr, scheduler):
+        def __init__(self, name, addr):
             self.name = name
             self.addr = addr
             self.avail_info = None
@@ -453,12 +457,8 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
             self.ncoros = 0
             self.load = 0.0
             self.status = None
-            self.scheduler = scheduler
 
-        def run(self, func, client):
-            if self.status != Scheduler.NodeInitialized:
-                client.send(None)
-                raise StopIteration
+        def run(self, func, computation, client):
             where = None
             load = None
             for server in self.servers.values():
@@ -468,13 +468,13 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                     where = server
                     load = len(server.rcoros)
             if where:
-                yield where.run(func, client)
+                yield where.run(func, computation, self, client)
             else:
                 client.send(None)
 
     class _Server(object):
 
-        def __init__(self, name, location, scheduler):
+        def __init__(self, name, location):
             self.name = name
             self.location = location
             self.coro = None
@@ -482,17 +482,9 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
             self.rcoros = {}
             self.xfer_files = []
             self.last_pulse = time.time()
-            self.scheduler = scheduler
             self.askew_results = {}
 
-        def run(self, func, client):
-            if self.status != Scheduler.ServerInitialized:
-                raise StopIteration(None)
-            node = self.scheduler._nodes.get(self.location.addr, None)
-            computation = self.scheduler._cur_computation
-            if not node or not computation:
-                raise StopIteration(None)
-
+        def run(self, func, computation, node, client):
             def _run(self, func, coro=None):
                 self.coro.send({'req': 'run', 'auth': computation._auth, 'func': func,
                                 'client': coro})
@@ -503,7 +495,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                     if self.askew_results:
                         msg = self.askew_results.pop(rcoro, None)
                         if msg:
-                            self.scheduler._status_coro.send(msg)
+                            Scheduler.__status_coro.send(msg)
                         else:
                             node.ncoros += 1
                             node.load = float(node.ncoros) / len(node.servers)
@@ -524,6 +516,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
         self._cur_computation = None
         self.__cur_client_auth = None
         self.__pulse_interval = MinPulseInterval
+        self.__ping_interval = None
         self.__sched_event = asyncoro.Event()
         self.__terminate = False
 
@@ -544,7 +537,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
         self.__scheduler_coro = ReactCoro(self.__scheduler_proc, nodes)
         self.__client_coro = ReactCoro(self.__client_proc)
         self.__timer_coro = ReactCoro(self.__timer_proc)
-        self._status_coro = ReactCoro(self.__status_proc)
+        Scheduler.__status_coro = self.__status_coro = ReactCoro(self.__status_proc)
         self.__client_coro.register('discoro_scheduler')
 
     def status(self):
@@ -599,10 +592,10 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
             elif isinstance(msg, asyncoro.PeerStatus):
                 computation = self._cur_computation
                 if msg.status == asyncoro.PeerStatus.Online:
-                    server = Scheduler._Server(msg.name, msg.location, self)
+                    server = Scheduler._Server(msg.name, msg.location)
                     node = self._nodes.get(msg.location.addr, None)
                     if not node:
-                        node = Scheduler._Node(msg.name, msg.location.addr, self)
+                        node = Scheduler._Node(msg.name, msg.location.addr)
                         self._nodes[msg.location.addr] = node
                     node.servers[msg.location] = server
                     if node.status != Scheduler.NodeIgnore:
@@ -624,7 +617,8 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
 
     def __timer_proc(self, coro=None):
         coro.set_daemon()
-        server_check = client_pulse = time.time()
+        server_check = client_pulse = last_ping = time.time()
+        async_scheduler = coro.scheduler()
         while 1:
             try:
                 msg = yield coro.receive(timeout=self.__pulse_interval)
@@ -700,6 +694,10 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                             logger.warning('Server %s is zombie!', server.location)
                             ReactCoro(self.__close_server, server)
 
+            if self.__ping_interval and ((now - last_ping) > self.__ping_interval):
+                last_ping = now
+                ReactCoro(async_scheduler.discover_peers)
+
     def __run(self, func, client):
         host = None
         load = None
@@ -710,7 +708,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                 host = node
                 load = node.load
         if host:
-            yield host.run(func, client)
+            yield host.run(func, self._cur_computation, client)
         else:
             client.send(None)
 
@@ -732,11 +730,8 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
             self._cur_computation, client = yield coro.receive()
 
             logger.debug('Computation %s scheduled', self._cur_computation._auth)
-            if (isinstance(self._cur_computation.pulse_interval, int) and
-               MinPulseInterval <= self._cur_computation.pulse_interval <= MaxPulseInterval):
-                self.__pulse_interval = self._cur_computation.pulse_interval
-            else:
-                self.__pulse_interval = MinPulseInterval
+            self.__pulse_interval = self._cur_computation._pulse_interval
+            self.__ping_interval = self._cur_computation._ping_interval
 
             self.__cur_client_auth = self._cur_computation._auth
             self._cur_computation._auth = Scheduler.auth_code()
@@ -801,7 +796,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                 elif isinstance(where, str):
                     node = self._nodes.get(where, None)
                     if node:
-                        ReactCoro(node.run, func, client)
+                        ReactCoro(node.run, func, self._cur_computation, client)
                     else:
                         client.send(None)
                 elif isinstance(where, asyncoro.Location):
@@ -809,7 +804,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                     if node:
                         server = node.servers.get(where)
                         if server:
-                            ReactCoro(server.run, func, client)
+                            ReactCoro(server.run, func, self._cur_computation, node, client)
                         else:
                             client.send(None)
                     else:
@@ -829,16 +824,16 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                     if (yield client.deliver(len(nodes), self._cur_computation.timeout)) != 1:
                         continue
                     for node in nodes:
-                        ReactCoro(node.run, func, client)
+                        ReactCoro(node.run, func, self._cur_computation, client)
                 elif where == 'server':
-                    servers = [server for node in self._nodes.values()
-                               if node.status == Scheduler.NodeInitialized
-                               for server in node.servers.values()
-                               if server.status == Scheduler.ServerInitialized]
-                    if (yield client.deliver(len(servers), self._cur_computation.timeout)) != 1:
+                    node_servers = [(node, server) for node in self._nodes.values()
+                                    if node.status == Scheduler.NodeInitialized
+                                    for server in node.servers.values()
+                                    if server.status == Scheduler.ServerInitialized]
+                    if (yield client.deliver(len(node_servers), self._cur_computation.timeout)) != 1:
                         continue
-                    for server in servers:
-                        ReactCoro(server.run, func, client)
+                    for node, server in node_servers:
+                        ReactCoro(server.run, func, self._cur_computation, node, client)
                 else:
                     node = self._nodes.get(where)
                     if node and node.status == Scheduler.NodeInitialized:
@@ -849,7 +844,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                     if (yield client.deliver(len(servers), self._cur_computation.timeout)) != 1:
                         continue
                     for server in servers:
-                        ReactCoro(server.run, func, client)
+                        ReactCoro(server.run, func, self._cur_computation, node, client)
 
             elif req == 'schedule':
                 try:
@@ -861,6 +856,10 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                         computation._pulse_coro._id = int(computation._pulse_coro._id)
                         if computation.status_coro:
                             computation.status_coro._id = int(computation.status_coro._id)
+                    assert isinstance(computation._pulse_interval, (float, int))
+                    assert (MinPulseInterval <= computation._pulse_interval <= MaxPulseInterval)
+                    if computation._ping_interval:
+                        assert computation._ping_interval >= MinPulseInterval
                 except:
                     logger.warning('ignoring invalid computation request')
                     client.send(None)
@@ -964,7 +963,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                 timeout = MsgTimeout
             for _ in range(3):
                 server.coro = yield Coro.locate('discoro_server', server.location, timeout=timeout)
-                if isinstance(server.coro, Coro): 
+                if isinstance(server.coro, Coro):
                     break
                 yield coro.sleep(0.2)
             else:
@@ -997,7 +996,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                 computation.status_coro.send(status_msg)
 
         server.coro.send({'req': 'setup', 'client': coro, 'computation': computation,
-                          'status': self.__timer_coro, 'notify': self._status_coro})
+                          'status': self.__timer_coro, 'notify': self.__status_coro})
         ret = yield coro.receive(timeout=computation.timeout, alarm_value=-1)
         if ret:
             logger.warning('setup of %s failed: %s', server.coro, ret)

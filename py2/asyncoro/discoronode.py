@@ -222,14 +222,14 @@ def _discoro_server_proc():
                 asyncoro.logger.debug(traceback.format_exc())
                 _discoro_client.send(-1)
                 continue
-            if (isinstance(_discoro_computation.pulse_interval, int) and
-                MinPulseInterval <= _discoro_computation.pulse_interval <= MaxPulseInterval):
-                _discoro_computation.pulse_interval = _discoro_computation.pulse_interval
+            if (isinstance(_discoro_computation._pulse_interval, int) and
+                MinPulseInterval <= _discoro_computation._pulse_interval <= MaxPulseInterval):
+                _discoro_computation._pulse_interval = _discoro_computation._pulse_interval
             else:
-                _discoro_computation.pulse_interval = MinPulseInterval
+                _discoro_computation._pulse_interval = MinPulseInterval
             _discoro_timer_coro.send({'scheduler_coro': _discoro_scheduler_status,
                                       'auth': _discoro_computation._auth,
-                                      'interval': _discoro_computation.pulse_interval,
+                                      'interval': _discoro_computation._pulse_interval,
                                       'zombie_period': _discoro_computation.zombie_period,
                                       'disk_path': _discoro_dest_path})
             _discoro_busy_time.value = int(time.time())
@@ -658,7 +658,7 @@ if __name__ == '__main__':
                     # async_scheduler.close_peer(cur_peer)
                     cur_peer = peer_coro.location
                     yield async_scheduler.peer(cur_peer)
-                    yield coro.sleep(0.5) # wait a bit for peer to be discovered
+                    yield coro.sleep(0.5)  # wait a bit for peer to be discovered
                 last_pulse = time.time()
             if not peer_coro:
                 continue
