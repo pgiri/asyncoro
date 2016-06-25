@@ -955,10 +955,9 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
         node = self._nodes.get(server.location.addr, None)
         if not node:
             raise StopIteration(0)
-        computation = self._cur_computation
         if not server.coro:
-            if computation:
-                timeout = computation.timeout
+            if self._cur_computation:
+                timeout = self._cur_computation.timeout
             else:
                 timeout = MsgTimeout
             for _ in range(3):
@@ -978,32 +977,34 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                     node.avail_info = node_info.avail_info
                     node.name = node_info.name
                     node.status = Scheduler.NodeDiscovered
-                    if computation and computation.status_coro:
+                    if self._cur_computation and self._cur_computation.status_coro:
                         status_msg = DiscoroStatus(
                             node.status, DiscoroNodeInfo(node.name, node.addr, node.avail_info)
                             )
-                        computation.status_coro.send(status_msg)
+                        self._cur_computation.status_coro.send(status_msg)
                         status_msg = DiscoroStatus(
                             Scheduler.ServerDiscovered,
                             DiscoroServerInfo(server.name, server.location))
-                        computation.status_coro.send(status_msg)
-            if not computation:
+                        self._cur_computation.status_coro.send(status_msg)
+            if not self._cur_computation:
                 server.status = Scheduler.ServerDiscovered
                 raise StopIteration(0)
-            if computation.status_coro:
+            if self._cur_computation.status_coro:
                 status_msg = DiscoroStatus(Scheduler.ServerDiscovered,
                                            DiscoroServerInfo(server.name, server.location))
-                computation.status_coro.send(status_msg)
+                self._cur_computation.status_coro.send(status_msg)
 
-        server.coro.send({'req': 'setup', 'client': coro, 'computation': computation,
+        if not self._cur_computation:
+            raise StopIteration(0)
+        server.coro.send({'req': 'setup', 'client': coro, 'computation': self._cur_computation,
                           'status': self.__timer_coro, 'notify': self.__status_coro})
-        ret = yield coro.receive(timeout=computation.timeout, alarm_value=-1)
+        ret = yield coro.receive(timeout=self._cur_computation.timeout, alarm_value=-1)
         if ret:
             logger.warning('setup of %s failed: %s', server.coro, ret)
             raise StopIteration(ret)
-        for xf in computation._xfer_files:
+        for xf in self._cur_computation._xfer_files:
             reply = yield self.asyncoro.send_file(server.location, xf,
-                                                  timeout=computation.timeout)
+                                                  timeout=self._cur_computation.timeout)
             if reply < 0:
                 logger.debug('failed to transfer file %s: %s', xf, reply)
                 ReactCoro(self.__close_server, server)
@@ -1012,15 +1013,14 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
         server.last_pulse = time.time()
         if node.status != Scheduler.NodeInitialized:
             node.status = Scheduler.NodeInitialized
-            if computation.status_coro:
-                computation.status_coro.send(DiscoroStatus(node.status, node.addr))
-        if computation.status_coro:
-            computation.status_coro.send(DiscoroStatus(server.status, server.location))
+            if self._cur_computation.status_coro:
+                self._cur_computation.status_coro.send(DiscoroStatus(node.status, node.addr))
+        if self._cur_computation.status_coro:
+            self._cur_computation.status_coro.send(DiscoroStatus(server.status, server.location))
         raise StopIteration(0)
 
     def __close_node(self, node, coro=None):
-        computation = self._cur_computation
-        if not computation:
+        if not self._cur_computation:
             logger.warning('Closing node %s ignored', node.addr)
             raise StopIteration(-1)
         close_coros = []
