@@ -631,7 +631,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
             return
         SysCoro(self._sys_asyncoro.discover_peers, port=port)
 
-    def send_file(self, location, file, dir=None, overwrite=False, timeout=None):
+    def send_file(self, location, file, dir=None, overwrite=False, timeout=MsgTimeout):
         """Must be used with 'yield' as
         'val = yield scheduler.send_file(location, "file1")'.
 
@@ -731,7 +731,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
 
 
 class SysCoro(asyncoro.Coro):
-    """Coroutine meant for sysive components, always ready to respond to
+    """Coroutine meant for reactive components, always ready to respond to
     events; i.e., takes very little CPU time to process events. This is meant
     for internal use to handle network traffic, timer events etc. in asyncoro
     modules. These coroutines run in seperate AsynCoro thread (_SysAsynCoro_),
