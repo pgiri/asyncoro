@@ -767,7 +767,17 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
         if node:
             node = socket.gethostbyname(node)
         else:
-            node = socket.gethostbyname(socket.gethostname())
+            if netifaces:
+                for iface in netifaces.interfaces():
+                    for link in netifaces.ifaddresses(iface).get(netifaces.AF_INET, []):
+                        if link.get('broadcast', None) and link.get('netmask', None):
+                            node = socket.gethostbyname(link.get('addr', ''))
+                            break
+                    else:
+                        continue
+                    break
+            if not node:
+                node = socket.gethostbyname(socket.gethostname())
         if not udp_port:
             udp_port = 51350
         if not dest_path:
