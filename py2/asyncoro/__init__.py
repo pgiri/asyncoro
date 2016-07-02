@@ -657,9 +657,9 @@ class _AsyncSocket(object):
                         self._write_task = self._write_result = None
                         coro, self._write_coro = self._write_coro, None
                         coro._proceed_(None)
-                    elif self._timeout:
-                        self._notifier._del_timeout(self)
-                        self._notifier._add_timeout(self)
+                    # elif self._timeout:
+                    #     self._notifier._del_timeout(self)
+                    #     self._notifier._add_timeout(self)
 
         self._write_result = buffer(data)
         self._write_task = partial_func(_sendall, self, len(data))
