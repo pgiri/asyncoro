@@ -2457,7 +2457,7 @@ class Coro(object):
         if self._scheduler == Coro._asyncoro:
             self._name = '~' + self._name
         else:
-            # assert self._location and self._scheduler == Coro._asyncoro._react_asyncoro
+            # assert self._location and self._scheduler == Coro._asyncoro._sys_asyncoro
             self._name = '!' + self._name
 
     @property
@@ -2494,9 +2494,9 @@ class Coro(object):
         if not location or location == Coro._asyncoro._location:
             rcoro = Coro._asyncoro._rcoros.get(name, None)
             if not rcoro and Coro._asyncoro._location:
-                Coro._asyncoro._react_asyncoro._lock.acquire()
-                rcoro = Coro._asyncoro._react_asyncoro._rcoros.get(name, None)
-                Coro._asyncoro._react_asyncoro._lock.release()
+                Coro._asyncoro._sys_asyncoro._lock.acquire()
+                rcoro = Coro._asyncoro._sys_asyncoro._rcoros.get(name, None)
+                Coro._asyncoro._sys_asyncoro._lock.release()
             if rcoro or location == Coro._asyncoro._location:
                 raise StopIteration(rcoro)
         req = _NetRequest('locate_coro', kwargs={'name': name}, dst=location, timeout=timeout)
@@ -2610,7 +2610,7 @@ class Coro(object):
                                                      'coro': self._id},
                                   dst=self._location, timeout=timeout)
             request.reply = -1
-            reply = yield Coro._asyncoro._react_asyncoro._sync_reply(request, alarm_value=0)
+            reply = yield Coro._asyncoro._sys_asyncoro._sync_reply(request, alarm_value=0)
             if reply is None:
                 reply = -1
             # if reply < 0:
@@ -2754,7 +2754,7 @@ class Coro(object):
             request = _NetRequest('monitor', kwargs={'monitor': self, 'name': observe._name,
                                                      'coro': observe._id},
                                   dst=observe._location, timeout=MsgTimeout)
-            reply = yield Coro._asyncoro._react_asyncoro._sync_reply(request)
+            reply = yield Coro._asyncoro._sys_asyncoro._sync_reply(request)
         raise StopIteration(reply)
 
     def notify(self, monitor):
@@ -2806,7 +2806,7 @@ class Coro(object):
                 self._scheduler = Coro._asyncoro
             elif self._location and self._name[0] == '!':
                 self._id = int(self._id)
-                self._scheduler = Coro._asyncoro._react_asyncoro
+                self._scheduler = Coro._asyncoro._sys_asyncoro
             else:
                 logger.warning('invalid scheduler: %s', self._scheduler)
                 self._scheduler = None
@@ -2860,7 +2860,7 @@ class Location(object):
         return '%s:%s' % (self.addr, self.port)
 
     def __hash__(self):
-        return hash(str(self))
+        return hash('%s:%s' % (self.addr, self.port))
 
 
 class Channel(object):
@@ -2912,7 +2912,7 @@ class Channel(object):
         if self._scheduler == Channel._asyncoro:
             self._name = '~' + self._name
         else:
-            # assert self._location and self._scheduler == Channel._asyncoro._react_asyncoro
+            # assert self._location and self._scheduler == Channel._asyncoro._sys_asyncoro
             self._name = '!' + self._name
         self._subscribers = set()
         self._subscribe_event = Event()
@@ -3035,7 +3035,7 @@ class Channel(object):
             kwargs = {'channel': self._name}
             kwargs['subscriber'] = subscriber
             request = _NetRequest('subscribe', kwargs=kwargs, dst=self._location, timeout=timeout)
-            reply = yield Channel._asyncoro._react_asyncoro._sync_reply(request)
+            reply = yield Channel._asyncoro._sys_asyncoro._sync_reply(request)
         raise StopIteration(reply)
 
     def unsubscribe(self, subscriber, timeout=None):
@@ -3077,7 +3077,7 @@ class Channel(object):
             kwargs = {'channel': self._name}
             kwargs['subscriber'] = subscriber
             request = _NetRequest('unsubscribe', kwargs=kwargs, dst=self._location, timeout=timeout)
-            reply = yield Channel._asyncoro._react_asyncoro._sync_reply(request)
+            reply = yield Channel._asyncoro._sys_asyncoro._sync_reply(request)
         raise StopIteration(reply)
 
     def send(self, message):
@@ -3206,7 +3206,7 @@ class Channel(object):
                                                      'n': n},
                                   dst=self._location, timeout=timeout)
             request.reply = -1
-            reply = yield Channel._asyncoro._react_asyncoro._sync_reply(request, alarm_value=0)
+            reply = yield Channel._asyncoro._sys_asyncoro._sync_reply(request, alarm_value=0)
             if reply is None:
                 reply = -1
             # if reply < 0:
@@ -3234,7 +3234,7 @@ class Channel(object):
             if self._name[0] == '~':
                 self._scheduler = Channel._asyncoro
             elif self._location and self._name[0] == '!':
-                self._scheduler = Channel._asyncoro._react_asyncoro
+                self._scheduler = Channel._asyncoro._sys_asyncoro
             else:
                 logger.warning('invalid scheduler: %s', self._scheduler)
                 self._scheduler = None
