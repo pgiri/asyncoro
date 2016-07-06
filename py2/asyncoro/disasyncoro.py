@@ -83,7 +83,7 @@ class _Peer(object):
     """
 
     __slots__ = ('name', 'location', 'auth', 'keyfile', 'certfile', 'stream', 'conn',
-                 'reqs', 'reqs_pending', 'req_coro')
+                 'reqs', 'waiting', 'req_coro')
 
     peers = {}
     status_coro = None
@@ -99,7 +99,7 @@ class _Peer(object):
         self.stream = False
         self.conn = None
         self.reqs = collections.deque()
-        self.reqs_pending = Event()
+        self.waiting = False
         _Peer._lock.acquire()
         _Peer.peers[(location.addr, location.port)] = self
         _Peer._lock.release()
@@ -125,12 +125,14 @@ class _Peer(object):
     def send_req(req):
         _Peer._lock.acquire()
         peer = _Peer.peers.get((req.dst.addr, req.dst.port), None)
-        _Peer._lock.release()
         if not peer:
             logger.debug('invalid peer: %s, %s', req.dst, req.name)
+            _Peer._lock.release()
             return -1
         peer.reqs.append(req)
-        peer.reqs_pending.set()
+        if peer.waiting:
+            peer.req_coro.send(len(peer.reqs))
+        _Peer._lock.release()
         return 0
 
     @staticmethod
@@ -138,17 +140,20 @@ class _Peer(object):
         if dst:
             _Peer._lock.acquire()
             peer = _Peer.peers.get((dst.addr, dst.port), None)
-            _Peer._lock.release()
             if not peer:
                 logger.debug('invalid peer to: %s, %s, %s', dst, req.name, str(req.kwargs))
+                _Peer._lock.release()
                 return -1
             peer.reqs.append(req)
-            peer.reqs_pending.set()
+            if peer.waiting:
+                peer.req_coro.send(len(peer.reqs))
+            _Peer._lock.release()
         else:
             _Peer._lock.acquire()
             for peer in _Peer.peers.itervalues():
                 peer.reqs.append(req)
-                peer.reqs_pending.set()
+                if peer.waiting:
+                    peer.req_coro.send(len(peer.reqs))
             _Peer._lock.release()
         return 0
 
@@ -171,18 +176,22 @@ class _Peer(object):
         conn_errors = 0
         req = None
         while 1:
+            _Peer._lock.acquire()
             if not self.reqs:
                 if not self.stream and self.conn:
                     self.conn.shutdown(socket.SHUT_WR)
                     self.conn.close()
                     self.conn = None
+                self.waiting = True
+                _Peer._lock.release()
                 try:
-                    yield self.reqs_pending.wait()
+                    pending = yield coro.receive()
                 except GeneratorExit:
                     break
+                _Peer._lock.acquire()
+                self.waiting = False
             req = self.reqs.popleft()
-            if not self.reqs:
-                self.reqs_pending.clear()
+            _Peer._lock.release()
             if not self.conn:
                 self.conn = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                                         keyfile=self.keyfile, certfile=self.certfile)
