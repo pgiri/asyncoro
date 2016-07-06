@@ -56,7 +56,7 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "4.1"
+__version__ = "4.1.1"
 
 __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
@@ -125,8 +125,6 @@ class Logger(object):
         now = time.time()
         if args:
             message = message % args
-        elif len(args) == 1:
-            message = message % args[0]
         if self.log_ms:
             self.stream.write('%s.%03d %s - %s\n' %
                               (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now)),
@@ -711,7 +709,7 @@ class _AsyncSocket(object):
         def _accept(self):
             conn, addr = self._rsock.accept()
             self._read_task = None
-            self._notifier.unregister(self)
+            self._notifier.clear(self, _AsyncPoller._Read)
 
             if self._certfile:
                 if not self.ssl_server_ctx and hasattr(ssl, 'create_default_context'):
@@ -741,7 +739,7 @@ class _AsyncSocket(object):
                     else:
                         conn._read_task = conn._write_task = None
                         coro, conn._read_coro = conn._read_coro, None
-                        conn._notifier.clear(conn)
+                        conn._notifier.clear(conn, _AsyncPoller._Read | _AsyncPoller._Write)
                         coro._proceed_((conn, addr))
                 conn = AsyncSocket(conn, blocking=False, keyfile=self._keyfile,
                                    certfile=self._certfile, ssl_version=self._ssl_version)
@@ -786,7 +784,7 @@ class _AsyncSocket(object):
         def _connect(self, *args):
             err = self._rsock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
             if err:
-                self._notifier.unregister(self)
+                self._notifier.clear(self, _AsyncPoller._Write)
                 self._write_task = None
                 coro, self._write_coro = self._write_coro, None
                 coro.throw(socket.error(err))
@@ -811,7 +809,7 @@ class _AsyncSocket(object):
                         self.close()
                         coro.throw(*sys.exc_info())
                     else:
-                        self._notifier.clear(self)
+                        self._notifier.clear(self, _AsyncPoller._Read | _AsyncPoller._Write)
                         self._read_task = self._write_task = None
                         coro, self._write_coro = self._write_coro, None
                         self._read_coro = None
@@ -1869,16 +1867,14 @@ if not hasattr(sys.modules[__name__], '_AsyncNotifier'):
                             if fd._read_task:
                                 fd._read_task()
                             else:
-                                logger.debug('fd %s is not registered for read; unregistering it',
-                                             fd._fileno)
-                                self.unregister(fd)
+                                logger.debug('fd %s is not registered for reading!', fd._fileno)
+                                # self.unregister(fd)
                         elif event & _AsyncPoller._Write:
                             if fd._write_task:
                                 fd._write_task()
                             else:
-                                logger.debug('fd %s is not registered for write; unregistering it',
-                                             fd._fileno)
-                                self.unregister(fd)
+                                logger.debug('fd %s is not registered for writing!', fd._fileno)
+                                # self.unregister(fd)
                         elif event & _AsyncPoller._Hangup:
                             fd._eof()
                         elif event & _AsyncPoller._Error:
@@ -2053,36 +2049,49 @@ if not hasattr(sys.modules[__name__], '_AsyncNotifier'):
         def __init__(self):
             if not hasattr(self, 'poller'):
                 self.poller = select.kqueue()
-                self.events = {}
 
         def register(self, fid, event):
-            self.events[fid] = event
-            self.update(fid, event, select.KQ_EV_ADD)
+            flags = select.KQ_EV_ADD
+            if event & _AsyncPoller._Read:
+                flags |= select.KQ_EV_ENABLE
+            else:
+                flags |= select.KQ_EV_DISABLE
+            self.poller.control([select.kevent(fid, filter=select.KQ_FILTER_READ, flags=flags)], 0)
+            flags = select.KQ_EV_ADD
+            if event & _AsyncPoller._Write:
+                flags |= select.KQ_EV_ENABLE
+            else:
+                flags |= select.KQ_EV_DISABLE
+            self.poller.control([select.kevent(fid, filter=select.KQ_FILTER_WRITE, flags=flags)], 0)
 
         def unregister(self, fid):
-            event = self.events.pop(fid, None)
-            if event:
-                self.update(fid, event, select.KQ_EV_DELETE)
+            flags = select.KQ_EV_DELETE
+            self.poller.control([select.kevent(fid, filter=select.KQ_FILTER_READ, flags=flags)], 0)
+            self.poller.control([select.kevent(fid, filter=select.KQ_FILTER_WRITE, flags=flags)], 0)
 
         def modify(self, fid, event):
-            self.unregister(fid)
-            self.register(fid, event)
-
-        def update(self, fid, event, flags):
             if event & _AsyncPoller._Read:
-                self.poller.control([select.kevent(fid, filter=select.KQ_FILTER_READ, flags=flags)], 0)
+                flags = select.KQ_EV_ENABLE
+            else:
+                flags = select.KQ_EV_DISABLE
+            self.poller.control([select.kevent(fid, filter=select.KQ_FILTER_READ, flags=flags)], 0)
             if event & _AsyncPoller._Write:
-                self.poller.control([select.kevent(fid, filter=select.KQ_FILTER_WRITE, flags=flags)], 0)
+                flags = select.KQ_EV_ENABLE
+            else:
+                flags = select.KQ_EV_DISABLE
+            self.poller.control([select.kevent(fid, filter=select.KQ_FILTER_WRITE, flags=flags)], 0)
+
 
         def poll(self, timeout):
             kevents = self.poller.control(None, 500, timeout)
             events = [(kevent.ident,
                        _AsyncPoller._Read if kevent.filter == select.KQ_FILTER_READ else
-                       _AsyncPoller._Write if kevent.filter == select.KQ_FILTER_WRITE else 0 |
+                       _AsyncPoller._Write if kevent.filter == select.KQ_FILTER_WRITE else
                        _AsyncPoller._Hangup if kevent.flags == select.KQ_EV_EOF else
                        _AsyncPoller._Error if kevent.flags == select.KQ_EV_ERROR else 0)
                       for kevent in kevents]
             return events
+
 
     class _SelectNotifier(object):
         """Internal use only.
