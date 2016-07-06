@@ -37,7 +37,7 @@ def _discoro_server_proc():
         psutil = None
 
     import asyncoro.disasyncoro as asyncoro
-    from asyncoro.disasyncoro import Coro, ReactCoro
+    from asyncoro.disasyncoro import Coro, SysCoro
     from asyncoro.discoro import MinPulseInterval, MaxPulseInterval, \
         DiscoroNodeInfo, DiscoroNodeAvailInfo
 
@@ -147,8 +147,8 @@ def _discoro_server_proc():
                 asyncoro.logger.warning('%s: invalid monitor message %s ignored',
                                         coro.location, type(msg))
 
-    _discoro_monitor_coro = ReactCoro(_discoro_monitor_proc)
-    asyncoro.AsynCoro.instance().peer_status(ReactCoro(_discoro_peer_status))
+    _discoro_monitor_coro = SysCoro(_discoro_monitor_proc)
+    asyncoro.AsynCoro.instance().peer_status(SysCoro(_discoro_peer_status))
 
     while 1:
         _discoro_msg = yield _discoro_coro.receive()
@@ -427,7 +427,7 @@ def _discoro_process(_discoro_config, _discoro_server_id, _discoro_auth,
                            'busy_time': _discoro_busy_time}
 
     _discoro_scheduler = asyncoro.AsynCoro(**_discoro_config)
-    _discoro_coro = asyncoro.ReactCoro(_discoro_server_proc)
+    _discoro_coro = asyncoro.SysCoro(_discoro_server_proc)
     # delete variables created in main
     for _discoro_var in globals().keys():
         if _discoro_var.startswith('_discoro_'):
