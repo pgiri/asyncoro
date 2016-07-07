@@ -131,7 +131,7 @@ class _Peer(object):
             return -1
         peer.reqs.append(req)
         if peer.waiting:
-            peer.req_coro.send(len(peer.reqs))
+            peer.req_coro.send(1)
         _Peer._lock.release()
         return 0
 
@@ -146,14 +146,14 @@ class _Peer(object):
                 return -1
             peer.reqs.append(req)
             if peer.waiting:
-                peer.req_coro.send(len(peer.reqs))
+                peer.req_coro.send(1)
             _Peer._lock.release()
         else:
             _Peer._lock.acquire()
             for peer in _Peer.peers.itervalues():
                 peer.reqs.append(req)
                 if peer.waiting:
-                    peer.req_coro.send(len(peer.reqs))
+                    peer.req_coro.send(1)
             _Peer._lock.release()
         return 0
 
@@ -185,13 +185,17 @@ class _Peer(object):
                 self.waiting = True
                 _Peer._lock.release()
                 try:
-                    pending = yield coro.receive()
+                    yield coro.receive()
                 except GeneratorExit:
                     break
                 _Peer._lock.acquire()
                 self.waiting = False
-            req = self.reqs.popleft()
-            _Peer._lock.release()
+            if self.reqs:
+                req = self.reqs.popleft()
+                _Peer._lock.release()
+            else:
+                _Peer._lock.release()
+                continue
             if not self.conn:
                 self.conn = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                                         keyfile=self.keyfile, certfile=self.certfile)

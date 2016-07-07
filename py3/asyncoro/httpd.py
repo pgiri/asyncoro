@@ -309,7 +309,7 @@ class HTTPServer(object):
         self._httpd_thread = threading.Thread(target=self._server.serve_forever)
         self._httpd_thread.daemon = True
         self._httpd_thread.start()
-        self.status_coro = asyncoro.ReactCoro(self.status_proc)
+        self.status_coro = asyncoro.SysCoro(self.status_proc)
         self.computation = computation
         if not computation.status_coro:
             computation.status_coro = self.status_coro
