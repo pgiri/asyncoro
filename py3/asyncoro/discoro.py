@@ -126,24 +126,36 @@ class Computation(object):
         self.timeout = timeout
         self.zombie_period = zombie_period
         depends = set()
+        cwd = os.getcwd()
         for dep in components:
             if isinstance(dep, str) or inspect.ismodule(dep):
                 if inspect.ismodule(dep):
-                    dep = dep.__file__
-                    if dep.endswith('.pyc'):
-                        dep = dep[:-1]
-                    dep = os.path.abspath(dep)
-                    if not (dep.endswith('.py') and os.path.isfile(dep)):
+                    name = dep.__file__
+                    if name.endswith('.pyc'):
+                        name = name[:-1]
+                    if not name.endswith('.py'):
                         raise Exception('Invalid module "%s" - must be python source.' % dep)
-                if dep in depends:
+                    if name.startswith(cwd):
+                        dst = os.path.dirname(name[len(cwd)+1:])
+                    elif dep.__package__:
+                        dst = dep.__package__.replace('.', os.sep)
+                    else:
+                        dst = os.path.dirname(dep.__name__.replace('.', os.sep))
+                else:
+                    name = dep
+                    if name.startswith(cwd):
+                        dst = name[len(cwd)+1:]
+                    else:
+                        dst = '.'
+                if name in depends:
                     continue
                 try:
-                    fd = open(dep, 'rb')
-                    fd.close()
+                    with open(name, 'rb') as fd:
+                        pass
                 except:
-                    raise Exception('File "%s" is not valid' % dep)
-                depends.add(dep)
-                self._xfer_files.append(dep)
+                    raise Exception('File "%s" is not valid' % name)
+                self._xfer_files.append((name, dst, os.sep))
+                depends.add(name)
             elif (inspect.isgeneratorfunction(dep) or inspect.isfunction(dep) or
                   inspect.isclass(dep) or hasattr(dep, '__class__')):
                 if inspect.isgeneratorfunction(dep) or inspect.isfunction(dep):
@@ -198,9 +210,16 @@ class Computation(object):
                 raise StopIteration(-1)
             SysCoro.scheduler().atexit(10, lambda: SysCoro(self.close).value())
             if coro.location != self.scheduler.location:
-                for xf in self._xfer_files:
+                for xf, dst, sep in self._xfer_files:
+                    drive, xf = os.path.splitdrive(xf)
+                    if xf.startswith(sep):
+                        xf = os.path.join(os.sep, *(xf.split(sep)))
+                    else:
+                        xf = os.path.join(*(xf.split(sep)))
+                    xf = drive + xf
+                    dst = os.path.join(self._auth, os.path.join(*(dst.split(sep))))
                     if (yield asyncoro.AsynCoro.instance().send_file(
-                       self.scheduler.location, xf, dir=self._auth, timeout=self.timeout)) < 0:
+                       self.scheduler.location, xf, dir=dst, timeout=self.timeout)) < 0:
                         logger.warning('Could not send file "%s" to scheduler', xf)
                         yield self.close()
                         raise StopIteration(-1)
@@ -386,6 +405,9 @@ class Computation(object):
         def _close(self, done, coro=None):
             msg = {'req': 'close_computation', 'auth': self._auth, 'client': coro}
             yield self.scheduler.deliver(msg, timeout=self.timeout)
+            msg = yield coro.receive(timeout=self.timeout)
+            if msg != 'closed':
+                logger.warning('%s: closing computation failed?', self._auth)
             self._auth = None
             if self._pulse_coro:
                 yield self._pulse_coro.send('quit')
@@ -885,10 +907,12 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                     client.send(None)
                     continue
                 if computation._pulse_coro.location.addr != self.asyncoro.location.addr:
-                    computation._xfer_files = [os.path.join(self.__dest_path, computation._auth,
-                                                            os.path.basename(xf))
-                                               for xf in computation._xfer_files]
-                for xf in computation._xfer_files:
+                    computation._xfer_files = [(os.path.join(self.__dest_path, computation._auth,
+                                                             os.path.join(*(dst.split(sep))),
+                                                             xf.split(sep)[-1]),
+                                                os.path.join(*(dst.split(sep))), os.sep)
+                                               for xf, dst, sep in computation._xfer_files]
+                for xf, dst, sep in computation._xfer_files:
                     if not os.path.isfile(xf):
                         logger.warning('File "%s" for computation %s is not valid',
                                        xf, computation._auth)
@@ -905,8 +929,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
 
             elif req == 'close_computation':
                 if self.__cur_client_auth == auth:
-                    self.__cur_client_auth = None
-                    SysCoro(self.__close_computation)
+                    SysCoro(self.__close_computation, client=client)
                 else:
                     computation = computations.pop(auth, None)
                     if computation:
@@ -915,6 +938,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                             shutil.rmtree(computation_path, ignore_errors=True)
                     else:
                         logger.warning('Ignoring invalid request to close computation')
+                    client.send('closed')
 
             elif req == 'nodes_list':
                 # TODO: allowed to query anytime, even if current
@@ -945,7 +969,8 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
         if node.status == Scheduler.NodeIgnore:
             return
         for server in node.servers.values():
-            if server.status == Scheduler.ServerDiscovered or server.status is None:
+            if (server.status == Scheduler.ServerDiscovered or
+               server.status == Scheduler.ServerClosed or server.status is None):
                 SysCoro(self.__setup_server, server)
 
     def __setup_server(self, server, coro=None):
@@ -1002,8 +1027,8 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
         if ret:
             logger.warning('setup of %s failed: %s', server.coro, ret)
             raise StopIteration(ret)
-        for xf in self._cur_computation._xfer_files:
-            reply = yield self.asyncoro.send_file(server.location, xf,
+        for xf, dst, sep in self._cur_computation._xfer_files:
+            reply = yield self.asyncoro.send_file(server.location, xf, dir=dst,
                                                   timeout=self._cur_computation.timeout)
             if reply < 0:
                 logger.debug('failed to transfer file %s: %s', xf, reply)
@@ -1023,9 +1048,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
         if not self._cur_computation:
             logger.warning('Closing node %s ignored', node.addr)
             raise StopIteration(-1)
-        close_coros = []
-        for server in node.servers.values():
-            close_coros.append(SysCoro(self.__close_server, server))
+        close_coros = [SysCoro(self.__close_server, server) for server in node.servers.values()]
         for close_coro in close_coros:
             yield close_coro.finish()
 
@@ -1071,23 +1094,23 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                 computation.status_coro.send(DiscoroStatus(node.status, node.addr))
         raise StopIteration(0)
 
-    def __close_computation(self, coro=None):
+    def __close_computation(self, client=None, coro=None):
         computation = self._cur_computation
-        close_coros = []
-        for node in self._nodes.values():
-            close_coros.append(SysCoro(self.__close_node, node))
-        for close_coro in close_coros:
-            yield close_coro.finish()
         if self.__cur_client_auth:
             computation_path = os.path.join(self.__dest_path, self.__cur_client_auth)
             if os.path.isdir(computation_path):
                 shutil.rmtree(computation_path, ignore_errors=True)
+        close_coros = [SysCoro(self.__close_node, node) for node in self._nodes.values()]
+        for close_coro in close_coros:
+            yield close_coro.finish()
         if computation and computation.status_coro:
             computation.status_coro.send(DiscoroStatus(Scheduler.ComputationClosed,
                                                        id(computation)))
             computation.status_coro = None
-        self._cur_computation = None
+        self._cur_computation = self.__cur_client_auth = None
         self.__sched_event.set()
+        if client:
+            client.send('closed')
         raise StopIteration(0)
 
 
