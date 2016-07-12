@@ -407,6 +407,7 @@ def _discoro_process(_discoro_config, _discoro_server_id, _discoro_auth,
                      _discoro_mp_queue, _discoro_ntotal_coros, _discoro_busy_time):
     import os
     import logging
+    import signal
     import asyncoro.disasyncoro as asyncoro
 
     if _discoro_config['loglevel']:
@@ -433,16 +434,22 @@ def _discoro_process(_discoro_config, _discoro_server_id, _discoro_auth,
         if _discoro_var.startswith('_discoro_'):
             globals().pop(_discoro_var)
 
-    del logging, os, _discoro_config, _discoro_var
+    def sighandler(_, __):
+        req = {'req': 'terminate', 'proc_auth': _discoro_auth}
+        _discoro_mp_queue.put(req)
 
-    req_queue, _discoro_mp_queue = _discoro_mp_queue, None
+    signal.signal(signal.SIGTERM, sighandler)
+    signal.signal(signal.SIGINT, sighandler)
+    signal.signal(signal.SIGHUP, sighandler)
+
+    del logging, os, signal, _discoro_config, _discoro_var
 
     while 1:
         try:
-            req = req_queue.get()
+            req = _discoro_mp_queue.get()
         except KeyboardInterrupt:
             req = {'req': 'terminate', 'proc_auth': _discoro_auth}
-            req_queue.put(req)
+            _discoro_mp_queue.put(req)
 
         if not isinstance(req, dict) or req.get('proc_auth') != _discoro_auth:
             asyncoro.logger.warning('Ignoring invalid request: "%s"', type(req))
@@ -479,6 +486,7 @@ if __name__ == '__main__':
     import collections
     import hashlib
     import logging
+    import signal
     try:
         import readline
     except:
@@ -718,11 +726,20 @@ if __name__ == '__main__':
     _discoro_scheduler = asyncoro.AsynCoro(**_discoro_config)
     _discoro_timer_coro = asyncoro.Coro(_discoro_timer_proc, _discoro_msg_timeout,
                                         _discoro_ntotal_coros, _discoro_busy_time)
+
+    def _discoro_sighandler(_, __):
+        for _discoro_server_info in _discoro_server_infos:
+            _discoro_server_info.Queue.put({'req': _discoro_cmd, 'proc_auth': _discoro_auth})
+
+    signal.signal(signal.SIGTERM, _discoro_sighandler)
+    signal.signal(signal.SIGINT, _discoro_sighandler)
+    signal.signal(signal.SIGHUP, _discoro_sighandler)
+
     for _discoro_server_info in _discoro_server_infos:
         _discoro_server_info.Queue.put({'req': 'start', 'proc_auth': _discoro_auth,
                                         'timer_coro': _discoro_timer_coro})
 
-    del multiprocessing, collections, _discoro_mp_queue, _discoro_tcp_ports, _discoro_config
+    del multiprocessing, collections, signal, _discoro_mp_queue, _discoro_tcp_ports, _discoro_config
 
     if not _discoro_daemon:
         def _discoro_cmd_reader(coro=None):
