@@ -131,6 +131,7 @@ class _Peer(object):
             return -1
         peer.reqs.append(req)
         if peer.waiting:
+            peer.waiting = False
             peer.req_coro.send(1)
         _Peer._lock.release()
         return 0
@@ -146,6 +147,7 @@ class _Peer(object):
                 return -1
             peer.reqs.append(req)
             if peer.waiting:
+                peer.waiting = False
                 peer.req_coro.send(1)
             _Peer._lock.release()
         else:
@@ -153,6 +155,7 @@ class _Peer(object):
             for peer in _Peer.peers.values():
                 peer.reqs.append(req)
                 if peer.waiting:
+                    peer.waiting = False
                     peer.req_coro.send(1)
             _Peer._lock.release()
         return 0
@@ -177,7 +180,9 @@ class _Peer(object):
         req = None
         while 1:
             _Peer._lock.acquire()
-            if not self.reqs:
+            if self.reqs:
+                _Peer._lock.release()
+            else:
                 if not self.stream and self.conn:
                     self.conn.shutdown(socket.SHUT_WR)
                     self.conn.close()
@@ -188,16 +193,7 @@ class _Peer(object):
                     yield coro.receive()
                 except GeneratorExit:
                     break
-                _Peer._lock.acquire()
-                self.waiting = False
-            if self.reqs:
-                req = self.reqs.popleft()
-                _Peer._lock.release()
-            else:
-                _Peer._lock.release()
-                continue
             req = self.reqs.popleft()
-            _Peer._lock.release()
             if not self.conn:
                 self.conn = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                                         keyfile=self.keyfile, certfile=self.certfile)
@@ -259,6 +255,8 @@ class _Peer(object):
                     pass
                 self.conn = None
                 req.reply = None
+                if req.event:
+                    req.event.set()
             except socket.timeout:
                 # logger.debug(traceback.format_exc())
                 try:
@@ -268,6 +266,8 @@ class _Peer(object):
                     pass
                 self.conn = None
                 req.reply = None
+                if req.event:
+                    req.event.set()
             except GeneratorExit:
                 if self.conn:
                     try:
@@ -287,6 +287,8 @@ class _Peer(object):
                         pass
                     self.conn = None
                 req.reply = None
+                if req.event:
+                    req.event.set()
 
         if req and req.name == 'peer_closed' and isinstance(req.event, Event):
             req.event.set()
@@ -679,7 +681,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
             logger.debug('%s is not a valid peer', location)
             raise StopIteration(-1)
         kwargs = {'file': os.path.basename(file), 'stat_buf': stat_buf,
-                  'overwrite': overwrite is True, 'dir': dir}
+                  'overwrite': overwrite is True, 'dir': dir, 'sep': os.sep}
         req = _NetRequest('send_file', kwargs=kwargs, dst=location, timeout=timeout)
         sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
                            keyfile=self._keyfile, certfile=self._certfile)
@@ -1403,9 +1405,10 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
             elif req.name == 'send_file':
                 # synchronous message
                 assert req.dst == self._location
-                tgt = os.path.basename(req.kwargs['file'])
-                dir = req.kwargs['dir']
-                if isinstance(dir, str):
+                sep = req.kwargs['sep']
+                tgt = req.kwargs['file'].split(sep)[-1]
+                dir = os.path.join(*(req.kwargs['dir'].split(sep)))
+                if dir:
                     tgt = os.path.join(dir, tgt)
                 tgt = os.path.abspath(os.path.join(self.__dest_path, tgt))
                 stat_buf = req.kwargs['stat_buf']
