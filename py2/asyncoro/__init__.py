@@ -2651,7 +2651,7 @@ class Coro(object):
                 args = (type(args[0]), args[0])
         return self._scheduler._throw(self, *args)
 
-    def value(self):
+    def value(self, timeout=None):
         """Get last value 'yield'ed / value of StopIteration of coro.
 
         NB: This method should _not_ be called from a coroutine! This
@@ -2661,19 +2661,23 @@ class Coro(object):
         Once coroutine stops (finishes) executing, the last value is
          returned.
         """
+        value = None
         self._scheduler._lock.acquire()
         if self._complete is None:
             self._complete = threading.Event()
             self._scheduler._lock.release()
-            self._complete.wait()
+            if self._complete.wait(timeout=timeout) == True:
+                value = self._value
         elif self._complete == 0:
             self._scheduler._lock.release()
+            value = self._value
         else:
             self._scheduler._lock.release()
-            self._complete.wait()
-        return self._value
+            if self._complete.wait(timeout=timeout) == True:
+                value = self._value
+        return value
 
-    def finish(self):
+    def finish(self, timeout=None):
         """Get last value 'yield'ed / value of StopIteration of
         coro. Must be used in a coroutine with 'yield' as
         'value = yield other_coro.finish()'
@@ -2681,17 +2685,20 @@ class Coro(object):
         Once coroutine stops (finishes) executing, the last value is
         returned.
         """
+        value = None
         if self._complete is None:
             self._complete = Event()
-            yield self._complete.wait()
+            if (yield self._complete.wait(timeout=timeout)) == True:
+                value = self._value
         elif self._complete == 0:
-            pass
+            value = self._value
         elif isinstance(self._complete, Event):
-            yield self._complete.wait()
+            if (yield self._complete.wait(timeout=timeout)) == True:
+                value = self._value
         else:
             raise RuntimeError('invalid wait on %s/%s: %s' %
                                (self._name, self._id, type(self._complete)))
-        raise StopIteration(self._value)
+        raise StopIteration(value)
 
     def terminate(self):
         """Terminate coro.
@@ -2773,6 +2780,14 @@ class Coro(object):
             return self._scheduler._monitor(monitor, self)
         else:
             return -1
+
+    def is_alive(self):
+        """Returns True if coroutine is known to scheduler; otherwise (e.g.,
+        coroutine finished) returns False.
+        """
+        if self._state is None:
+            return False
+        return True
 
     def _await_(self, timeout=None, alarm_value=None):
         """Internal use only.
@@ -3686,7 +3701,6 @@ class AsynCoro(object):
                     if coro._exceptions:
                         exc = coro._exceptions.pop(0)
                         if exc[0] == GeneratorExit:
-                            # assert str(exc[1]) == 'close'
                             coro._generator.close()
                             retval = coro._value
                         else:
