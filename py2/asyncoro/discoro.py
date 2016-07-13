@@ -136,15 +136,15 @@ class Computation(object):
                     if not name.endswith('.py'):
                         raise Exception('Invalid module "%s" - must be python source.' % dep)
                     if name.startswith(cwd):
-                        dst = os.path.dirname(name[len(cwd)+1:])
+                        dst = os.path.dirname(name[len(cwd+os.sep):])
                     elif dep.__package__:
                         dst = dep.__package__.replace('.', os.sep)
                     else:
                         dst = os.path.dirname(dep.__name__.replace('.', os.sep))
                 else:
-                    name = dep
+                    name = os.path.abspath(dep)
                     if name.startswith(cwd):
-                        dst = name[len(cwd)+1:]
+                        dst = os.path.dirname(name[len(cwd+os.sep):])
                     else:
                         dst = '.'
                 if name in depends:
