@@ -20,7 +20,6 @@ import sys
 import types
 import struct
 import re
-import logging
 import errno
 import platform
 import ssl
@@ -53,7 +52,7 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "4.1.1"
+__version__ = "4.2.0"
 
 __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
@@ -97,7 +96,14 @@ class Logger(object):
     """Simple(r) (and more efficient) version of logging mechanism with limited
     features.
     """
-    def __init__(self, name, stream=sys.stdout, level=logging.INFO):
+
+    DEBUG = 10
+    INFO = 20
+    WARN = WARNING = 30
+    ERROR = 40
+    CRITICAL = FATAL = 50
+
+    def __init__(self, name, stream=sys.stdout, level=None, log_ms=False):
         """
         'name' is appeneded to timestamp (similar to 'logging' module).
         'stream' (default is sys.stdout) is where log entry is written to.
@@ -105,8 +111,8 @@ class Logger(object):
         """
         self.name = name
         self.stream = stream
-        self.level = level
-        self.log_ms = False
+        self.level = level if level else Logger.INFO
+        self.log_ms = log_ms
 
     def setLevel(self, level):
         """Set to new log level.
@@ -132,25 +138,25 @@ class Logger(object):
                                self.name, message))
 
     def debug(self, message, *args):
-        if self.level <= logging.DEBUG:
+        if self.level <= Logger.DEBUG:
             self.log(message, *args)
 
     def info(self, message, *args):
-        if self.level <= logging.INFO:
+        if self.level <= Logger.INFO:
             self.log(message, *args)
 
     def warning(self, message, *args):
-        if self.level <= logging.WARNING:
+        if self.level <= Logger.WARNING:
             self.log(message, *args)
 
     warn = warning
 
     def error(self, message, *args):
-        if self.level <= logging.ERROR:
+        if self.level <= Logger.ERROR:
             self.log(message, *args)
 
     def fatal(self, message, *args):
-        if self.level <= logging.FATAL:
+        if self.level <= Logger.FATAL:
             self.log(message, *args)
 
     critical = fatal
@@ -2618,7 +2624,7 @@ class Coro(object):
                                                      'coro': self._id},
                                   dst=self._location, timeout=timeout)
             request.reply = -1
-            reply = yield Coro._asyncoro._sys_asyncoro._sync_reply(request, alarm_value=0)
+            reply = yield _Peer._sync_reply(request, alarm_value=0)
             if reply is None:
                 reply = -1
             # if reply < 0:
@@ -2769,7 +2775,7 @@ class Coro(object):
             request = _NetRequest('monitor', kwargs={'monitor': self, 'name': observe._name,
                                                      'coro': observe._id},
                                   dst=observe._location, timeout=MsgTimeout)
-            reply = yield Coro._asyncoro._sys_asyncoro._sync_reply(request)
+            reply = yield _Peer._sync_reply(request)
         raise StopIteration(reply)
 
     def notify(self, monitor):
@@ -2845,6 +2851,10 @@ class Coro(object):
     def __eq__(self, other):
         return (isinstance(other, Coro) and
                 self._id == other._id and self._location == other._location)
+
+    def __ne__(self, other):
+        return ((not isinstance(other, Coro)) or
+                self._id != other._id or self._location != other._location)
 
     def __hash__(self):
         if self._location:
@@ -3058,7 +3068,7 @@ class Channel(object):
             kwargs = {'channel': self._name}
             kwargs['subscriber'] = subscriber
             request = _NetRequest('subscribe', kwargs=kwargs, dst=self._location, timeout=timeout)
-            reply = yield Channel._asyncoro._sys_asyncoro._sync_reply(request)
+            reply = yield _Peer._sync_reply(request)
         raise StopIteration(reply)
 
     def unsubscribe(self, subscriber, timeout=None):
@@ -3100,7 +3110,7 @@ class Channel(object):
             kwargs = {'channel': self._name}
             kwargs['subscriber'] = subscriber
             request = _NetRequest('unsubscribe', kwargs=kwargs, dst=self._location, timeout=timeout)
-            reply = yield Channel._asyncoro._sys_asyncoro._sync_reply(request)
+            reply = yield _Peer._sync_reply(request)
         raise StopIteration(reply)
 
     def send(self, message):
@@ -3229,7 +3239,7 @@ class Channel(object):
                                                      'n': n},
                                   dst=self._location, timeout=timeout)
             request.reply = -1
-            reply = yield Channel._asyncoro._sys_asyncoro._sync_reply(request, alarm_value=0)
+            reply = yield _Peer._sync_reply(request, alarm_value=0)
             if reply is None:
                 reply = -1
             # if reply < 0:
@@ -3263,6 +3273,14 @@ class Channel(object):
                 self._scheduler = None
         else:
             self._scheduler = None
+
+    def __eq__(self, other):
+        return (isinstance(other, Channel) and
+                self._name == other._name and self._location == other._location)
+
+    def __ne__(self, other):
+        return ((not isinstance(other, Channel)) or
+                self._name != other._name or self._location != other._location)
 
     def __repr__(self):
         if self._location:
@@ -3448,7 +3466,7 @@ class AsynCoro(object):
         self._complete.clear()
         coro._state = AsynCoro._Scheduled
         self._scheduled.add(coro._id)
-        if self._polling and len(self._scheduled) == 1:
+        if self._polling:
             self._poll_event.set()
         self._lock.release()
 
@@ -3550,12 +3568,10 @@ class AsynCoro(object):
             self._suspended.discard(cid)
             self._scheduled.add(cid)
             coro._state = AsynCoro._Scheduled
-            if self._polling and len(self._scheduled) == 1:
+            if self._polling:
                 self._poll_event.set()
         elif state == AsynCoro._AwaitMsg_:
             coro._msgs.append((state, update))
-            self._lock.release()
-            return 0
         else:
             logger.warning('ignoring resume for %s: %s', coro, coro._state)
         self._lock.release()
@@ -3578,7 +3594,7 @@ class AsynCoro(object):
             self._suspended.discard(cid)
             self._scheduled.add(cid)
             coro._state = AsynCoro._Scheduled
-            if self._polling and len(self._scheduled) == 1:
+            if self._polling:
                 self._poll_event.set()
         self._lock.release()
         return 0
@@ -3602,7 +3618,7 @@ class AsynCoro(object):
             coro._state = AsynCoro._Scheduled
             coro._timeout = None
             coro._callers = []
-            if self._polling and len(self._scheduled) == 1:
+            if self._polling:
                 self._poll_event.set()
         coro._exceptions.append((GeneratorExit, GeneratorExit('close')))
         self._lock.release()
@@ -3645,7 +3661,7 @@ class AsynCoro(object):
                     self._scheduled.add(cid)
                     coro._state = AsynCoro._Scheduled
             coro._swap_generator = None
-            if self._polling and len(self._scheduled) == 1:
+            if self._polling:
                 self._poll_event.set()
         self._lock.release()
         return 0

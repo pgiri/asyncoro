@@ -126,7 +126,7 @@ class _Peer(object):
         _Peer._lock.acquire()
         peer = _Peer.peers.get((req.dst.addr, req.dst.port), None)
         if not peer:
-            logger.debug('invalid peer: %s, %s', req.dst, req.name)
+            logger.debug('invalid peer: %s, %s / %s', req.dst, req.name, str(req.kwargs))
             _Peer._lock.release()
             return -1
         peer.reqs.append(req)
@@ -1451,7 +1451,8 @@ class _SysAsynCoro_(asyncoro.AsynCoro):
                             recvd += len(data)
                     except:
                         logger.warning('copying file "%s" failed', tgt)
-                    fd.close()
+                    finally:
+                        fd.close()
                     if recvd == stat_buf.st_size:
                         os.utime(tgt, (stat_buf.st_atime, stat_buf.st_mtime))
                         os.chmod(tgt, stat.S_IMODE(stat_buf.st_mode))

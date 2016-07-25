@@ -22,6 +22,8 @@ import time
 import socket
 import shutil
 import operator
+import functools
+import re
 
 import asyncoro.disasyncoro as asyncoro
 from asyncoro import Coro, SysCoro, logger
@@ -125,6 +127,7 @@ class Computation(object):
         self._ping_interval = ping_interval
         self.timeout = timeout
         self.zombie_period = zombie_period
+        self._location = None
         depends = set()
         cwd = os.getcwd()
         for dep in components:
@@ -201,6 +204,7 @@ class Computation(object):
 
         def _schedule(self, coro=None):
             self._pulse_coro = SysCoro(self._pulse_proc)
+            self._location = self._pulse_coro.location
             msg = {'req': 'schedule', 'computation': asyncoro.serialize(self), 'client': coro}
             self.scheduler.send(msg)
             self._auth = yield coro.receive(timeout=self.timeout)
@@ -479,6 +483,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
             self.ncoros = 0
             self.load = 0.0
             self.status = None
+            self.coro = None
 
         def run(self, func, computation, client):
             where = None
@@ -541,21 +546,20 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
         self.__ping_interval = None
         self.__sched_event = asyncoro.Event()
         self.__terminate = False
+        self._shared = False
 
         kwargs['name'] = 'discoro_scheduler'
         clean = kwargs.pop('clean', False)
         self.__zombie_period = kwargs.pop('zombie_period', None)
         nodes = kwargs.pop('nodes', [])
         self.asyncoro = asyncoro.AsynCoro.instance(**kwargs)
-        if self.asyncoro.name == 'discoro_scheduler':
-            self.__dest_path = os.path.join(self.asyncoro.dest_path, 'discoro', 'scheduler')
-            if clean:
-                shutil.rmtree(self.__dest_path, ignore_errors=True)
-            if not os.path.isdir(self.__dest_path):
-                os.makedirs(self.__dest_path)
-            self.asyncoro.dest_path = self.__dest_path
-        else:
-            self.__dest_path = self.asyncoro.dest_path
+        self.__dest_path = os.path.join(self.asyncoro.dest_path, 'discoro', 'scheduler')
+        if clean:
+            shutil.rmtree(self.__dest_path, ignore_errors=True)
+        if not os.path.isdir(self.__dest_path):
+            os.makedirs(self.__dest_path)
+        self.asyncoro.dest_path = self.__dest_path
+
         self.__scheduler_coro = SysCoro(self.__scheduler_proc, nodes)
         self.__client_coro = SysCoro(self.__client_proc)
         self.__timer_coro = SysCoro(self.__timer_proc)
@@ -563,10 +567,11 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
         self.__client_coro.register('discoro_scheduler')
 
     def status(self):
-        pending = sum(node.ncoros for node in self._nodes.itervalues())
-        servers = reduce(operator.add, [node.servers.keys() for node in self._nodes.itervalues()], [])
+        pending = sum(node.ncoros for node in self._nodes.values())
+        servers = functools.reduce(operator.add, [list(node.servers.keys())
+                                                  for node in self._nodes.values()], [])
         return {'Client': self._cur_computation._pulse_coro.location if self._cur_computation else '',
-                'Pending': pending, 'Nodes': self._nodes.keys(), 'Servers': servers
+                'Pending': pending, 'Nodes': list(self._nodes.keys()), 'Servers': servers
                 }
 
     def print_status(self):
@@ -579,6 +584,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
 
     def __status_proc(self, coro=None):
         coro.set_daemon()
+        coro.register('discoro_status')
         self.asyncoro.peer_status(coro)
         while 1:
             msg = yield coro.receive()
@@ -612,52 +618,31 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                 node.load = float(node.ncoros) / len(node.servers)
 
             elif isinstance(msg, asyncoro.PeerStatus):
-                computation = self._cur_computation
                 if msg.status == asyncoro.PeerStatus.Online:
-                    server = Scheduler._Server(msg.name, msg.location)
-                    node = self._nodes.get(msg.location.addr, None)
-                    if not node:
-                        node = Scheduler._Node(msg.name, msg.location.addr)
-                        self._nodes[msg.location.addr] = node
-                    node.servers[msg.location] = server
-                    if node.status != Scheduler.NodeIgnore:
-                        SysCoro(self.__setup_server, server)
+                    SysCoro(self.__discover_peer, msg)
                 else:
                     # msg.status == asyncoro.PeerStatus.Offline
                     node = self._nodes.get(msg.location.addr, None)
                     if node:
                         server = node.servers.pop(msg.location, None)
                         if server:
-                            SysCoro(self.__close_server, server)
-                    elif computation and msg.location == computation._pulse_coro.location:
-                        logger.warning('client %s terminated; closing computation %s',
+                            SysCoro(self.__close_server, server, self._cur_computation)
+                        # if not node.servers:
+                        #     self._nodes.pop(msg.location.addr)
+                    elif (self._cur_computation and
+                          self._cur_computation._pulse_coro.location == msg.location):
+                        logger.warning('Client %s terminated; closing computation %s',
                                        msg.location, self.__cur_client_auth)
                         SysCoro(self.__close_computation)
 
-            else:
-                logger.warning('invalid status message ignored')
-
-    def __timer_proc(self, coro=None):
-        coro.set_daemon()
-        server_check = client_pulse = last_ping = time.time()
-        async_scheduler = coro.scheduler()
-        while 1:
-            try:
-                msg = yield coro.receive(timeout=self.__pulse_interval)
-            except GeneratorExit:
-                break
-            now = time.time()
-            if isinstance(msg, dict):  # message from a node's server
+            elif isinstance(msg, dict):  # message from a node's server
+                now = time.time()
                 loc = msg.get('location', None)
                 if isinstance(loc, asyncoro.Location):
                     node = self._nodes.get(loc.addr, None)
                     if node:
                         for server in node.servers.values():
                             server.last_pulse = now
-                        if msg.get('ncoros', 0) != node.ncoros:
-                            asyncoro.logger.warning('Mismatch of remote coroutines running at '
-                                                    '%s: %s != %s', loc.addr,
-                                                    msg.get('ncoros', 0), node.ncoros)
                         node_status = msg.get('node_status', None)
                         if (node_status and self._cur_computation and
                            self._cur_computation.status_coro):
@@ -678,7 +663,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                     else:
                         server = None
                     if server:
-                        yield self.__close_server(server, coro=coro)
+                        yield self.__close_server(server, self._cur_computation, coro=coro)
                         if all(p.status != Scheduler.ServerInitialized
                                for p in node.servers.values()):
                             node.status = Scheduler.NodeClosed
@@ -694,7 +679,112 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                                         DiscoroStatus(Scheduler.ComputationClosed,
                                                       coro.location))
                                 SysCoro(self.__close_computation)
+            else:
+                logger.warning('invalid status message ignored')
 
+    def __reserve_node(self, node, coro=None):
+        # if node.avail_info:
+        #     raise StopIteration
+        if not node.coro:
+            asyncoro.logger.warning('Node %s is not valid: %s', node.addr, type(node.coro))
+            raise StopIteration
+        node.coro.send({'req': 'reserve', 'client': coro, 'status_coro': self.__status_coro})
+        node_info = yield coro.receive(timeout=MsgTimeout)
+        if not node_info:
+            raise StopIteration
+
+        def discover_server(peer, node, coro=None):
+            coro.set_daemon()
+            server = node.servers.get(peer, None)
+            if not server:
+                yield asyncoro.AsynCoro.instance().peer(peer)
+                raise StopIteration
+            # if server.coro:
+            #     raise StopIteration
+            for _ in range(5):
+                rcoro = yield Coro.locate('discoro_server', location=peer, timeout=MsgTimeout)
+                if isinstance(rcoro, Coro):
+                    server.coro = rcoro
+                    raise StopIteration
+                yield coro.sleep(0.2)
+
+        for server in node_info['servers']:
+            SysCoro(discover_server, server, node)
+        node_info = node_info['info']
+        node.avail_info = node_info.avail_info
+        node.name = node_info.name
+        node.status = Scheduler.NodeDiscovered
+        if self._cur_computation and self._cur_computation.status_coro:
+            status_msg = DiscoroStatus(
+                node.status, DiscoroNodeInfo(node.name, node.addr, node.avail_info)
+                )
+            self._cur_computation.status_coro.send(status_msg)
+
+    def __discover_peer(self, msg, coro=None):
+        m = re.match(r'.+-(\d+)$', msg.name)
+        if not m or int(m.group(1)) < 0:
+            raise StopIteration
+
+        if int(m.group(1)) == 0:  # node
+            for _ in range(5):
+                rcoro = yield Coro.locate('discoro_node', location=msg.location,
+                                          timeout=MsgTimeout)
+                if not isinstance(rcoro, Coro):
+                    yield coro.sleep(0.2)
+                    continue
+                node = self._nodes.get(msg.location.addr, None)
+                if node and node.coro == rcoro:
+                    raise StopIteration
+
+                if not node:
+                    node = Scheduler._Node(msg.name, msg.location.addr)
+                    self._nodes[msg.location.addr] = node
+                node.coro = rcoro
+                SysCoro(self.__reserve_node, node)
+                raise StopIteration
+
+        else:  # server
+            node = self._nodes.get(msg.location.addr, None)
+
+            for _ in range(5):
+                rcoro = yield Coro.locate('discoro_server', location=msg.location,
+                                          timeout=MsgTimeout)
+                if not isinstance(rcoro, Coro):
+                    yield coro.sleep(0.2)
+                    continue
+                node = self._nodes.get(rcoro.location.addr, None)
+                if not node:
+                    node = Scheduler._Node(msg.name, rcoro.location.addr)
+                    self._nodes[rcoro.location.addr] = node
+                else:
+                    server = node.servers.get(rcoro.location, None)
+                    if server:
+                        if server.coro == rcoro:
+                            raise StopIteration
+                        # TODO: close current rcoros on this server?
+                        node.servers.pop(rcoro.location)
+                server = Scheduler._Server(msg.name, rcoro.location)
+                server.coro = rcoro
+                node.servers[rcoro.location] = server
+                if self._cur_computation:
+                    status_msg = DiscoroStatus(Scheduler.ServerDiscovered,
+                                               DiscoroServerInfo(server.name, server.location))
+                    self._cur_computation.status_coro.send(status_msg)
+
+                    if node.status != Scheduler.NodeIgnore:
+                        SysCoro(self.__setup_server, server)
+                raise StopIteration
+
+    def __timer_proc(self, coro=None):
+        coro.set_daemon()
+        server_check = client_pulse = last_ping = time.time()
+        async_scheduler = coro.scheduler()
+        while 1:
+            try:
+                msg = yield coro.receive(timeout=self.__pulse_interval)
+            except GeneratorExit:
+                break
+            now = time.time()
             if (now - client_pulse) > self.__pulse_interval and self.__cur_client_auth:
                 if self._cur_computation._pulse_coro.send('pulse') == 0:
                     client_pulse = now
@@ -713,8 +803,8 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                         if server.status != Scheduler.ServerInitialized:
                             continue
                         if (now - server.last_pulse) > self._cur_computation.zombie_period:
-                            logger.warning('Server %s is zombie!', server.location)
-                            SysCoro(self.__close_server, server)
+                            logger.warning('discoro server %s is zombie!', server.location)
+                            SysCoro(self.__close_server, server, self._cur_computation)
 
             if self.__ping_interval and ((now - last_ping) > self.__ping_interval):
                 last_ping = now
@@ -789,8 +879,10 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
             self.__timer_coro.send(None)
             for node in self._nodes.values():
                 # TODO: check if node is allowed
+                SysCoro(self.__reserve_node, node)
                 if self._cur_computation:
                     self.__setup_node(node)
+        self.__scheduler_coro = None
 
     def __client_proc(self, coro=None):
         coro.set_daemon()
@@ -974,87 +1066,61 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                 SysCoro(self.__setup_server, server)
 
     def __setup_server(self, server, coro=None):
+        if not self._cur_computation:
+            raise StopIteration(0)
         if server.status in (Scheduler.ServerInitialized, Scheduler.ServerIgnore):
             raise StopIteration(0)
         server.status = Scheduler.ServerIgnore
         node = self._nodes.get(server.location.addr, None)
         if not node:
             raise StopIteration(0)
-        if not server.coro:
-            if self._cur_computation:
-                timeout = self._cur_computation.timeout
-            else:
-                timeout = MsgTimeout
-            for _ in range(3):
-                server.coro = yield Coro.locate('discoro_server', server.location, timeout=timeout)
-                if isinstance(server.coro, Coro):
-                    break
-                yield coro.sleep(0.2)
-            else:
-                # logger.debug('server at %s is not valid', server.location)
-                # TODO: asuume temporary issue instead of removing it?
-                node.servers.pop(server.location, None)
-                raise StopIteration(-1)
-            if not node.avail_info:
-                server.coro.send({'req': 'node_info', 'client': coro})
-                node_info = yield coro.receive(timeout=MsgTimeout)
-                if node_info and not node.avail_info:
-                    node.avail_info = node_info.avail_info
-                    node.name = node_info.name
-                    node.status = Scheduler.NodeDiscovered
-                    if self._cur_computation and self._cur_computation.status_coro:
-                        status_msg = DiscoroStatus(
-                            node.status, DiscoroNodeInfo(node.name, node.addr, node.avail_info)
-                            )
-                        self._cur_computation.status_coro.send(status_msg)
-                        status_msg = DiscoroStatus(
-                            Scheduler.ServerDiscovered,
-                            DiscoroServerInfo(server.name, server.location))
-                        self._cur_computation.status_coro.send(status_msg)
-            if not self._cur_computation:
-                server.status = Scheduler.ServerDiscovered
-                raise StopIteration(0)
-            if self._cur_computation.status_coro:
-                status_msg = DiscoroStatus(Scheduler.ServerDiscovered,
-                                           DiscoroServerInfo(server.name, server.location))
-                self._cur_computation.status_coro.send(status_msg)
-
         if not self._cur_computation:
             raise StopIteration(0)
         server.coro.send({'req': 'setup', 'client': coro, 'computation': self._cur_computation,
-                          'status': self.__timer_coro, 'notify': self.__status_coro})
+                          'status_coro': self.__status_coro, 'notify': self.__status_coro})
         ret = yield coro.receive(timeout=self._cur_computation.timeout, alarm_value=-1)
         if ret:
             logger.warning('setup of %s failed: %s', server.coro, ret)
             raise StopIteration(ret)
-        for xf, dst, sep in self._cur_computation._xfer_files:
+        if not self._cur_computation:
+            raise StopIteration(-1)
+        xfer_files = self._cur_computation._xfer_files
+        for xf, dst, sep in xfer_files:
             reply = yield self.asyncoro.send_file(server.location, xf, dir=dst,
                                                   timeout=self._cur_computation.timeout)
             if reply < 0:
                 logger.debug('failed to transfer file %s: %s', xf, reply)
-                SysCoro(self.__close_server, server)
+                SysCoro(self.__close_server, server, self._cur_computation)
                 raise StopIteration(-1)
         server.status = Scheduler.ServerInitialized
         server.last_pulse = time.time()
-        if node.status != Scheduler.NodeInitialized:
-            node.status = Scheduler.NodeInitialized
+        if self._cur_computation:
+            if node.status != Scheduler.NodeInitialized:
+                node.status = Scheduler.NodeInitialized
+                if self._cur_computation.status_coro:
+                    self._cur_computation.status_coro.send(DiscoroStatus(node.status, node.addr))
             if self._cur_computation.status_coro:
-                self._cur_computation.status_coro.send(DiscoroStatus(node.status, node.addr))
-        if self._cur_computation.status_coro:
-            self._cur_computation.status_coro.send(DiscoroStatus(server.status, server.location))
+                self._cur_computation.status_coro.send(DiscoroStatus(server.status, server.location))
+        else:
+            raise StopIteration(-1)
         raise StopIteration(0)
 
-    def __close_node(self, node, coro=None):
-        if not self._cur_computation:
+    def __close_node(self, node, computation, coro=None):
+        if not computation:
             logger.warning('Closing node %s ignored', node.addr)
             raise StopIteration(-1)
-        close_coros = [SysCoro(self.__close_server, server) for server in node.servers.values()]
+        if node.coro:
+            def _close(coro=None):
+                node.coro.send({'req': 'release', 'auth': computation._auth, 'client': coro})
+                reply = yield coro.recv(timeout=2)
+            yield asyncoro.SysCoro(_close).finish()
+        close_coros = [SysCoro(self.__close_server, server, computation)
+                       for server in node.servers.values()]
         for close_coro in close_coros:
             yield close_coro.finish()
 
-    def __close_server(self, server, coro=None):
-        computation = self._cur_computation
-        if not computation or server.status != Scheduler.ServerInitialized:
+    def __close_server(self, server, computation, coro=None):
+        if server.status != Scheduler.ServerInitialized or not computation:
             logger.debug('Closing server %s ignored', server.location)
             raise StopIteration(-1)
         node = self._nodes.get(server.location.addr, None)
@@ -1067,7 +1133,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                                                            server.location))
         else:
             server.coro.send({'req': 'close', 'auth': computation._auth, 'client': coro})
-            yield coro.receive(timeout=computation.timeout)
+            yield coro.receive(timeout=computation.timeout if computation else MsgTimeout)
         if server.rcoros:  # wait a bit for server to terminate coros
             for _ in range(5):
                 yield coro.sleep(0.1)
@@ -1084,6 +1150,9 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
         server.xfer_files = []
         server.rcoros.clear()
         server.askew_results.clear()
+        node.servers.pop(server.location, None)
+        server.coro = None
+
         if computation and computation.status_coro:
             computation.status_coro.send(DiscoroStatus(server.status, server.location))
         if disconnected and not node.servers:
@@ -1095,19 +1164,20 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
         raise StopIteration(0)
 
     def __close_computation(self, client=None, coro=None):
-        computation = self._cur_computation
+        computation, self._cur_computation = self._cur_computation, None
         if self.__cur_client_auth:
             computation_path = os.path.join(self.__dest_path, self.__cur_client_auth)
             if os.path.isdir(computation_path):
                 shutil.rmtree(computation_path, ignore_errors=True)
-        close_coros = [SysCoro(self.__close_node, node) for node in self._nodes.values()]
+        close_coros = [SysCoro(self.__close_node, node, computation)
+                       for node in self._nodes.values()]
         for close_coro in close_coros:
             yield close_coro.finish()
         if computation and computation.status_coro:
             computation.status_coro.send(DiscoroStatus(Scheduler.ComputationClosed,
                                                        id(computation)))
             computation.status_coro = None
-        self._cur_computation = self.__cur_client_auth = None
+        self.__cur_client_auth = None
         self.__sched_event.set()
         if client:
             client.send('closed')
@@ -1175,6 +1245,7 @@ if __name__ == '__main__':
 
     daemon = config.pop('daemon', False)
     scheduler = Scheduler(**config)
+    scheduler._shared = True
 
     if not daemon:
         try:
