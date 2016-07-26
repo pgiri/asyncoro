@@ -110,7 +110,7 @@ class _Peer(object):
     @staticmethod
     def get_peers():
         _Peer._lock.acquire()
-        peers = [Location(addr, port) for (addr, port) in _Peer.peers.iterkeys()]
+        peers = [copy.copy(peer.location) for peer in _Peer.peers.itervalues()]
         _Peer._lock.release()
         return peers
 
@@ -126,7 +126,7 @@ class _Peer(object):
         _Peer._lock.acquire()
         peer = _Peer.peers.get((req.dst.addr, req.dst.port), None)
         if not peer:
-            logger.debug('invalid peer: %s, %s / %s', req.dst, req.name, str(req.kwargs))
+            logger.debug('invalid peer: %s, %s', req.dst, req.name)
             _Peer._lock.release()
             return -1
         peer.reqs.append(req)
@@ -142,7 +142,7 @@ class _Peer(object):
             _Peer._lock.acquire()
             peer = _Peer.peers.get((dst.addr, dst.port), None)
             if not peer:
-                logger.debug('invalid peer to: %s, %s, %s', dst, req.name, str(req.kwargs))
+                logger.debug('invalid peer to: %s, %s', dst, req.name)
                 _Peer._lock.release()
                 return -1
             peer.reqs.append(req)
@@ -161,10 +161,23 @@ class _Peer(object):
         return 0
 
     @staticmethod
+    def _sync_reply(req, alarm_value=None):
+        req.event = Event()
+        if _Peer.send_req(req) != 0:
+            raise StopIteration(-1)
+        if (yield req.event.wait(req.timeout)) is False:
+            raise StopIteration(alarm_value)
+        raise StopIteration(req.reply)
+
+    @staticmethod
     def close_peer(peer, timeout, coro=None):
         req = _NetRequest('peer_closed', kwargs={'location': _Peer._asyncoro._location},
                           dst=peer.location, timeout=timeout)
-        yield _Peer._asyncoro._sync_reply(req)
+        yield _Peer._sync_reply(req)
+        if peer and peer.req_coro:
+            yield peer.req_coro.terminate()
+            while peer.req_coro:
+                yield coro.sleep(0.1)
         _Peer.remove(peer.location)
 
     @staticmethod
@@ -183,12 +196,12 @@ class _Peer(object):
             if self.reqs:
                 _Peer._lock.release()
             else:
+                self.waiting = True
+                _Peer._lock.release()
                 if not self.stream and self.conn:
                     self.conn.shutdown(socket.SHUT_WR)
                     self.conn.close()
                     self.conn = None
-                self.waiting = True
-                _Peer._lock.release()
                 try:
                     yield coro.receive()
                 except GeneratorExit:
@@ -234,7 +247,7 @@ class _Peer(object):
             try:
                 yield self.conn.send_msg(serialize(req))
                 reply = yield self.conn.recv_msg()
-                reply = unserialize(reply)
+                reply = deserialize(reply)
                 if req.event:
                     if reply is not None or req.dst == self.location:
                         req.reply = reply
@@ -300,6 +313,10 @@ class _Peer(object):
 
         self.reqs.clear()
         self.req_coro = None
+        if self.conn:
+            # self.conn.shutdown(socket.SHUT_WR)
+            self.conn.close()
+            self.conn = None
         _Peer.remove(self.location)
         raise StopIteration(None)
 
@@ -312,7 +329,6 @@ class _Peer(object):
             peer.stream = False
             if peer.req_coro:
                 peer.req_coro.terminate()
-                peer.req_coro = None
             if _Peer.status_coro:
                 _Peer.status_coro.send(PeerStatus(peer.location, peer.name, PeerStatus.Offline))
 
@@ -441,7 +457,7 @@ class RCI(object):
         """
         req = _NetRequest('run_rci', kwargs={'name': self._name, 'args': args, 'kwargs': kwargs},
                           dst=self._location, timeout=MsgTimeout)
-        reply = yield RCI._asyncoro._sys_asyncoro._sync_reply(req)
+        reply = yield _Peer._sync_reply(req)
         if isinstance(reply, Coro):
             raise StopIteration(reply)
         elif reply is None:
@@ -456,6 +472,14 @@ class RCI(object):
     def __setstate__(self, state):
         self._name = state['_name']
         self._location = state['_location']
+
+    def __eq__(self, other):
+        return (isinstance(other, RCI) and
+                self._name == other._name and self._location == other._location)
+
+    def __ne__(self, other):
+        return ((not isinstance(other, RCI)) or
+                self._name != other._name or self._location != other._location)
 
     def __repr__(self):
         s = '%s' % (self._name)
@@ -631,15 +655,29 @@ class AsynCoro(asyncoro.AsynCoro):
         return _Peer.get_peers()
 
     def close_peer(self, location, timeout=MsgTimeout):
-        """Close peer at 'location'.
+        """Must be used with 'yield', as
+        'yield scheduler.close_peer("loc")'.
+
+        Close peer at 'location'.
         """
-        if not isinstance(location, Location):
-            return
-        _Peer._lock.acquire()
-        peer = _Peer.peers.pop((location.addr, location.port), None)
-        _Peer._lock.release()
-        if peer:
-            SysCoro(_Peer.close_peer, peer, timeout)
+        if isinstance(location, Location):
+            _Peer._lock.acquire()
+            peer = _Peer.peers.get((location.addr, location.port), None)
+            _Peer._lock.release()
+            if peer:
+                event = Event()
+                def sys_proc(peer, timeout, done, coro=None):
+                    yield _Peer.close_peer(peer, timeout=timeout, coro=coro)
+                    done.set()
+                SysCoro(sys_proc, peer, timeout, event)
+                yield event.wait()
+
+    def ignore_peers(self, ignore):
+        """Don't respond to 'ping' from peers if 'ignore=True'. This can be used
+        during shutdown, or to limit peers to communicate.
+        """
+        if self._sys_asyncoro:
+            self._sys_asyncoro.ignore_peers(ignore)
 
     def discover_peers(self, port=None):
         """This method can be invoked (periodically?) to broadcast message to
@@ -695,7 +733,7 @@ class AsynCoro(asyncoro.AsynCoro):
             req.auth = peer.auth
             yield sock.send_msg(serialize(req))
             recvd = yield sock.recv_msg()
-            recvd = unserialize(recvd)
+            recvd = deserialize(recvd)
             sent = 0
             while sent == recvd:
                 data = fd.read(1024000)
@@ -704,7 +742,7 @@ class AsynCoro(asyncoro.AsynCoro):
                 yield sock.sendall(data)
                 sent += len(data)
                 recvd = yield sock.recv_msg()
-                recvd = unserialize(recvd)
+                recvd = deserialize(recvd)
             if recvd == stat_buf.st_size:
                 reply = 0
             else:
@@ -737,7 +775,7 @@ class AsynCoro(asyncoro.AsynCoro):
                 raise StopIteration(-1)
         kwargs = {'file': os.path.basename(file), 'dir': dir}
         req = _NetRequest('del_file', kwargs=kwargs, dst=location, timeout=timeout)
-        reply = yield self._sys_asyncoro._sync_reply(req)
+        reply = yield _Peer._sync_reply(req)
         if reply is None:
             reply = -1
         raise StopIteration(reply)
@@ -867,6 +905,7 @@ class _SysAsynCoro_(asyncoro.AsynCoro):
                 else:
                     continue
                 break
+        self._ignore_peers = False
         self._tcp_coro = SysCoro(self._tcp_proc)
         self._udp_coro = SysCoro(self._udp_proc, discover_peers)
 
@@ -884,10 +923,12 @@ class _SysAsynCoro_(asyncoro.AsynCoro):
 
     def finish(self):
         super(self.__class__, self).finish()
-        if self._tcp_sock:
-            self._tcp_sock.close()
         if self._udp_sock:
             self._udp_sock.close()
+            self._udp_sock = None
+        if self._tcp_sock:
+            self._tcp_sock.close()
+            self._tcp_sock = None
 
     def peer(self, client, loc, udp_port=0, stream_send=False, broadcast=False, coro=None):
         """
@@ -976,6 +1017,12 @@ class _SysAsynCoro_(asyncoro.AsynCoro):
             pass
         ping_sock.close()
 
+    def ignore_peers(self, ignore):
+        if ignore:
+            self._ignore_peers = True
+        else:
+            self._ignore_peers = False
+
     def _udp_proc(self, discover_peers, coro=None):
         def send_ping_req(peer, auth, coro=None):
             req = _NetRequest('ping',
@@ -1003,7 +1050,7 @@ class _SysAsynCoro_(asyncoro.AsynCoro):
                 logger.warning('ignoring UDP message from %s:%s', addr[0], addr[1])
                 continue
             try:
-                ping_info = unserialize(msg[len('ping:'):])
+                ping_info = deserialize(msg[len('ping:'):])
             except:
                 continue
             req_peer = ping_info['location']
@@ -1012,6 +1059,8 @@ class _SysAsynCoro_(asyncoro.AsynCoro):
             if ping_info['version'] != __version__:
                 logger.warning('Peer %s version %s is not %s',
                                req_peer, ping_info['version'], __version__)
+                continue
+            if self._ignore_peers:
                 continue
             if self._secret is None:
                 auth_code = None
@@ -1063,7 +1112,7 @@ class _SysAsynCoro_(asyncoro.AsynCoro):
             if not msg:
                 break
             try:
-                req = unserialize(msg)
+                req = deserialize(msg)
             except:
                 logger.debug('%s ignoring invalid message', self._location)
                 break
@@ -1248,6 +1297,8 @@ class _SysAsynCoro_(asyncoro.AsynCoro):
                     # logger.debug(traceback.format_exc())
                     break
                 if peer_loc == self._location:
+                    break
+                if self._ignore_peers:
                     break
                 _Peer._lock.acquire()
                 peer = _Peer.peers.get((peer_loc.addr, peer_loc.port), None)
@@ -1497,14 +1548,6 @@ class _SysAsynCoro_(asyncoro.AsynCoro):
                 logger.warning('invalid request "%s" ignored', req.name)
 
         conn.close()
-
-    def _sync_reply(self, req, alarm_value=None):
-        req.event = Event()
-        if _Peer.send_req(req) != 0:
-            raise StopIteration(-1)
-        if (yield req.event.wait(req.timeout)) is False:
-            raise StopIteration(alarm_value)
-        raise StopIteration(req.reply)
 
     def _swing_call_(self, swing, method, *args, **kwargs):
         swing['result'] = yield method(*args, **kwargs)

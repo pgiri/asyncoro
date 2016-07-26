@@ -247,7 +247,7 @@ class _Peer(object):
             try:
                 yield self.conn.send_msg(serialize(req))
                 reply = yield self.conn.recv_msg()
-                reply = unserialize(reply)
+                reply = deserialize(reply)
                 if req.event:
                     if reply is not None or req.dst == self.location:
                         req.reply = reply
@@ -671,6 +671,9 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
                 yield event.wait()
 
     def ignore_peers(self, ignore):
+        """Don't respond to 'ping' from peers if 'ignore=True'. This can be used
+        during shutdown, or to limit peers to communicate.
+        """
         if self._sys_asyncoro:
             self._sys_asyncoro.ignore_peers(ignore)
 
@@ -728,7 +731,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
             req.auth = peer.auth
             yield sock.send_msg(serialize(req))
             recvd = yield sock.recv_msg()
-            recvd = unserialize(recvd)
+            recvd = deserialize(recvd)
             sent = 0
             while sent == recvd:
                 data = fd.read(1024000)
@@ -737,7 +740,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
                 yield sock.sendall(data)
                 sent += len(data)
                 recvd = yield sock.recv_msg()
-                recvd = unserialize(recvd)
+                recvd = deserialize(recvd)
             if recvd == stat_buf.st_size:
                 reply = 0
             else:
@@ -919,8 +922,8 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
             self._udp_sock.close()
             self._udp_sock = None
         if self._tcp_sock:
-            self._tcp_sock.shutdown(socket.SHUT_WR)
             self._tcp_sock.close()
+            self._tcp_sock = None
 
     def peer(self, client, loc, udp_port=0, stream_send=False, broadcast=False, coro=None):
         """
@@ -1042,7 +1045,7 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
                 logger.warning('ignoring UDP message from %s:%s', addr[0], addr[1])
                 continue
             try:
-                ping_info = unserialize(msg[len(b'ping:'):])
+                ping_info = deserialize(msg[len(b'ping:'):])
             except:
                 continue
             req_peer = ping_info['location']
@@ -1104,7 +1107,7 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
             if not msg:
                 break
             try:
-                req = unserialize(msg)
+                req = deserialize(msg)
             except:
                 logger.debug('%s ignoring invalid message', self._location)
                 break
