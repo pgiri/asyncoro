@@ -58,7 +58,7 @@ __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
            'HotSwapException', 'MonitorException', 'Location', 'Channel',
            'CategorizeMessages', 'AsyncThreadPool', 'AsyncDBCursor',
-           'Singleton', 'logger', 'serialize', 'unserialize', 'Logger']
+           'Singleton', 'logger', 'serialize', 'deserialize', 'unserialize', 'Logger']
 
 # timeout in seconds used when sending messages
 MsgTimeout = 10
@@ -68,8 +68,9 @@ def serialize(obj):
     return pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
 
 
-def unserialize(pkl):
+def deserialize(pkl):
     return pickle.loads(pkl)
+unserialize = deserialize
 
 
 # MetaSingelton is not used in asyncoro anymore, but dispy uses it, so keeping
@@ -2065,7 +2066,6 @@ if not hasattr(sys.modules[__name__], '_AsyncNotifier'):
                 flags = select.KQ_EV_DISABLE
             self.poller.control([select.kevent(fid, filter=select.KQ_FILTER_WRITE, flags=flags)], 0)
 
-
         def poll(self, timeout):
             kevents = self.poller.control(None, 500, timeout)
             events = [(kevent.ident,
@@ -2427,6 +2427,7 @@ class _Peer(object):
     """Internal use only.
     """
     pass
+
 
 class _NetRequest(object):
     """Internal use only.
