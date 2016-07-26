@@ -956,7 +956,7 @@ class Scheduler(object):
 
             elif req == 'schedule':
                 try:
-                    computation = asyncoro.unserialize(msg['computation'])
+                    computation = asyncoro.deserialize(msg['computation'])
                     assert isinstance(computation, Computation) or \
                         computation.__class__.__name__ == 'Computation'
                     assert isinstance(computation._pulse_coro, Coro)

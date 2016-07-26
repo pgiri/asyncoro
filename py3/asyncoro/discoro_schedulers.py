@@ -119,9 +119,7 @@ class RemoteCoroScheduler(object):
             self._server_avail.clear()
             yield self._server_avail.wait()
         sloc, loc = self._servers.popitem()
-        asyncoro.logger.debug('  req job at %s', loc)
         rcoro = yield self.computation.run_at(loc, gen, *args, **kwargs)
-        asyncoro.logger.debug('  new job: %s', rcoro)
         if isinstance(rcoro, Coro):
             self._rcoros[rcoro] = (None, 1)
             if self._askew_results:
