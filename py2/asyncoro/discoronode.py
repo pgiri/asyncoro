@@ -391,6 +391,7 @@ if __name__ == '__main__':
     import os
     import hashlib
     import traceback
+    import re
     try:
         import readline
     except:
@@ -398,38 +399,33 @@ if __name__ == '__main__':
     import asyncoro.disasyncoro as asyncoro
     from asyncoro.discoro import MinPulseInterval, MaxPulseInterval
 
-    try:
-        import psutil
-    except ImportError:
-        print('\n   \'psutil\' module is not available; '
-              'CPU, memory, disk status will not be sent!\n')
-        psutil = None
-    else:
-        psutil.cpu_percent(0.1)
-
     parser = argparse.ArgumentParser()
+    parser.add_argument('--config', dest='config', default='',
+                        help='use configuration in given file')
+    parser.add_argument('--save_config', dest='save_config', default='',
+                        help='save configuration in given file and exit')
     parser.add_argument('-c', '--cpus', dest='cpus', type=int, default=0,
                         help='number of CPUs/discoro instances to run; '
                         'if negative, that many CPUs are not used')
-    parser.add_argument('-i', '--ip_addr', dest='node', default=None,
+    parser.add_argument('-i', '--ip_addr', dest='node', default='',
                         help='IP address or host name of this node')
-    parser.add_argument('--ext_ip_addr', dest='ext_ip_addr', default=None,
+    parser.add_argument('--ext_ip_addr', dest='ext_ip_addr', default='',
                         help='External IP address to use (needed in case of NAT firewall/gateway)')
     parser.add_argument('-u', '--udp_port', dest='udp_port', type=int, default=51350,
                         help='UDP port number to use')
     parser.add_argument('--tcp_ports', dest='tcp_ports', action='append', default=[],
                         help='TCP port numbers to use')
-    parser.add_argument('-n', '--name', dest='name', default=None,
+    parser.add_argument('-n', '--name', dest='name', default='',
                         help='(symbolic) name given to AsynCoro schdulers on this node')
-    parser.add_argument('--dest_path', dest='dest_path', default=None,
+    parser.add_argument('--dest_path', dest='dest_path', default='',
                         help='path prefix to where files sent by peers are stored')
-    parser.add_argument('--max_file_size', dest='max_file_size', default=None, type=int,
+    parser.add_argument('--max_file_size', dest='max_file_size', default='',
                         help='maximum file size of any file transferred')
     parser.add_argument('-s', '--secret', dest='secret', default='',
                         help='authentication secret for handshake with peers')
-    parser.add_argument('--certfile', dest='certfile', default=None,
+    parser.add_argument('--certfile', dest='certfile', default='',
                         help='file containing SSL certificate')
-    parser.add_argument('--keyfile', dest='keyfile', default=None,
+    parser.add_argument('--keyfile', dest='keyfile', default='',
                         help='file containing SSL key')
     parser.add_argument('--serve', dest='serve', default=-1, type=int,
                         help='number of clients to serve before exiting')
@@ -458,6 +454,46 @@ if __name__ == '__main__':
                         help='if given, debug messages are printed')
     _discoro_config = vars(parser.parse_args(sys.argv[1:]))
 
+    _discoro_var = _discoro_config.pop('config')
+    if _discoro_var:
+        import configparser
+        cfg = configparser.ConfigParser()
+        cfg.read(_discoro_var)
+        cfg = dict(cfg.items('DEFAULT'))
+        cfg['cpus'] = int(cfg['cpus'])
+        cfg['udp_port'] = int(cfg['udp_port'])
+        cfg['serve'] = int(cfg['serve'])
+        cfg['msg_timeout'] = int(cfg['msg_timeout'])
+        cfg['min_pulse_interval'] = int(cfg['min_pulse_interval'])
+        cfg['max_pulse_interval'] = int(cfg['max_pulse_interval'])
+        cfg['zombie_period'] = int(cfg['zombie_period'])
+        cfg['ping_interval'] = int(cfg['ping_interval'])
+        cfg['daemon'] = cfg['daemon'] == 'True'
+        cfg['phoenix'] = cfg['phoenix'] == 'True'
+        cfg['discover_peers'] = cfg['discover_peers'] == 'True'
+        cfg['loglevel'] = cfg['loglevel'] == 'True'
+        cfg['tcp_ports'] = [_discoro_var.strip()[1:-1] for _discoro_var in
+                            cfg['tcp_ports'][1:-1].split(',')]
+        cfg['tcp_ports'] = [_discoro_var for _discoro_var in cfg['tcp_ports'] if _discoro_var]
+        cfg['peers'] = [_discoro_var.strip()[1:-1] for _discoro_var in
+                        cfg['peers'][1:-1].split(',')]
+        cfg['peers'] = [_discoro_var for _discoro_var in cfg['peers'] if _discoro_var]
+        for key, value in _discoro_config.items():
+            if _discoro_config[key] != parser.get_default(key) or key not in cfg:
+                cfg[key] = _discoro_config[key]
+        _discoro_config = cfg
+        del key, value, cfg
+    del parser
+
+    _discoro_var = _discoro_config.pop('save_config')
+    if _discoro_var:
+        import configparser
+        cfg = configparser.ConfigParser(_discoro_config)
+        cfgfp = open(_discoro_var, 'w')
+        cfg.write(cfgfp)
+        cfgfp.close()
+        exit(0)
+
     if _discoro_config['msg_timeout'] < 1:
         raise Exception('msg_timeout must be at least 1')
     if (_discoro_config['min_pulse_interval'] and
@@ -470,7 +506,7 @@ if __name__ == '__main__':
         if _discoro_config['zombie_period'] < _discoro_config['min_pulse_interval']:
             raise Exception('zombie_period must be at least min_pulse_interval')
     else:
-        _discoro_config['zombie_period'] = None
+        _discoro_config['zombie_period'] = 0
 
     _discoro_cpus = multiprocessing.cpu_count()
     if _discoro_config['cpus'] > 0:
@@ -501,6 +537,7 @@ if __name__ == '__main__':
                               _discoro_tcp_ports[-1] + 1 +
                               (_discoro_cpus + 1) - len(_discoro_tcp_ports)):
             _discoro_tcp_ports.append(int(tcp_port))
+        # _discoro_tcp_ports = _discoro_tcp_ports[:(_discoro_cpus + 1)]
     else:
         _discoro_tcp_ports = [0] * (_discoro_cpus + 1)
     del tcp_port, tcp_ports
@@ -510,7 +547,7 @@ if __name__ == '__main__':
     for peer in peers:
         peer = peer.split(':')
         if len(peer) != 2:
-            raise Exception('peer %s is not valid' % ':'.join(peer))
+            raise Exception('peer "%s" is not valid' % ':'.join(peer))
         _discoro_config['peers'].append(asyncoro.serialize(asyncoro.Location(peer[0], peer[1])))
     del peer, peers
 
@@ -527,10 +564,22 @@ if __name__ == '__main__':
                 _discoro_daemon = True
         except:
             pass
+
+    if _discoro_config['max_file_size']:
+        _discoro_var = re.match(r'(\d+)([kKmMgGtT]?)', _discoro_config['max_file_size'])
+        if not _discoro_var or len(_discoro_var.group(0)) != len(_discoro_config['max_file_size']):
+            raise Exception('Invalid max_file_size option')
+        _discoro_config['max_file_size'] = int(_discoro_var.group(1))
+        if _discoro_var.group(2):
+            _discoro_var = _discoro_var.group(2).lower()
+            _discoro_config['max_file_size'] *= 1024**({'k': 1, 'm': 2, 'g': 3,
+                                                        't': 4}[_discoro_var])
+    else:
+        _discoro_config['max_file_size'] = 0
+
     _discoro_node_auth = hashlib.sha1(os.urandom(10).encode('hex')).hexdigest()
 
     # delete variables not needed anymore
-    del parser
     for _discoro_var in ['argparse', 'socket']:
         del sys.modules[_discoro_var], globals()[_discoro_var]
     del _discoro_var
@@ -557,6 +606,14 @@ if __name__ == '__main__':
 
     def _discoro_node_proc(coro=None):
         import os
+        try:
+            import psutil
+        except ImportError:
+            print('\n   \'psutil\' module is not available; '
+                  'CPU, memory, disk status will not be sent!\n')
+            psutil = None
+        else:
+            psutil.cpu_percent(0.1)
         from asyncoro.discoro import DiscoroNodeAvailInfo, DiscoroNodeInfo, MaxPulseInterval
         global _discoro_servers, _discoro_config
         # coro.set_daemon()
@@ -628,17 +685,16 @@ if __name__ == '__main__':
             _discoro_mp_queue.close()
             return
 
-        coro_scheduler.peer_status(asyncoro.Coro(monitor_peers))
-        coro_scheduler.discover_peers()
         qserver = threading.Thread(target=mp_queue_server)
         qserver.daemon = True
         qserver.start()
-
-        timeout = interval
-        last_timeout = time.time()
+        coro_scheduler.peer_status(asyncoro.Coro(monitor_peers))
+        coro_scheduler.discover_peers()
+        for peer in _discoro_config['peers']:
+            asyncoro.Coro(coro_scheduler.peer, asyncoro.deserialize(peer))
 
         while 1:
-            msg = yield coro.receive(timeout=timeout)
+            msg = yield coro.receive(timeout=interval)
             now = time.time()
             if msg:
                 try:
