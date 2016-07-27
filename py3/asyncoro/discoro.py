@@ -688,6 +688,8 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
         if not node.coro:
             asyncoro.logger.warning('Node %s is not valid: %s', node.addr, type(node.coro))
             raise StopIteration
+        # TODO: change protocol to first get node info and then reserve only if
+        # client accepts available resources (cpus / memory / disk)
         node.coro.send({'req': 'reserve', 'client': coro, 'status_coro': self.__status_coro})
         node_info = yield coro.receive(timeout=MsgTimeout)
         if not node_info:
@@ -701,12 +703,12 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                 raise StopIteration
             # if server.coro:
             #     raise StopIteration
-            for _ in range(5):
+            for _ in range(10):
                 rcoro = yield Coro.locate('discoro_server', location=peer, timeout=MsgTimeout)
                 if isinstance(rcoro, Coro):
                     server.coro = rcoro
                     raise StopIteration
-                yield coro.sleep(0.2)
+                yield coro.sleep(0.1)
 
         for server in node_info['servers']:
             SysCoro(discover_server, server, node)
@@ -726,11 +728,11 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
             raise StopIteration
 
         if int(m.group(1)) == 0:  # node
-            for _ in range(5):
+            for _ in range(10):
                 rcoro = yield Coro.locate('discoro_node', location=msg.location,
                                           timeout=MsgTimeout)
                 if not isinstance(rcoro, Coro):
-                    yield coro.sleep(0.2)
+                    yield coro.sleep(0.1)
                     continue
                 node = self._nodes.get(msg.location.addr, None)
                 if node and node.coro == rcoro:
@@ -746,11 +748,11 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
         else:  # server
             node = self._nodes.get(msg.location.addr, None)
 
-            for _ in range(5):
+            for _ in range(10):
                 rcoro = yield Coro.locate('discoro_server', location=msg.location,
                                           timeout=MsgTimeout)
                 if not isinstance(rcoro, Coro):
-                    yield coro.sleep(0.2)
+                    yield coro.sleep(0.1)
                     continue
                 node = self._nodes.get(rcoro.location.addr, None)
                 if not node:
@@ -1205,6 +1207,8 @@ if __name__ == '__main__':
                         help='External IP address to use (needed in case of NAT firewall/gateway)')
     parser.add_argument('-u', '--udp_port', dest='udp_port', type=int, default=51350,
                         help='UDP port number to use')
+    parser.add_argument('-t', '--tcp_port', dest='tcp_port', type=int, default=0,
+                        help='TCP port number to use')
     parser.add_argument('-n', '--name', dest='name', default=None,
                         help='(symbolic) name given to schduler')
     parser.add_argument('--dest_path', dest='dest_path', default=None,
