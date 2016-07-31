@@ -126,7 +126,7 @@ class _Peer(object):
         _Peer._lock.acquire()
         peer = _Peer.peers.get((req.dst.addr, req.dst.port), None)
         if not peer:
-            logger.debug('invalid peer: %s, %s', req.dst, req.name)
+            logger.debug('%s: invalid peer: %s', _Peer._asyncoro.location, req.dst)
             _Peer._lock.release()
             return -1
         peer.reqs.append(req)
@@ -142,7 +142,7 @@ class _Peer(object):
             _Peer._lock.acquire()
             peer = _Peer.peers.get((dst.addr, dst.port), None)
             if not peer:
-                logger.debug('invalid peer to: %s, %s', dst, req.name)
+                logger.debug('%s: invalid peer to: %s', _Peer._asyncoro.location, dst)
                 _Peer._lock.release()
                 return -1
             peer.reqs.append(req)
@@ -174,11 +174,10 @@ class _Peer(object):
         req = _NetRequest('peer_closed', kwargs={'location': _Peer._asyncoro._location},
                           dst=peer.location, timeout=timeout)
         yield _Peer._sync_reply(req)
-        if peer and peer.req_coro:
+        if peer.req_coro:
             yield peer.req_coro.terminate()
             while peer.req_coro:
                 yield coro.sleep(0.1)
-        _Peer.remove(peer.location)
 
     @staticmethod
     def shutdown(timeout=MsgTimeout):
@@ -303,13 +302,13 @@ class _Peer(object):
                 if req.event:
                     req.event.set()
 
-        if req and req.name == 'peer_closed' and isinstance(req.event, Event):
+        if req and isinstance(req.event, Event):
+            req.reply = None
             req.event.set()
-        else:
-            for req in self.reqs:
-                if req.name == 'peer_closed' and isinstance(req.event, Event):
-                    req.event.set()
-                    break
+        for req in self.reqs:
+            if isinstance(req.event, Event):
+                req.reply = None
+                req.event.set()
 
         self.reqs.clear()
         self.req_coro = None
@@ -661,14 +660,14 @@ class AsynCoro(asyncoro.AsynCoro):
         Close peer at 'location'.
         """
         if isinstance(location, Location):
+            event = Event()
+            def sys_proc(peer, timeout, done, coro=None):
+                yield _Peer.close_peer(peer, timeout=timeout, coro=coro)
+                done.set()
             _Peer._lock.acquire()
             peer = _Peer.peers.get((location.addr, location.port), None)
             _Peer._lock.release()
             if peer:
-                event = Event()
-                def sys_proc(peer, timeout, done, coro=None):
-                    yield _Peer.close_peer(peer, timeout=timeout, coro=coro)
-                    done.set()
                 SysCoro(sys_proc, peer, timeout, event)
                 yield event.wait()
 
@@ -1461,9 +1460,10 @@ class _SysAsynCoro_(asyncoro.AsynCoro):
                 assert req.dst == self._location
                 sep = req.kwargs['sep']
                 tgt = req.kwargs['file'].split(sep)[-1]
-                dir = os.path.join(*(req.kwargs['dir'].split(sep)))
-                if dir:
-                    tgt = os.path.join(dir, tgt)
+                if req.kwargs['dir']:
+                    dir = os.path.join(*(req.kwargs['dir'].split(sep)))
+                    if dir:
+                        tgt = os.path.join(dir, tgt)
                 tgt = os.path.abspath(os.path.join(self.__dest_path, tgt))
                 stat_buf = req.kwargs['stat_buf']
                 resp = 0
@@ -1542,7 +1542,7 @@ class _SysAsynCoro_(asyncoro.AsynCoro):
                     # TODO: remove from _stream_peers?
                     # _SysAsynCoro_._asyncoro._stream_peers.pop((peer_loc.addr, peer_loc.port))
                     _Peer.remove(peer_loc)
-                    yield conn.send_msg(serialize('ack'))
+                    yield conn.send_msg(serialize(0))
                 break
             else:
                 logger.warning('invalid request "%s" ignored', req.name)
