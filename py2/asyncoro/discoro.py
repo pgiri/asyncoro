@@ -905,7 +905,8 @@ class Scheduler(object):
                     node.status = Scheduler.NodeDiscovered
                     if self._cur_computation.status_coro:
                         status_msg = DiscoroStatus(
-                            node.status, DiscoroNodeInfo(node.name, node.addr, node.avail_info)
+                            node.status, DiscoroNodeInfo(node.name, node.addr, node.cpus,
+                                                         node.platform, node.avail_info)
                             )
                         self._cur_computation.status_coro.send(status_msg)
                 else:
