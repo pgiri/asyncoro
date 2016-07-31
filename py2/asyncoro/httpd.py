@@ -166,7 +166,7 @@ class HTTPServer(object):
                         if m:
                             node = self._ctx._nodes.get(m.group(1))
                             if node:
-                                server = node.servers.get('%s:%s' % (m.group(1), m.group(2)))
+                                server = node.servers.get(asyncoro.Location(m.group(1), m.group(2)))
                     elif item.name == 'limit':
                         try:
                             max_coros = int(item.value)
@@ -255,7 +255,7 @@ class HTTPServer(object):
                     node = self._ctx._nodes.get(s[0])
                     if not node:
                         continue
-                    server = node.servers.get(location)
+                    server = node.servers.get(asyncoro.Location(s[0], s[1]))
                     if not server:
                         continue
                     rcoro = server.coros.get(coro)
@@ -326,7 +326,7 @@ class HTTPServer(object):
                 if node:
                     server = node.servers.get(rcoro.location)
                     if server:
-                        if server.coros.pop(rcoro, None) is not None:
+                        if server.coros.pop(str(rcoro), None) is not None:
                             server.coros_done += 1
                             node.coros_done += 1
                             node.update_time = time.time()
@@ -338,7 +338,7 @@ class HTTPServer(object):
                     if node:
                         server = node.servers.get(rcoro.coro.location)
                         if server:
-                            server.coros[rcoro.coro] = rcoro
+                            server.coros[str(rcoro.coro)] = rcoro
                             server.coros_submitted += 1
                             node.coros_submitted += 1
                             node.update_time = time.time()
