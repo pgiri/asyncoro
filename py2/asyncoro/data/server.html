@@ -27,11 +27,11 @@
         return results === null ? '' : decodeURIComponent(results[1].replace(/\+/g, ' '));
       }
 
-      function show_server(location) {
+      function show_server() {
         $.ajax({
           url: '/server_info',
           method: 'POST',
-          data: {location: location, limit: max_coros},
+          data: {location: server_location, limit: max_coros},
           dataType: 'json',
           timeout: Math.min(5000, timeout)
         })
@@ -81,7 +81,7 @@
               var now = new Date();
               $('#messages').append('<li>Status updated at ' + now.toLocaleTimeString() + '</li>');
               if (timeout >= 1000) {
-                timer = setTimeout(function() { show_server(server_location) }, timeout);
+                timer = setTimeout(function() { show_server() }, timeout);
               }
             } else {
               $('#messages').append('<li>Failed to get information about "' + server_location + '"</li>');
@@ -99,12 +99,12 @@
       }
 
       $(document).ready(function() {
-        var server_location = getParam('location');
+        server_location = getParam('location');
         $('#location').val(server_location);
         $('#max_coros').val(max_coros);
 
         if (server_location) {
-          show_server(server_location);
+          show_server();
         } else {
           $('#server').hide();
           $('#coros').hide();
@@ -161,7 +161,7 @@
               clearTimeout(timer);
               timer = null;
             }
-            show_server(server_location);
+            show_server();
           }
         });
 
@@ -227,13 +227,13 @@
   <body>
 
     <div id="page">
-      <nav style="margin:0 auto;" id="navigation" role="navigation">
+      <div style="margin:0 auto;" id="navigation">
         <ul>
           <li><a href="cluster.html">Cluster</a></li>
           <li><a href="node.html">Node</a></li>
           <li class="active"><a href="server.html">Server</a></li>
         </ul>
-      </nav>
+      </div>
 
       <h1 style="margin:2em 0;"><span class="title">discoro: Server Status</span></h1>
 
@@ -271,6 +271,9 @@
             <tr><th></th><th>Coroutine</th><th>Arguments</th><th>Start Time</th></tr>
           </thead>
           <tbody>
+	    <tr>
+	      <td></td><td></td><td></td><td></td>
+	    </tr>
           </tbody>
         </table>
 
@@ -311,7 +314,7 @@
       <hr style="margin:10px;" />
 
       <div>
-        <ul id="messages" style="margin:1em auto;display:inline-block;"></ul>
+        <ul id="messages" style="margin:1em auto;display:inline-block;"><li></li></ul>
       </div>
 
     </div>
