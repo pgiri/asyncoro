@@ -77,12 +77,12 @@ class DiscoroNodeFilter(object):
     only nodes that run 64-bit Linux.
     """
 
-    def __init__(self, ip_addr='.*', cpus=0, memory=0, disk=0, platform=''):
+    def __init__(self, ip_addr='.*', cpus=0, platform='', memory=0, disk=0):
         self.ip_addr = ip_addr
         self.cpus = cpus
+        self.platform = platform.lower()
         self.memory = memory
         self.disk = disk
-        self.platform = platform.lower()
 
 
 class Computation(object):
@@ -711,12 +711,14 @@ class Scheduler(object):
         for node_filter in self._cur_computation._node_filters:
             if not re.match(node_filter.ip_addr, node.addr):
                 continue
+            if ((node_filter.cpus and node_filter.cpus > node.cpus) or
+                (node_filter.platform and not re.search(node_filter.platform, node.platform))):
+                asyncoro.logger.debug('Ignoring node %s', node.addr)
+                return False
             if not node.avail_info:
                 return True
-            if ((node_filter.cpus and node_filter.cpus > node.cpus) or
-                (node_filter.memory and node_filter.memory > node.avail_info.memory) or
-                (node_filter.disk and node_filter.disk > node.avail_info.disk) or
-                (node_filter.platform and not re.search(node_filter.platform, node.platform))):
+            if ((node_filter.memory and node_filter.memory > node.avail_info.memory) or
+                (node_filter.disk and node_filter.disk > node.avail_info.disk)):
                 asyncoro.logger.debug('Ignoring node %s', node.addr)
                 return False
             return True
@@ -753,9 +755,7 @@ class Scheduler(object):
             node.coro.send({'req': 'discoro_reserve', 'reserve': 0, 'client': coro,
                             'status_coro': self.__status_coro, 'auth': self._cur_computation._auth})
             reserved = yield coro.receive(timeout=MsgTimeout)
-            asyncoro.logger.debug('  RESERVED: %s', reserved)
             if not reserved:
-                asyncoro.logger.debug('  REMOVING %s', node.coro.location)
                 self._nodes.pop(node.addr, None)
                 asyncoro.Coro(asyncoro.AsynCoro.instance().close_peer, node.coro.location)
 
