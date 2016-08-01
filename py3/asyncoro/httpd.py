@@ -166,7 +166,7 @@ class HTTPServer(object):
                         if m:
                             node = self._ctx._nodes.get(m.group(1))
                             if node:
-                                server = node.servers.get(asyncoro.Location(m.group(1), m.group(2)))
+                                server = node.servers.get(m.group(0))
                     elif item.name == 'limit':
                         try:
                             max_coros = int(item.value)
@@ -255,7 +255,7 @@ class HTTPServer(object):
                     node = self._ctx._nodes.get(s[0])
                     if not node:
                         continue
-                    server = node.servers.get(asyncoro.Location(s[0], s[1]))
+                    server = node.servers.get(location)
                     if not server:
                         continue
                     rcoro = server.coros.get(coro)
@@ -324,7 +324,7 @@ class HTTPServer(object):
                 rcoro = msg.args[0]
                 node = self._nodes.get(rcoro.location.addr)
                 if node:
-                    server = node.servers.get(rcoro.location)
+                    server = node.servers.get(str(rcoro.location))
                     if server:
                         if server.coros.pop(str(rcoro), None) is not None:
                             server.coros_done += 1
@@ -336,7 +336,7 @@ class HTTPServer(object):
                     rcoro = msg.info
                     node = self._nodes.get(rcoro.coro.location.addr)
                     if node:
-                        server = node.servers.get(rcoro.coro.location)
+                        server = node.servers.get(str(rcoro.coro.location))
                         if server:
                             server.coros[str(rcoro.coro)] = rcoro
                             server.coros_submitted += 1
@@ -358,7 +358,7 @@ class HTTPServer(object):
                             self._nodes[msg.info.location.addr] = node
                         server = HTTPServer._Server(msg.info.name, msg.info.location)
                         server.status = HTTPServer.ServerStatus[msg.status]
-                        node.servers[server.location] = server
+                        node.servers[str(server.location)] = server
                         node.update_time = time.time()
                         self._updates[node.addr] = node
                 elif msg.status in (discoro.Scheduler.ServerInitialized,
@@ -369,7 +369,7 @@ class HTTPServer(object):
                         # node.servers.pop(str(msg.info), None)
                         # if not node.servers:
                         #     self._nodes.pop(msg.info.addr)
-                        server = node.servers.get(msg.info, None)
+                        server = node.servers.get(str(msg.info), None)
                         if server:
                             server.status = HTTPServer.ServerStatus[msg.status]
                             node.update_time = time.time()
