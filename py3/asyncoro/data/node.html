@@ -17,6 +17,8 @@
       var node_addr = null;
       var timer = null;
       var timeout = 1000 * %(TIMEOUT)s;
+      var node_hidden = true;
+      var servers_hidden = true;
 
       function getParam(param) {
         param = param.replace(/[\[]/, '\\[').replace(/[\]]/, '\\]');
@@ -52,8 +54,9 @@
                 $('#node_swap').text(node.avail_info.swap.toFixed(2) + ' %%');
                 $('#node_disk').text(formatBytes(node.avail_info.disk));
               }
-              if ($('#node').is(':hidden')) {
+              if (node_hidden) {
                 $('#node').show();
+                node_hidden = false;
               }
 
               var rows = '';
@@ -68,12 +71,14 @@
 
               });
               if (node.servers.length > 0) {
-                if ($('#servers').is(':hidden')) {
+                if (servers_hidden) {
                   $('#servers').show();
+                  servers_hidden = false;
                 }
                 $('#servers-table tbody').html(rows);
               } else {
                 $('#servers').hide();
+                servers_hidden = true;
                 $('#messages').append('<li style="margin:10px 0;"><span class="border">' +
                                       'No servers running on this node.</span></li>');
               }
@@ -87,6 +92,8 @@
               $('#messages').append('<li>Failed to get information about "' + host + '"</li>');
               $('#node').hide();
               $('#servers').hide();
+              node_hidden = true;
+              servers_hidden = true;
             }
 
           })
@@ -106,6 +113,8 @@
         } else {
           $('#node').hide();
           $('#servers').hide();
+          node_hidden = true;
+          servers_hidden = true;
         }
 	
         $('#input-update').click(function() {

@@ -19,6 +19,8 @@
       var timeout = 1000 * %(TIMEOUT)s;
       // TODO: make max_coros an input?
       var max_coros = 100;
+      var server_hidden = true;
+      var coros_hidden = true;
 
       function getParam(param) {
         param = param.replace(/[\[]/, '\\[').replace(/[\]]/, '\\]');
@@ -49,6 +51,7 @@
               $('#server_update').text((new Date(1000 * server.update_time)).toLocaleTimeString());
               if ($('#server').is(':hidden')) {
                 $('#server').show();
+                server_hidden = false;
               }
 
               var rows = '';
@@ -70,10 +73,12 @@
               if (server.coros.length > 0) {
                 if ($('#coros').is(':hidden')) {
                   $('#coros').show();
+                  coros_hidden = false;
                 }
                 $('#coros-table tbody').html(rows);
               } else {
                 $('#coros').hide();
+                coros_hidden = true;
                 $('#messages').append('<li style="margin:10px 0;"><span class="border">' +
                                       'No coroutines running on this server.</span></li>');
               }
@@ -87,6 +92,8 @@
               $('#messages').append('<li>Failed to get information about "' + server_location + '"</li>');
               $('#server').hide();
               $('#coros').hide();
+              server_hidden = true;
+              coros_hidden = true;
             }
 
           })
@@ -95,6 +102,7 @@
             $('#messages').append('<li>Server update failed at ' +
               (new Date()).toLocaleTimeString() + '</li>');
             $('#coros').hide();
+            coros_hidden = true;
           });
       }
 
@@ -108,6 +116,8 @@
         } else {
           $('#server').hide();
           $('#coros').hide();
+          server_hidden = true;
+          coros_hidden = true;
         }
 	
         $('#input-update').click(function() {
