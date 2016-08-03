@@ -136,7 +136,7 @@ class Computation(object):
             raise Exception('"zombie_period" must be either 0 or >= %s' % MaxPulseInterval)
         if ((not isinstance(node_filters, list)) or
             any(not isinstance(_, DiscoroNodeFilter) for _ in node_filters)):
-            raise Exception('"nodes" must be list of DiscoroNodeFilter instances')
+            raise Exception('"node_filters" must be list of DiscoroNodeFilter instances')
 
         if not isinstance(components, list):
             components = [components]

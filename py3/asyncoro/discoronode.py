@@ -31,11 +31,6 @@ def _discoro_server_proc():
     import sys
     import time
 
-    try:
-        import psutil
-    except:
-        psutil = None
-
     from asyncoro.discoro import MinPulseInterval, MaxPulseInterval, \
         DiscoroNodeInfo, DiscoroNodeAvailInfo, Scheduler
     import asyncoro.disasyncoro as asyncoro
@@ -62,7 +57,7 @@ def _discoro_server_proc():
     _discoro_pid_path = os.path.join(_discoro_dest_path, '..', '%s.pid' % _discoro_name)
     _discoro_pid_path = os.path.normpath(_discoro_pid_path)
     # TODO: is file locking necessary?
-    if os.path.exists(_discoro_pid_path):
+    if os.path.isfile(_discoro_pid_path) and os.path.getsize(_discoro_pid_path) > 0:
         with open(_discoro_pid_path, 'r') as _discoro_req:
             _discoro_var = _discoro_req.read()
         _discoro_var = int(_discoro_var)
@@ -299,8 +294,8 @@ def _discoro_server_proc():
                               _discoro_name, len(_discoro_job_coros))
         if (yield _discoro_jobs_done.wait(timeout=5)):
             break
-    if os.path.isfile(_discoro_pid_path):
-        os.remove(_discoro_pid_path)
+    with open(_discoro_pid_path, 'w') as _discoro_var:
+        pass
     asyncoro.logger.debug('discoro server %s @ %s done',
                           _discoro_config['id'], _discoro_coro.location)
 
@@ -645,7 +640,7 @@ if __name__ == '__main__':
             psutil.cpu_percent(0.1)
         from asyncoro.discoro import DiscoroNodeAvailInfo, DiscoroNodeInfo, MaxPulseInterval
         global _discoro_servers, _discoro_config
-        # coro.set_daemon()
+
         coro_scheduler = asyncoro.AsynCoro.instance()
         last_pulse = last_proc_check = last_ping = time.time()
         scheduler_coro = zombie_period = cur_computation_auth = None
@@ -664,12 +659,8 @@ if __name__ == '__main__':
                                             server.proc.pid)
                     return
                 pid_path = os.path.join(_discoro_scheduler.dest_path, '%s.pid' % server.id)
-                if os.path.exists(pid_path):
-                    try:
-                        os.remove(pid_path)
-                    except:
-                        print('Could not remove PID file %s' % pid_path)
-                        return
+                with open(pid_path, 'w') as fd:
+                    pass
 
             server_config = dict(_discoro_config)
             server_config['id'] = server.id
@@ -945,10 +936,13 @@ if __name__ == '__main__':
         for _discoro_server_id in range(1, _discoro_cpus + 1):
             _discoro_var = os.path.join(_discoro_scheduler.dest_path,
                                         '%s.pid' % _discoro_servers[_discoro_server_id].name)
-            if os.path.exists(_discoro_var):
-                raise Exception('discoro server(s) seem to be running; '
-                                'check no discoro servers are running and '
-                                'remove *.pid files in %s' % _discoro_scheduler.dest_path)
+            try:
+                os.open(_discoro_var, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0600)
+            except:
+                if os.path.getsize(_discoro_var) > 0:
+                    raise Exception('discoro server(s) seem to be running; '
+                                    'check no discoro servers are running and '
+                                    'remove *.pid files in %s' % _discoro_scheduler.dest_path)
     _discoro_node_coro = asyncoro.Coro(_discoro_node_proc)
 
     del _discoro_server_config
@@ -1000,5 +994,13 @@ if __name__ == '__main__':
         asyncoro.Coro(_discoro_cmd_reader)
 
     _discoro_node_coro.value()
+    for server in _discoro_servers:
+        if server:
+            _discoro_var = os.path.join(_discoro_scheduler.dest_path, '%s.pid' % server.name)
+            print('Removing %s' % _discoro_var)
+            try:
+                os.remove(_discoro_var)
+            except:
+                pass
 
     exit(0)
