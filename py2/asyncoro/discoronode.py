@@ -57,7 +57,7 @@ def _discoro_server_proc():
     _discoro_pid_path = os.path.join(_discoro_dest_path, '..', '%s.pid' % _discoro_name)
     _discoro_pid_path = os.path.normpath(_discoro_pid_path)
     # TODO: is file locking necessary?
-    if os.path.isfile(_discoro_pid_path) and os.path.getsize(_discoro_pid_path) > 0:
+    if os.path.isfile(_discoro_pid_path):
         with open(_discoro_pid_path, 'r') as _discoro_req:
             _discoro_var = _discoro_req.read()
         _discoro_var = int(_discoro_var)
@@ -291,7 +291,9 @@ def _discoro_server_proc():
                               _discoro_name, len(_discoro_job_coros))
         if (yield _discoro_jobs_done.wait(timeout=5)):
             break
-    with open(_discoro_pid_path, 'w') as _discoro_var:
+    try:
+        os.remove(_discoro_pid_path)
+    except:
         pass
     asyncoro.logger.debug('discoro server %s @ %s done',
                           _discoro_config['id'], _discoro_coro.location)
@@ -650,14 +652,10 @@ if __name__ == '__main__':
         coro.register('discoro_node')
 
         def _discoro_start_server(server, phoenix=False):
-            if server.proc:
-                if server.proc.is_alive():
-                    asyncoro.logger.warning('discoro server %s is still running, not starting it',
-                                            server.proc.pid)
-                    return
-                pid_path = os.path.join(_discoro_scheduler.dest_path, '%s.pid' % server.id)
-                with open(pid_path, 'w') as fd:
-                    pass
+            if server.proc and server.proc.is_alive():
+                asyncoro.logger.warning('discoro server %s is still running, not starting it',
+                                        server.proc.pid)
+                return
 
             server_config = dict(_discoro_config)
             server_config['id'] = server.id
@@ -929,17 +927,16 @@ if __name__ == '__main__':
         asyncoro.logger.setLevel(asyncoro.Logger.INFO)
     _discoro_scheduler = asyncoro.AsynCoro(**_discoro_server_config)
     _discoro_scheduler.dest_path = os.path.join(_discoro_scheduler.dest_path, 'discoro')
-    if not _discoro_config['phoenix']:
-        for _discoro_server_id in range(1, _discoro_cpus + 1):
-            _discoro_var = os.path.join(_discoro_scheduler.dest_path,
-                                        '%s.pid' % _discoro_servers[_discoro_server_id].name)
-            try:
-                os.open(_discoro_var, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0600)
-            except:
-                if os.path.getsize(_discoro_var) > 0:
-                    raise Exception('discoro server(s) seem to be running; '
-                                    'check no discoro servers are running and '
-                                    'remove *.pid files in %s' % _discoro_scheduler.dest_path)
+    _discoro_var = os.path.join(_discoro_scheduler.dest_path, '%s-%s.pid' % (_discoro_name, 0))
+    # TODO: if 'phoenix' option is given, kill processes and remove all PID files?
+    try:
+        _discoro_var = os.open(_discoro_var, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0600)
+        os.write(_discoro_var, '%s' % os.getpid())
+        os.close(_discoro_var)
+    except:
+        raise Exception('Another discoronode seem to be running; '
+                        'check no discoronode and servers are running and '
+                        'remove *.pid files in %s' % _discoro_scheduler.dest_path)
     _discoro_node_coro = asyncoro.Coro(_discoro_node_proc)
 
     del _discoro_server_config
@@ -991,12 +988,9 @@ if __name__ == '__main__':
         asyncoro.Coro(_discoro_cmd_reader)
 
     _discoro_node_coro.value()
-    for server in _discoro_servers:
-        if server:
-            _discoro_var = os.path.join(_discoro_scheduler.dest_path, '%s.pid' % server.name)
-            print('Removing %s' % _discoro_var)
-            try:
-                os.remove(_discoro_var)
-            except:
-                pass
+    _discoro_var = os.path.join(_discoro_scheduler.dest_path, '%s-%s.pid' % (_discoro_name, 0))
+    try:
+        os.remove(_discoro_var)
+    except:
+        pass
     exit(0)
