@@ -52,11 +52,8 @@ def _discoro_server_proc():
     asyncoro.MsgTimeout = _discoro_config.pop('msg_timeout')
 
     _discoro_name = asyncoro.AsynCoro.instance().name
-    asyncoro.AsynCoro.instance().dest_path = os.path.join('discoro', _discoro_name)
-    _discoro_dest_path = asyncoro.AsynCoro.instance().dest_path
-    _discoro_pid_path = os.path.join(_discoro_dest_path, '..', '%s.pid' % _discoro_name)
-    _discoro_pid_path = os.path.normpath(_discoro_pid_path)
-    # TODO: is file locking necessary?
+    _discoro_pid_path = os.path.join(asyncoro.AsynCoro.instance().dest_path, 'discoro',
+                                     '%s.pid' % _discoro_name)
     if os.path.isfile(_discoro_pid_path):
         with open(_discoro_pid_path, 'r') as _discoro_req:
             _discoro_var = _discoro_req.read()
@@ -80,9 +77,12 @@ def _discoro_server_proc():
             except:
                 pass
         del signal
+
+    _discoro_dest_path = os.path.join(asyncoro.AsynCoro.instance().dest_path,
+                                      'discoro', _discoro_name)
     if os.path.isdir(_discoro_dest_path):
         shutil.rmtree(_discoro_dest_path)
-    os.makedirs(_discoro_dest_path)
+    asyncoro.AsynCoro.instance().dest_path = _discoro_dest_path
     os.chdir(_discoro_dest_path)
     sys.path.insert(0, _discoro_dest_path)
     with open(_discoro_pid_path, 'w') as _discoro_var:
@@ -931,7 +931,7 @@ if __name__ == '__main__':
     # TODO: if 'phoenix' option is given, kill processes and remove all PID files?
     try:
         _discoro_var = os.open(_discoro_var, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0600)
-        os.write(_discoro_var, '%s' % os.getpid())
+        os.write(_discoro_var, str(os.getpid()).encode())
         os.close(_discoro_var)
     except:
         raise Exception('Another discoronode seem to be running; '
