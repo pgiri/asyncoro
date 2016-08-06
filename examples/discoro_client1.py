@@ -23,7 +23,8 @@ def client_proc(computation, njobs, coro=None):
     # use as many processes as necessary/available, running one job at a server
     # process
 
-    # each element must be tuple
+    # arguments must correspond to arguments for computaiton; multiple arguments
+    # (in this case) can be given as tuples
     args = [(i, random.uniform(2, 5)) for i in range(njobs)]
     results = yield rcoro_scheduler.map_results(compute, args)
     # Coroutines may not be executed in the order of given list of args, but
