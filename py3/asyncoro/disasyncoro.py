@@ -556,20 +556,17 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
     @dest_path.setter
     def dest_path(self, path):
         if not self._sys_asyncoro:
-            return -1
+            raise ValueError('AsynCoro not initialized!')
         path = os.path.normpath(path)
         if not path.startswith(self.__dest_path_prefix):
             path = os.path.join(self.__dest_path_prefix,
                                 os.path.splitdrive(path)[1].lstrip(os.sep))
-        ret = 0
         try:
             os.makedirs(path)
         except OSError as exc:
             if exc.errno != errno.EEXIST:
-                ret = -1
-        if not ret:
-            self._sys_asyncoro.dest_path = self.__dest_path = path
-        return ret
+                raise
+        self._sys_asyncoro.dest_path = self.__dest_path = path
 
     def finish(self):
         if AsynCoro._instance:
