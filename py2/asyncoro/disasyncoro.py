@@ -14,6 +14,7 @@ import collections
 import copy
 import tempfile
 import threading
+import errno
 import atexit
 try:
     import netifaces
@@ -559,13 +560,18 @@ class AsynCoro(asyncoro.AsynCoro):
         if not self._sys_asyncoro:
             return -1
         path = os.path.normpath(path)
-        if path.startswith(self.__dest_path_prefix):
-            self.__dest_path = path
-        else:
-            self.__dest_path = os.path.join(self.__dest_path_prefix,
-                                            os.path.splitdrive(path)[1].lstrip(os.sep))
-        self._sys_asyncoro.dest_path = self.__dest_path
-        return 0
+        if not path.startswith(self.__dest_path_prefix):
+            path = os.path.join(self.__dest_path_prefix,
+                                os.path.splitdrive(path)[1].lstrip(os.sep))
+        ret = 0
+        try:
+            os.makedirs(path)
+        except OSError as exc:
+            if exc.errno != errno.EEXIST:
+                ret = -1
+        if not ret:
+            self._sys_asyncoro.dest_path = self.__dest_path = path
+        return ret
 
     def finish(self):
         if AsynCoro._instance:
