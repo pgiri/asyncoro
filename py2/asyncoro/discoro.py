@@ -578,9 +578,7 @@ class Scheduler(object):
         self.asyncoro = asyncoro.AsynCoro.instance(**kwargs)
         self.__dest_path = os.path.join(self.asyncoro.dest_path, 'discoro', 'scheduler')
         if clean:
-            shutil.rmtree(self.__dest_path, ignore_errors=True)
-        if not os.path.isdir(self.__dest_path):
-            os.makedirs(self.__dest_path)
+            shutil.rmtree(self.__dest_path)
         self.asyncoro.dest_path = self.__dest_path
 
         self.__scheduler_coro = SysCoro(self.__scheduler_proc, nodes)

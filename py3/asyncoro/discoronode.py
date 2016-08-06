@@ -81,7 +81,7 @@ def _discoro_server_proc():
                 pass
         del signal
     if os.path.isdir(_discoro_dest_path):
-        shutil.rmtree(_discoro_dest_path)
+        shutil.rmtree(_discoro_dest_path, ignore_errors=True)
     os.makedirs(_discoro_dest_path)
     os.chdir(_discoro_dest_path)
     sys.path.insert(0, _discoro_dest_path)
