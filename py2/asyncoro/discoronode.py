@@ -400,10 +400,12 @@ if __name__ == '__main__':
                         help='IP address or host name of this node')
     parser.add_argument('--ext_ip_addr', dest='ext_ip_addr', default='',
                         help='External IP address to use (needed in case of NAT firewall/gateway)')
-    parser.add_argument('-u', '--udp_port', dest='udp_port', type=int, default=51350,
+    parser.add_argument('-u', '--udp_port', dest='udp_port', type=int, default=51351,
                         help='UDP port number to use')
     parser.add_argument('--tcp_ports', dest='tcp_ports', action='append', default=[],
                         help='TCP port numbers to use')
+    parser.add_argument('--scheduler_port', dest='scheduler_port', type=int, default=51350,
+                        help='UDP port number used by discoro scheduler')
     parser.add_argument('-n', '--name', dest='name', default='',
                         help='(symbolic) name given to AsynCoro schdulers on this node')
     parser.add_argument('--dest_path', dest='dest_path', default='',
@@ -743,7 +745,7 @@ if __name__ == '__main__':
                 now = int(time.time())
                 yield coro.sleep(_discoro_service_start - now)
                 coro_scheduler.ignore_peers(False)
-                yield coro_scheduler.discover_peers()
+                coro_scheduler.discover_peers(port=_discoro_config['scheduler_port'])
 
         if _discoro_service_start:
             asyncoro.Coro(service_times_proc)
@@ -752,7 +754,7 @@ if __name__ == '__main__':
         qserver.daemon = True
         qserver.start()
         coro_scheduler.peer_status(asyncoro.Coro(monitor_peers))
-        coro_scheduler.discover_peers()
+        coro_scheduler.discover_peers(port=_discoro_config['scheduler_port'])
         for peer in _discoro_config['peers']:
             asyncoro.Coro(coro_scheduler.peer, asyncoro.deserialize(peer))
 
@@ -908,7 +910,7 @@ if __name__ == '__main__':
                                 _discoro_start_server(server, phoenix=True)
 
             if ping_interval and (now - last_ping) > ping_interval and service_available(now):
-                coro_scheduler.discover_peers()
+                coro_scheduler.discover_peers(port=_discoro_config['scheduler_port'])
 
         try:
             os.remove(_discoro_node_pid_file)
