@@ -66,6 +66,8 @@ def _discoro_server_proc():
 
         import signal
         try:
+            os.kill(_discoro_var, signal.SIGINT)
+            time.sleep(0.1)
             os.kill(_discoro_var, signal.SIGKILL)
         except:
             pass
@@ -378,6 +380,7 @@ if __name__ == '__main__':
     import hashlib
     import traceback
     import re
+    import signal
     try:
         import readline
     except:
@@ -620,7 +623,6 @@ if __name__ == '__main__':
     _discoro_busy_time = multiprocessing.Value('I', 0)
     _discoro_mp_queue = multiprocessing.Queue()
     _discoro_servers = [None] * (_discoro_cpus + 1)
-    _discoro_server_locations = {}
     for _discoro_server_id in range(1, _discoro_cpus + 1):
         _discoro_server = _discoro_Struct(id=_discoro_server_id, proc=None, coro=None,
                                           name='%s-%s' % (_discoro_name, _discoro_server_id))
@@ -769,12 +771,10 @@ if __name__ == '__main__':
                         server = _discoro_servers[msg['id']]
                         if msg['coro']:
                             server.coro = asyncoro.deserialize(msg['coro'])
-                            _discoro_server_locations[server.coro.location] = server
                             # if scheduler_coro and cur_computation_auth:
                             #     server.coro.send({'req': 'peer', 'node_auth': _discoro_node_auth})
                         else:
                             server.proc.join()
-                            _discoro_server_locations.pop(server.coro.location, None)
                             server.coro = server.proc = None
                             if _discoro_config['serve']:
                                 if scheduler_coro and service_available(now):
@@ -792,7 +792,6 @@ if __name__ == '__main__':
                     else:
                         if not server.coro:
                             server.coro = msg['coro']
-                            _discoro_server_locations[server.coro.location] = server
                         interval = msg.get('interval', None)
                         zombie_period = msg.get('zombie_period', None)
                         if zombie_period:
@@ -911,6 +910,12 @@ if __name__ == '__main__':
             if ping_interval and (now - last_ping) > ping_interval and service_available(now):
                 coro_scheduler.discover_peers()
 
+        try:
+            os.remove(_discoro_node_pid_file)
+        except:
+            pass
+        os.kill(os.getpid(), signal.SIGINT)
+
     _discoro_server_config = {}
     for _discoro_var in ['udp_port', 'tcp_port', 'node', 'ext_ip_addr', 'name',
                          'discover_peers', 'secret', 'certfile', 'keyfile', 'dest_path',
@@ -927,10 +932,15 @@ if __name__ == '__main__':
         asyncoro.logger.setLevel(asyncoro.Logger.INFO)
     _discoro_scheduler = asyncoro.AsynCoro(**_discoro_server_config)
     _discoro_scheduler.dest_path = os.path.join(_discoro_scheduler.dest_path, 'discoro')
-    _discoro_var = os.path.join(_discoro_scheduler.dest_path, '%s-%s.pid' % (_discoro_name, 0))
-    # TODO: if 'phoenix' option is given, kill processes and remove all PID files?
+    _discoro_node_pid_file = os.path.join(_discoro_scheduler.dest_path,
+                                          '%s-%s.pid' % (_discoro_name, 0))
+    if _discoro_config['phoenix']:
+        try:
+            os.remove(_discoro_node_pid_file)
+        except:
+            pass
     try:
-        _discoro_var = os.open(_discoro_var, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0600)
+        _discoro_var = os.open(_discoro_node_pid_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0600)
         os.write(_discoro_var, str(os.getpid()).encode())
         os.close(_discoro_var)
     except:
@@ -938,59 +948,75 @@ if __name__ == '__main__':
                         'check no discoronode and servers are running and '
                         'remove *.pid files in %s' % _discoro_scheduler.dest_path)
     _discoro_node_coro = asyncoro.Coro(_discoro_node_proc)
+    del _discoro_server_config, _discoro_var
 
-    del _discoro_server_config
+    def sighandler(signum, frame):
+        if os.path.isfile(_discoro_node_pid_file):
+            _discoro_node_coro.send({'req': 'quit', 'auth': _discoro_node_auth})
+        else:
+            raise KeyboardInterrupt
 
-    if not _discoro_daemon:
-        def _discoro_cmd_reader(coro=None):
-            coro.set_daemon()
-            async_threads = asyncoro.AsyncThreadPool(1)
-            while 1:
-                yield coro.sleep(0.25)
-                try:
-                    _discoro_cmd = yield async_threads.async_task(
-                        raw_input,
+    try:
+        signal.signal(signal.SIGHUP, sighandler)
+        signal.signal(signal.SIGQUIT, sighandler)
+    except:
+        pass
+    signal.signal(signal.SIGINT, sighandler)
+    signal.signal(signal.SIGABRT, sighandler)
+    signal.signal(signal.SIGTERM, sighandler)
+    del sighandler
+
+    if _discoro_daemon:
+        while 1:
+            try:
+                time.sleep(3600)
+            except:
+                if os.path.exists(_discoro_node_pid_file):
+                    _discoro_node_coro.send({'req': 'quit', 'auth': _discoro_node_auth})
+                break
+    else:
+        while 1:
+            # wait a bit for any output for previous command is done
+            time.sleep(0.2)
+            try:
+                _discoro_cmd = raw_input(
                         '\nEnter\n'
                         '  "status" to get status\n'
                         '  "close" to stop accepting new jobs and\n'
                         '          close current computation when current jobs are finished\n'
                         '  "quit" to "close" current computation and exit discoronode\n'
                         '  "terminate" to kill current jobs and "quit": ')
-                except GeneratorExit:
-                    break
-                except:
-                    _discoro_cmd = ''
-                else:
-                    _discoro_cmd = _discoro_cmd.strip().lower()
-                    if not _discoro_cmd:
-                        _discoro_cmd = 'status'
+            except:
+                if os.path.exists(_discoro_node_pid_file):
+                    _discoro_node_coro.send({'req': 'quit', 'auth': _discoro_node_auth})
+                break
+            else:
+                _discoro_cmd = _discoro_cmd.strip().lower()
+                if not _discoro_cmd:
+                    _discoro_cmd = 'status'
 
-                print('')
-                if _discoro_cmd == 'status' or _discoro_cmd == 'close':
-                    for _discoro_server in _discoro_servers:
-                        if not _discoro_server:
-                            continue
-                        if _discoro_server.coro:
-                            _discoro_server.coro.send({'req': _discoro_cmd,
-                                                       'node_auth': _discoro_node_auth})
-                        else:
-                            print('  discoro server "%s" is not currently used' %
-                                  _discoro_server.name)
-                elif _discoro_cmd in ('quit', 'terminate'):
-                    _discoro_node_coro.send({'req': _discoro_cmd, 'auth': _discoro_node_auth})
-                    # break
-                else:
-                    for _discoro_server in _discoro_servers:
-                        if (_discoro_server and _discoro_server.proc and
-                            _discoro_server.proc.is_alive()):
-                            print('  Process %s is still running' % _discoro_server.id)
+            print('')
+            if _discoro_cmd == 'status' or _discoro_cmd == 'close':
+                for _discoro_server in _discoro_servers:
+                    if not _discoro_server:
+                        continue
+                    if _discoro_server.coro:
+                        _discoro_server.coro.send({'req': _discoro_cmd,
+                                                   'node_auth': _discoro_node_auth})
+                    else:
+                        print('  discoro server "%s" is not currently used' %
+                              _discoro_server.name)
+            elif _discoro_cmd in ('quit', 'terminate'):
+                _discoro_node_coro.send({'req': _discoro_cmd, 'auth': _discoro_node_auth})
+                break
+            else:
+                for _discoro_server in _discoro_servers:
+                    if (_discoro_server and _discoro_server.proc and
+                        _discoro_server.proc.is_alive()):
+                        print('  Process %s is still running' % _discoro_server.id)
 
-        asyncoro.Coro(_discoro_cmd_reader)
-
-    _discoro_node_coro.value()
-    _discoro_var = os.path.join(_discoro_scheduler.dest_path, '%s-%s.pid' % (_discoro_name, 0))
     try:
-        os.remove(_discoro_var)
+        _discoro_node_coro.value()
     except:
         pass
     exit(0)
