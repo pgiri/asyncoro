@@ -2,7 +2,7 @@
 # using message passing (asynchronous concurrent programming);
 # see http://asyncoro.sourceforge.net/tutorial.html for details.
 
-import sys, random, logging
+import sys, random
 import asyncoro.disasyncoro as asyncoro
 
 def client_proc(n, coro=None):
@@ -14,7 +14,7 @@ def client_proc(n, coro=None):
         server.send('%d: %d / %d' % (msg_id, n, x))
 
 msg_id = 0
-asyncoro.logger.setLevel(logging.DEBUG)
+asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
 scheduler = asyncoro.AsynCoro(udp_port=0)
 # create 10 clients; each client sends 3 messages
 for i in range(10):

@@ -3,7 +3,7 @@
 # to be used with 'rci_monitor_server.py'
 # client requests execution of coroutines on (remote) server.
 
-import sys, logging, random
+import sys, random
 # import disasyncoro to use distributed version of AsynCoro
 import asyncoro.disasyncoro as asyncoro
 
@@ -51,6 +51,6 @@ def rci_test(coro=None):
         rcoro.send('msg:%s' % x)
         yield coro.sleep(random.uniform(0, 1))
 
-asyncoro.logger.setLevel(logging.DEBUG)
+asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
 scheduler = asyncoro.AsynCoro(name='client', secret='test')
 asyncoro.Coro(rci_test)

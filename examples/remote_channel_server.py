@@ -8,7 +8,7 @@
 # different networks but client must call 'scheduler.peer' method
 # appropriately.
 
-import sys, logging
+import sys
 # import disasyncoro to use distributed version of AsynCoro
 import asyncoro.disasyncoro as asyncoro
 
@@ -23,7 +23,7 @@ def receiver_proc(coro=None):
             print('Received "%s" from %s at %s' % \
                   (msg['msg'], msg['sender'].name, msg['sender'].location))
 
-asyncoro.logger.setLevel(logging.DEBUG)
+asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
 # scheduler = asyncoro.AsynCoro()
 channel = asyncoro.Channel('2clients')
 # register channel so client can get a reference to it

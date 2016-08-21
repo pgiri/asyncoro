@@ -1,21 +1,21 @@
 #!/usr/bin/env python
 
-import asyncoro, socket, logging, sys, time
+import asyncoro, socket, sys, time
 
 def client_send(clients, conn, coro=None):
     coro.set_daemon()
-    logging.debug('%s/%s started with %s', coro.name, id(coro), conn._fileno)
+    asyncoro.logger.debug('%s/%s started with %s', coro.name, id(coro), conn._fileno)
 
     while True:
         line = yield conn.recv_msg()
         if not line:
-            logging.debug('removing %s', conn._fileno)
+            asyncoro.logger.debug('removing %s', conn._fileno)
             clients.discard(conn)
             break
-        # logging.debug('got line "%s"', line)
+        # asyncoro.logger.debug('got line "%s"', line)
         for client in clients:
             if client != conn:
-                # logging.debug('sending "%s" to %s', line, client._fileno)
+                # asyncoro.logger.debug('sending "%s" to %s', line, client._fileno)
                 yield client.send_msg(line)
 
 def chat(host='localhost', port=1234, coro=None):
@@ -25,7 +25,7 @@ def chat(host='localhost', port=1234, coro=None):
     sock = asyncoro.AsynCoroSocket(sock)
     sock.bind((host, port))
     sock.listen(128)
-    logging.debug('server at %s', str(sock.getsockname()))
+    asyncoro.logger.debug('server at %s', str(sock.getsockname()))
 
     clients = set()
 
@@ -36,12 +36,13 @@ def chat(host='localhost', port=1234, coro=None):
             asyncoro.Coro(client_send, clients, conn)
     except:
         for client in clients:
-            logging.debug('closing %s', client._fileno)
+            asyncoro.logger.debug('closing %s', client._fileno)
             client.shutdown(socket.SHUT_RDWR)
             client.close()
         raise
 
 if __name__ == '__main__':
+    asyncoro.logger.setLevel(asyncoro.Logger.debug)
     asyncoro.Coro(chat)
     if sys.version_info.major > 2:
         read_input = input

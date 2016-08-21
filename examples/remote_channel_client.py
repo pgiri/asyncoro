@@ -3,7 +3,7 @@
 # example where client and server communicate through a channel.
 # use with its server 'remote_channel_server.py'
 
-import sys, logging
+import sys
 # import disasyncoro to use distributed version of AsynCoro
 import asyncoro.disasyncoro as asyncoro
 
@@ -36,6 +36,6 @@ def receiver_proc2(coro=None):
               (msg['msg'], msg['sender'].name, msg['sender'].location))
     yield rchannel.unsubscribe(coro)
 
-asyncoro.logger.setLevel(logging.DEBUG)
+asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
 # scheduler = asyncoro.AsynCoro()
 asyncoro.Coro(receiver_proc2)

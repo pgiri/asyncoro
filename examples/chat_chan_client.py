@@ -4,7 +4,7 @@
 # multiple nodes on local network, along with 'chat_chan_server.py';
 # text typed in a client is broadcast over a channel to all clients
 
-import sys, logging
+import sys
 import asyncoro.disasyncoro as asyncoro
 
 def recv_proc(client_id, coro=None):
@@ -46,5 +46,5 @@ def send_proc(coro=None):
     yield channel.unsubscribe(recv_coro)
 
 if __name__ == '__main__':
-    # asyncoro.logger.setLevel(logging.DEBUG)
+    # asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
     asyncoro.Coro(send_proc)

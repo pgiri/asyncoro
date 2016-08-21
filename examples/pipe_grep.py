@@ -1,6 +1,6 @@
 # Asynchronous pipe example using chained Popen
 
-import sys, logging, subprocess, traceback, platform
+import sys, subprocess, traceback, platform
 import asyncoro
 import asyncoro.asyncfile
     
@@ -28,7 +28,7 @@ def line_reader(apipe, coro=None):
         print(line.decode())
     raise StopIteration(nlines)
 
-# asyncoro.logger.setLevel(logging.DEBUG)
+# asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
 if platform.system() == 'Windows':
     # asyncfile.Popen must be used instead of subprocess.Popen
     p1 = asyncoro.asyncfile.Popen([r'\cygwin64\bin\grep.exe', '-i', 'error'],

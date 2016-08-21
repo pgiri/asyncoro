@@ -5,7 +5,7 @@
 
 # argv[1] must be a text file
 
-import sys, os, logging, traceback, subprocess, platform
+import sys, os, traceback, subprocess, platform
 import asyncoro
 import asyncoro.asyncfile
     
@@ -53,7 +53,7 @@ def custom_feeder(input, coro=None):
     stdout = yield reader.finish()
     print('     feeder sha1sum: %s' % stdout)
 
-# asyncoro.logger.setLevel(logging.DEBUG)
+# asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
 
 # simpler version using 'communicate'
 coro = asyncoro.Coro(communicate, sys.argv[1] if len(sys.argv) > 1 else sys.argv[0])

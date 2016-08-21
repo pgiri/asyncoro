@@ -1,7 +1,7 @@
 """Simple example demonstrating categorizing messages to coroutines.
 """
 
-import sys, random, logging
+import sys, random
 import asyncoro
 
 def client_proc(server, coro=None):
@@ -42,6 +42,6 @@ def server_proc(coro=None):
             break
 
 if __name__ == '__main__':
-    asyncoro.logger.setLevel(logging.DEBUG)
+    asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
     server = asyncoro.Coro(server_proc)
     client = asyncoro.Coro(client_proc, server)

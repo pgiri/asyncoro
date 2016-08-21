@@ -4,7 +4,7 @@
 # multiple nodes on local network, along with 'chat_sock_server.py';
 # text typed in a client is sent to the all other clients
 
-import sys, socket, logging, time
+import sys, socket, time
 import asyncoro
 
 def client_recv(conn, coro=None):
@@ -16,7 +16,7 @@ def client_recv(conn, coro=None):
         print(line.decode())
 
 if __name__ == '__main__':
-    asyncoro.logger.setLevel(logging.DEBUG)
+    asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
     # host name or IP address of server is arg1
     if len(sys.argv) > 1:
         host = sys.argv[1]

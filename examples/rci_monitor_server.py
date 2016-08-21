@@ -7,7 +7,7 @@
 # different networks but client must call 'scheduler.peer' method
 # appropriately.
 
-import sys, logging
+import sys
 # import disasyncoro to use distributed version of AsynCoro
 import asyncoro.disasyncoro as asyncoro
 
@@ -24,7 +24,7 @@ def rci_1(a, b=1, coro=None):
         # (remote) monitor (if any) gets this exception, too
         raise Exception('invalid invocation: %s' % b)
 
-asyncoro.logger.setLevel(logging.DEBUG)
+asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
 # 'secret' is set so only peers that use same secret can communicate
 scheduler = asyncoro.AsynCoro(name='server', secret='test')
 # register rci_1 so remote clients can request execution

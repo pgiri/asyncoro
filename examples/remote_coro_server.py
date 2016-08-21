@@ -8,7 +8,7 @@
 # different networks but client must call 'scheduler.peer' method
 # appropriately.
 
-import sys, logging
+import sys
 # import disasyncoro to use distributed version of AsynCoro
 import asyncoro.disasyncoro as asyncoro
 
@@ -19,7 +19,7 @@ def receiver(coro=None):
         msg = yield coro.receive()
         print('Received %s' % msg)
 
-asyncoro.logger.setLevel(logging.DEBUG)
+asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
 # call with 'udp_port=0' to start network services
 # scheduler = asyncoro.AsynCoro(secret='key')
 

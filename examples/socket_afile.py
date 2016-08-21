@@ -9,7 +9,7 @@
 
 # argv[1] must be a text file
 
-import socket, logging, hashlib, sys, os
+import socket, hashlib, sys, os
 import asyncoro
 import asyncoro.asyncfile
 
@@ -51,7 +51,7 @@ def server_proc(conn, coro=None):
     print('server sha1 csum: %s' % (csum.hexdigest()))
     print('lines: %s' % (nlines))
 
-asyncoro.logger.setLevel(logging.DEBUG)
+asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 sock.bind(('localhost', 0))
 sock.listen(5)

@@ -3,7 +3,7 @@
 # (tut_client.py) on same network;
 # see http://asyncoro.sourceforge.net/tutorial.html for details.
 
-import sys, logging
+import sys
 import asyncoro.disasyncoro as asyncoro
 
 def server_proc(coro=None):
@@ -13,7 +13,7 @@ def server_proc(coro=None):
         msg = yield coro.receive()
         print('processing %s' % (msg))
 
-asyncoro.logger.setLevel(logging.DEBUG)
+asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
 scheduler = asyncoro.AsynCoro(udp_port=0)
 server = asyncoro.Coro(server_proc)
 if sys.version_info.major > 2:

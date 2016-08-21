@@ -2,7 +2,7 @@
 
 # chat server; must be used with 'chat_chan_client.py'
 
-import sys, logging
+import sys
 # import disasyncoro to use distributed version of AsynCoro
 import asyncoro.disasyncoro as asyncoro
 
@@ -45,7 +45,7 @@ def server_proc(coro=None):
     coro.unregister()
 
 if __name__ == '__main__':
-    # asyncoro.logger.setLevel(logging.DEBUG)
+    # asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
     server = asyncoro.Coro(server_proc)
     if sys.version_info.major > 2:
         read_input = input

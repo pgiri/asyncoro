@@ -2,7 +2,7 @@
 
 # chat server; must be used with 'chat_sock_client.py'
 
-import sys, socket, logging, collections
+import sys, socket, collections
 # messages are sent as strings, instead of bytes, so this program
 # needs to be modified to work with Python 3
 import asyncoro
@@ -48,7 +48,7 @@ def server_proc(coro=None):
             break
 
 if __name__ == '__main__':
-    asyncoro.logger.setLevel(logging.DEBUG)
+    asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
     # host name or IP address of this node is arg1
     if len(sys.argv) > 1:
         host = sys.argv[1]

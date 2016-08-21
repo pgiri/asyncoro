@@ -3,7 +3,7 @@
 # client sends messages to a remote coroutine
 # use with its server 'remote_coro_server.py'
 
-import sys, logging
+import sys
 # import disasyncoro to use distributed version of AsynCoro
 import asyncoro.disasyncoro as asyncoro
 
@@ -16,6 +16,6 @@ def sender(coro=None):
     for x in range(10):
         rcoro.send('message %s' % x)
 
-asyncoro.logger.setLevel(logging.DEBUG)
+asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
 # scheduler = asyncoro.AsynCoro(secret='key')
 asyncoro.Coro(sender)

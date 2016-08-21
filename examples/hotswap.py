@@ -5,7 +5,7 @@
 # 'hotswap_funcs.py'; similarly, if 'server' command is given,
 # server's function is replaced
 
-import sys, logging, random
+import sys, random
 import asyncoro
 
 def server_proc(coro=None):
@@ -44,7 +44,7 @@ def swap(func_name, file_name, coro, *args, **kwargs):
         print('failed to load "%s" from "%s"' % (func_name, file_name))
 
 if __name__ == '__main__':
-    asyncoro.logger.setLevel(logging.DEBUG)
+    asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
     server = asyncoro.Coro(server_proc)
     client = asyncoro.Coro(client_proc, server)
     if sys.version_info.major > 2:
