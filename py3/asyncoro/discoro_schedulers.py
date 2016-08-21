@@ -105,6 +105,7 @@ class RemoteCoroScheduler(object):
         self._askew_results = {}
         self._servers = {}
         self._server_avail = asyncoro.Event()
+        Coro(computation.schedule)
 
     def schedule(self, gen, *args, **kwargs):
         """Similar to 'run' method of computation, except as noted above: This
