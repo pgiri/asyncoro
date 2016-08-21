@@ -82,9 +82,6 @@ def client_proc(job_id, rcoro, coro=None):
 
 
 def submit_jobs_proc(computation, njobs, coro=None):
-    if (yield computation.schedule()):
-        raise Exception('Failed to schedule computation')
-
     for i in range(njobs):
         # create remote coroutine
         rcoro = yield rcoro_scheduler.schedule(rcoro_proc)
@@ -96,8 +93,8 @@ def submit_jobs_proc(computation, njobs, coro=None):
 
 
 if __name__ == '__main__':
-    import logging, random, os
-    asyncoro.logger.setLevel(logging.DEBUG)
+    import random, os
+    # asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start it (private scheduler):
     Scheduler()

@@ -36,11 +36,6 @@ def compute(obj, client, coro=None):
 
 
 def client_proc(computation, njobs, coro=None):
-
-    # distribute computation to server
-    if (yield computation.schedule()):
-        raise Exception('schedule failed')
-
     # create a separate coroutine to receive results, so they can be processed
     # as soon as received
     def recv_results(coro=None):
@@ -67,8 +62,8 @@ def client_proc(computation, njobs, coro=None):
 
 
 if __name__ == '__main__':
-    import logging, random
-    asyncoro.logger.setLevel(logging.DEBUG)
+    import random
+    # asyncoro.logger.setLevel(ayncoro.Logger.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start it (private scheduler):
     Scheduler()

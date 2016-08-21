@@ -64,9 +64,6 @@ def client_proc(computation, njobs, coro=None):
     # 'status_proc' above
     computation.status_coro = asyncoro.Coro(status_proc)
 
-    if (yield computation.schedule()):
-        raise Exception('schedule failed')
-
     # submit jobs
     for i in range(njobs):
         rcoro = yield rcoro_scheduler.schedule(compute, i, 100000 + i)
@@ -81,8 +78,8 @@ def client_proc(computation, njobs, coro=None):
 
 
 if __name__ == '__main__':
-    import logging, random, sys, asyncoro.discoro
-    asyncoro.logger.setLevel(logging.DEBUG)
+    import random, sys, asyncoro.discoro
+    # asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start private scheduler:
     Scheduler()

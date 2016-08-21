@@ -56,7 +56,7 @@ def client_proc(computation, coro=None):
     # scheduler sends node / server status messages to status_coro
     computation.status_coro = asyncoro.Coro(status_proc)
 
-    # distribute computation to server
+    # since RemoteCoroScheduler is not used, computation must be first scheduled
     if (yield computation.schedule()):
         raise Exception('schedule failed')
 
@@ -79,8 +79,8 @@ def client_proc(computation, coro=None):
 
 
 if __name__ == '__main__':
-    import os, asyncoro.discoro, asyncoro.httpd, sys, logging, random
-    # asyncoro.logger.setLevel(logging.DEBUG)
+    import os, asyncoro.discoro, asyncoro.httpd, sys, random
+    # asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start it (private scheduler):
     Scheduler()

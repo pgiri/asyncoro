@@ -78,9 +78,6 @@ def compute(alg, n, coro=None):
 
 
 def client_proc(computation, coro=None):
-    if (yield computation.schedule()):
-        raise Exception('schedule failed')
-
     # execute 10 jobs (coroutines) and get their results. Note that
     # number of jobs created can be more than number of server
     # processes available; the scheduler will use as many processes as
@@ -98,8 +95,8 @@ def client_proc(computation, coro=None):
 
 
 if __name__ == '__main__':
-    import logging, random, functools, sys
-    asyncoro.logger.setLevel(logging.DEBUG)
+    import random, functools, sys
+    # asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start private scheduler:
     Scheduler()

@@ -53,9 +53,6 @@ def client_proc(computation, n, coro=None):
     # This should be created before scheduling computation
     job_scheduler = RemoteCoroScheduler(computation)
 
-    if (yield computation.schedule()):
-        raise Exception('schedule failed')
-
     # execute n jobs (coroutines) and get their results. Note that
     # number of jobs created can be more than number of server
     # processes available; the scheduler will use as many processes as
@@ -68,8 +65,8 @@ def client_proc(computation, n, coro=None):
 
 
 if __name__ == '__main__':
-    import sys, logging, random
-    asyncoro.logger.setLevel(logging.DEBUG)
+    import sys, random
+    asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
     asyncoro.AsynCoro(node='127.0.0.1', tcp_port=4567)
     n = 10 if len(sys.argv) == 1 else int(sys.argv[1])
     # if scheduler is not already running (on a node as a program),

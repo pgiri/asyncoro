@@ -60,11 +60,6 @@ def trend_proc(coro=None):
 # server processes, two local coroutines, one to receive trend signal from one
 # of the remote coroutines, and another to send data to two remote coroutines
 def client_proc(computation, coro=None):
-
-    # distribute computation to server
-    if (yield computation.schedule()):
-        raise Exception('schedule failed')
-
     trend_coro = asyncoro.Coro(trend_proc)
 
     rcoro_avg = yield rcoro_scheduler.schedule(rcoro_avg_proc, 0.4, trend_coro, 10)
@@ -101,8 +96,8 @@ def client_proc(computation, coro=None):
 
 
 if __name__ == '__main__':
-    import logging, random
-    asyncoro.logger.setLevel(logging.DEBUG)
+    import random
+    # asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
     # if scheduler is shared (i.e., running as program), nothing needs
     # to be done (its location can optionally be given to 'schedule');
     # othrwise, start private scheduler:

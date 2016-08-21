@@ -30,10 +30,6 @@ def compute_coro(coro=None):
 
 # client (local) coroutine submits computations
 def client_proc(computation, njobs, coro=None):
-
-    if (yield computation.schedule()):
-        raise Exception('Failed to schedule computation')
-
     # send 5 requests to remote process (compute_coro)
     def send_requests(rcoro, coro=None):
         # first send this local coroutine (to whom rcoro sends result)
@@ -62,8 +58,8 @@ def client_proc(computation, njobs, coro=None):
 
 
 if __name__ == '__main__':
-    import logging, random, sys
-    asyncoro.logger.setLevel(logging.DEBUG)
+    import random, sys
+    # asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
     # if scheduler is not already running (on a node as a program), start
     # private scheduler:
     Scheduler()

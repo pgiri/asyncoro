@@ -54,6 +54,7 @@ def status_proc(computation, njobs, coro=None):
 
 def client_proc(computation, njobs, coro=None):
     computation.status_coro = asyncoro.Coro(status_proc, computation, njobs)
+    # since RemoteCoroScheduler is not used, schedule computation
     if (yield computation.schedule()):
         raise Exception('Failed to schedule computation')
     # wait for jobs to be created and finished
@@ -62,8 +63,8 @@ def client_proc(computation, njobs, coro=None):
 
 
 if __name__ == '__main__':
-    import logging, random
-    asyncoro.logger.setLevel(logging.DEBUG)
+    import random
+    # asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start it (private scheduler):
     Scheduler()

@@ -62,9 +62,6 @@ def rcoro_proc(client, program, coro=None):
 
 # client (local) coroutine submits computations
 def client_proc(computation, program, n, coro=None):
-    if (yield computation.schedule()):
-        raise Exception('schedule failed')
-
     # send 10 random numbers to remote process (rcoro_proc)
     def send_input(rcoro, coro=None):
         for i in range(10):
@@ -106,8 +103,8 @@ def client_proc(computation, program, n, coro=None):
 
 
 if __name__ == '__main__':
-    import logging, random, sys, os
-    asyncoro.logger.setLevel(logging.DEBUG)
+    import random, sys, os
+    # asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start private scheduler:
     Scheduler()

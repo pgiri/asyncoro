@@ -14,29 +14,25 @@ def compute(i, n, coro=None):
 
 # client (local) coroutine submits computations
 def client_proc(computation, njobs, coro=None):
-
-    if (yield computation.schedule()):
-        raise Exception('Failed to schedule computation')
-
     # execute n jobs (coroutines) and get their results. Number of jobs created
     # can be more than number of server processes available; the scheduler will
     # use as many processes as necessary/available, running one job at a server
     # process
 
     # arguments must correspond to arguments for computaiton; multiple arguments
-    # (in this case) can be given as tuples
+    # (as in this case) can be given as tuples
     args = [(i, random.uniform(2, 5)) for i in range(njobs)]
     results = yield rcoro_scheduler.map_results(compute, args)
     # Coroutines may not be executed in the order of given list of args, but
     # results would be in the same order of given list of args
     for result in results:
         print('    result for %d from %s: %s' % result)
-    yield rcoro_scheduler.finish(close=True)
+    # yield rcoro_scheduler.finish(close=True)
 
 
 if __name__ == '__main__':
-    import logging, random, sys
-    asyncoro.logger.setLevel(logging.DEBUG)
+    import random, sys
+    # asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
     # if scheduler is not already running (on a node as a program), start
     # private scheduler:
     Scheduler()
