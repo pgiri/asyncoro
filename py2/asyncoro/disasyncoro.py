@@ -38,6 +38,482 @@ MaxConnectionErrors = 10
 MsgTimeout = asyncoro.MsgTimeout
 
 
+class PeerStatus(object):
+    """'peer_status' method of AsynCoro can be used to be notified of
+    status of peers (other AsynCoro's to communicate for distributed
+    programming). The status notifications are sent as messages to the
+    regisered coroutine. Each message is an instance of this class.
+    """
+
+    Online = 1
+    Offline = 0
+
+    def __init__(self, location, name, status):
+        self.location = location
+        self.name = name
+        self.status = status
+
+
+class AsynCoro(asyncoro.AsynCoro):
+    """This adds network services to asyncoro.AsynCoro so it can
+    communicate with peers.
+
+    If 'node' is not None, it must be either hostname or IP address
+    where asyncoro runs network services. If 'udp_port' is not None,
+    it is port number where asyncoro runs network services. If
+    'udp_port' is 0, the default port number 51350 is used. If
+    multiple instances of asyncoro are to be running on same host,
+    they all can be started with the same 'udp_port', so that asyncoro
+    instances automatically find each other.
+
+    'name' is used in locating peers. They must be unique. If 'name'
+    is not given, it is set to string 'node:tcp_port'.
+
+    'ext_ip_addr' is the IP address of NAT firewall/gateway if
+    asyncoro is behind that firewall/gateway.
+
+    If 'discover_peers' is True (default), this node broadcasts message to
+    detect other peers. If it is False, message is not broadcasted.
+
+    'secret' is string that is used to hash which is used for
+    authentication, so only peers that have same secret can
+    communicate.
+
+    'certfile' and 'keyfile' are path names for files containing SSL
+    certificates; see Python 'ssl' module.
+
+    'dest_path' is path to directory (folder) where transferred files
+    are saved. If path doesn't exist, asyncoro creates directory with
+    that path.
+
+    'max_file_size' is maximum length of file in bytes allowed for
+    transferred files. If it is 0 or None (default), there is no
+    limit.
+    """
+
+    __metaclass__ = Singleton
+
+    _instance = None
+    _sys_asyncoro = None
+
+    def __init__(self, *args, **kwargs):
+        AsynCoro._instance = self
+        atexit.register(self.finish)
+        super(self.__class__, self).__init__()
+        RCI._asyncoro = _SysAsynCoro_._asyncoro = self
+        self._sys_asyncoro = _SysAsynCoro_(*args, **kwargs)
+        self.__class__._sys_asyncoro = self._sys_asyncoro
+        self._location = self._sys_asyncoro._location
+        self._name = self._sys_asyncoro._name
+        self._certfile = self._sys_asyncoro._certfile
+        self._keyfile = self._sys_asyncoro._keyfile
+        self.__dest_path_prefix = self.__dest_path = self._sys_asyncoro.dest_path
+
+    @classmethod
+    def instance(cls, *args, **kwargs):
+        """Returns (singleton) instance of AsynCoro.
+        """
+        if not cls._instance:
+            cls._instance = cls(*args, **kwargs)
+        return cls._instance
+
+    @property
+    def dest_path(self):
+        return self.__dest_path
+
+    @dest_path.setter
+    def dest_path(self, path):
+        if not self._sys_asyncoro:
+            raise ValueError('AsynCoro not initialized!')
+        path = os.path.normpath(path)
+        if not path.startswith(self.__dest_path_prefix):
+            path = os.path.join(self.__dest_path_prefix,
+                                os.path.splitdrive(path)[1].lstrip(os.sep))
+        try:
+            os.makedirs(path)
+        except OSError as exc:
+            if exc.errno != errno.EEXIST:
+                raise
+        self._sys_asyncoro.dest_path = self.__dest_path = path
+
+    def finish(self):
+        if AsynCoro._instance:
+            super(self.__class__, self).finish()
+            AsynCoro._instance = None
+            self._sys_asyncoro.finish()
+            self._notifier.terminate()
+            logger.shutdown()
+
+    def locate(self, name, timeout=None):
+        """Must be used with 'yield' as
+        'loc = yield scheduler.locate("peer")'.
+
+        Find and return location of peer with 'name'.
+        """
+        if not self._sys_asyncoro:
+            raise StopIteration(None)
+        _Peer._lock.acquire()
+        for peer in _Peer.peers.itervalues():
+            if peer.name == name:
+                loc = peer.location
+                break
+        else:
+            loc = None
+        _Peer._lock.release()
+        if not loc:
+            req = _NetRequest('locate_peer', kwargs={'name': name})
+            req.event = Event()
+            req_id = id(req)
+            self._lock.acquire()
+            self._pending_reqs[req_id] = req
+            self._lock.release()
+            _Peer.send_req_to(req, None)
+            if (yield req.event.wait(timeout)) is False:
+                req.reply = None
+            loc = req.reply
+            self._lock.acquire()
+            self._pending_reqs.pop(req_id, None)
+            self._lock.release()
+        raise StopIteration(loc)
+
+    def peer(self, loc, udp_port=0, stream_send=False, broadcast=False):
+        """Must be used with 'yield', as
+        'status = yield scheduler.peer("loc")'.
+
+        Add asyncoro running at 'loc' as peer to communicate. Peers on
+        a local network can find each other automatically, but if they
+        are on different networks, 'peer' can be used so they find
+        each other. 'loc' can be either an instance of Location or
+        host name or IP address. If 'loc' is Location instance and
+        'port' is 0, or 'loc' is host name or IP address, then all
+        asyncoros running at the host will have streaming mode set as
+        per 'stream_send'.
+
+        If 'stream_send' is True, this asyncoro uses same connection
+        again and again to send messages (i.e., as a stream) to peer
+        'host' (instead of one message per connection).
+
+        If 'broadcast' is True, the client information is broadcast on
+        the network of peer. This can be used if client is on remote
+        network and needs to communicate with all asyncoro's available
+        on the network of peer (at 'loc').
+        """
+
+        if not self._sys_asyncoro:
+            raise StopIteration(-1)
+
+        def _peer(coro=None):
+            SysCoro(self._sys_asyncoro.peer, coro, loc, udp_port, stream_send, broadcast)
+            yield coro.recv()
+
+        yield Coro(_peer).finish()
+
+    def peer_status(self, coro):
+        """This method can be used to be notified of status of peers
+        (other AsynCoro's to communicate for distributed
+        programming). The status notifications are sent as messages to
+        the regisered coroutine. Each message is an instance of
+        PeerStatus.
+        """
+        _Peer.peer_status(coro)
+
+    def peers(self):
+        """Returns list of current peers (as Location instances).
+        """
+        return _Peer.get_peers()
+
+    def close_peer(self, location, timeout=MsgTimeout):
+        """Must be used with 'yield', as
+        'yield scheduler.close_peer("loc")'.
+
+        Close peer at 'location'.
+        """
+        if isinstance(location, Location):
+            _Peer._lock.acquire()
+            peer = _Peer.peers.get((location.addr, location.port), None)
+            _Peer._lock.release()
+            if peer:
+
+                def sys_proc(peer, timeout, done, coro=None):
+                    yield _Peer.close_peer(peer, timeout=timeout, coro=coro)
+                    done.set()
+
+                event = Event()
+                SysCoro(sys_proc, peer, timeout, event)
+                yield event.wait()
+
+    def ignore_peers(self, ignore):
+        """Don't respond to 'ping' from peers if 'ignore=True'. This can be used
+        during shutdown, or to limit peers to communicate.
+        """
+        if self._sys_asyncoro:
+            self._sys_asyncoro.ignore_peers(ignore)
+
+    def discover_peers(self, port=None):
+        """This method can be invoked (periodically?) to broadcast message to
+        discover peers, if there is a chance initial broadcast message may be
+        lost (as these messages are sent over UDP).
+        """
+        if not self._sys_asyncoro:
+            return
+        SysCoro(self._sys_asyncoro.discover_peers, port=port)
+
+    def send_file(self, location, file, dir=None, overwrite=False, timeout=MsgTimeout):
+        """Must be used with 'yield' as
+        'val = yield scheduler.send_file(location, "file1")'.
+
+        Transfer 'file' to peer at 'location'. If 'dir' is not None, it must be
+        a relative path (not absolute path), in which case, file will be saved
+        at peer's dest_path + dir. Returns -1 in case of error, 0 if the file is
+        transferred, 1 if the same file is already at the destination with same
+        size, timestamp and permissions (so file is not transferred) and os.stat
+        structure if a file with same name is at the destination with different
+        size/timestamp/permissions, but 'overwrite' is False. 'timeout' is max
+        seconds to transfer 1MB of data. If return value is 0, the sender may
+        want to delete file with 'del_file' later.
+        """
+        try:
+            stat_buf = os.stat(file)
+        except:
+            logger.warning('send_file: File "%s" is not valid', file)
+            raise StopIteration(-1)
+        if not ((stat.S_IMODE(stat_buf.st_mode) & stat.S_IREAD) and stat.S_ISREG(stat_buf.st_mode)):
+            logger.warning('send_file: File "%s" is not valid', file)
+            raise StopIteration(-1)
+        if dir and isinstance(dir, str):
+            dir = dir.strip()
+            # reject absolute path for dir
+            if os.path.join(os.sep, dir) == dir:
+                logger.warning('send_file: Absolute path for dir "%s" is not allowed', dir)
+                raise StopIteration(-1)
+        peer = _Peer.get_peer(location)
+        if peer is None:
+            logger.debug('%s is not a valid peer', location)
+            raise StopIteration(-1)
+        kwargs = {'file': os.path.basename(file), 'stat_buf': stat_buf,
+                  'overwrite': overwrite is True, 'dir': dir, 'sep': os.sep}
+        req = _NetRequest('send_file', kwargs=kwargs, dst=location, timeout=timeout)
+        sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                           keyfile=self._keyfile, certfile=self._certfile)
+        if timeout:
+            sock.settimeout(timeout)
+        fd = open(file, 'rb')
+        try:
+            yield sock.connect((location.addr, location.port))
+            req.auth = peer.auth
+            yield sock.send_msg(serialize(req))
+            recvd = yield sock.recv_msg()
+            recvd = deserialize(recvd)
+            sent = 0
+            while sent == recvd:
+                data = fd.read(1024000)
+                if not data:
+                    break
+                yield sock.sendall(data)
+                sent += len(data)
+                recvd = yield sock.recv_msg()
+                recvd = deserialize(recvd)
+            if recvd == stat_buf.st_size:
+                reply = 0
+            else:
+                reply = -1
+        except socket.error as exc:
+            reply = -1
+            logger.debug('could not send "%s" to %s', req.name, location)
+            if len(exc.args) == 1 and exc.args[0] == 'hangup':
+                logger.warning('peer "%s" not reachable', location)
+                # TODO: remove peer?
+        except:
+            logger.warning('send_file: Could not send "%s" to %s', file, location)
+            reply = -1
+        finally:
+            sock.close()
+            fd.close()
+        raise StopIteration(reply)
+
+    def del_file(self, location, file, dir=None, timeout=None):
+        """Must be used with 'yield' as
+        'loc = yield scheduler.del_file(location, "file1")'.
+
+        Delete 'file' from peer at 'location'. 'dir' must be
+        same as that used for 'send_file'.
+        """
+        if isinstance(dir, str) and dir:
+            dir = dir.strip()
+            # reject absolute path for dir
+            if os.path.join(os.sep, dir) == dir:
+                raise StopIteration(-1)
+        kwargs = {'file': os.path.basename(file), 'dir': dir}
+        req = _NetRequest('del_file', kwargs=kwargs, dst=location, timeout=timeout)
+        reply = yield _Peer._sync_reply(req)
+        if reply is None:
+            reply = -1
+        raise StopIteration(reply)
+
+    def _sys_call_(self, method, *args, **kwargs):
+        swing = {'result': None, 'event': Event()}
+        SysCoro(self._sys_asyncoro._swing_call_, swing, method, *args, **kwargs)
+        yield swing['event'].wait()
+        yield swing['result']
+
+
+class RCI(object):
+    """Remote Coro (Callable) Interface.
+
+    Methods registered with RCI can be executed as coroutines on
+    request (by remotely running coroutines).
+    """
+
+    __slots__ = ('_name', '_location', '_method')
+
+    _asyncoro = None
+
+    def __init__(self, method, name=None):
+        """'method' must be generator method; this is used to create
+        coroutines. If 'name' is not given, method's function name is
+        used for registering.
+        """
+        if not inspect.isgeneratorfunction(method):
+            raise RuntimeError('method must be generator function')
+        self._method = method
+        if name:
+            self._name = name
+        else:
+            self._name = method.__name__
+        if not RCI._asyncoro:
+            RCI._asyncoro = AsynCoro.instance()
+        self._location = RCI._asyncoro._location
+
+    @property
+    def location(self):
+        """Get Location instance where this RCI is running.
+        """
+        return copy.copy(self._location)
+
+    @property
+    def name(self):
+        """Get name of RCI.
+        """
+        return self._name
+
+    @staticmethod
+    def locate(name, location=None, timeout=None):
+        """Must be used with 'yield' as
+        'rci = yield RCI.locate("name")'.
+
+        Returns RCI instance to registered RCI at a remote peer so
+        its method can be used to execute coroutines at that peer.
+
+        If 'location' is given, RCI is looked up at that specific
+        peer; otherwise, all known peers are queried for given name.
+        """
+        if not RCI._asyncoro:
+            RCI._asyncoro = AsynCoro.instance()
+        req = _NetRequest('locate_rci', kwargs={'name': name}, dst=location, timeout=timeout)
+        req.event = Event()
+        req_id = id(req)
+        RCI._asyncoro._lock.acquire()
+        RCI._asyncoro._pending_reqs[req_id] = req
+        RCI._asyncoro._lock.release()
+        _Peer.send_req_to(req, location)
+        if (yield req.event.wait(timeout)) is False:
+            req.reply = None
+        rci = req.reply
+        RCI._asyncoro._lock.acquire()
+        RCI._asyncoro._pending_reqs.pop(req_id, None)
+        RCI._asyncoro._lock.release()
+        raise StopIteration(rci)
+
+    def register(self):
+        """RCI must be registered so it can be located.
+        """
+        if self._location != RCI._asyncoro._location:
+            return -1
+        if not inspect.isgeneratorfunction(self._method):
+            return -1
+        RCI._asyncoro._lock.acquire()
+        if RCI._asyncoro._rcis.get(self._name, None) is None:
+            RCI._asyncoro._rcis[self._name] = self
+            RCI._asyncoro._lock.release()
+            return 0
+        else:
+            RCI._asyncoro._lock.release()
+            return -1
+
+    def unregister(self):
+        """Unregister registered RCI; see 'register' above.
+        """
+        if self._location != RCI._asyncoro._location:
+            return -1
+        RCI._asyncoro._lock.acquire()
+        if RCI._asyncoro._rcis.pop(self._name, None) is None:
+            RCI._asyncoro._lock.release()
+            return -1
+        else:
+            RCI._asyncoro._lock.release()
+            return 0
+
+    def __call__(self, *args, **kwargs):
+        """Must be used with 'yeild' as 'rcoro = yield rci(*args, **kwargs)'.
+
+        Run RCI (method at remote location) with args and kwargs. Both
+        args and kwargs must be serializable. Returns (remote) Coro
+        instance.
+        """
+        req = _NetRequest('run_rci', kwargs={'name': self._name, 'args': args, 'kwargs': kwargs},
+                          dst=self._location, timeout=MsgTimeout)
+        reply = yield _Peer._sync_reply(req)
+        if isinstance(reply, Coro):
+            raise StopIteration(reply)
+        elif reply is None:
+            raise StopIteration(None)
+        else:
+            raise Exception(reply)
+
+    def __getstate__(self):
+        state = {'_name': self._name, '_location': self._location}
+        return state
+
+    def __setstate__(self, state):
+        self._name = state['_name']
+        self._location = state['_location']
+
+    def __eq__(self, other):
+        return (isinstance(other, RCI) and
+                self._name == other._name and self._location == other._location)
+
+    def __ne__(self, other):
+        return ((not isinstance(other, RCI)) or
+                self._name != other._name or self._location != other._location)
+
+    def __repr__(self):
+        s = '%s' % (self._name)
+        if self._location:
+            s = '%s@%s' % (s, self._location)
+        return s
+
+
+class SysCoro(asyncoro.Coro):
+    """Coroutine meant for reactive components, always ready to respond to
+    events; i.e., takes very little CPU time to process events. This is meant
+    for internal use to handle network traffic, timer events etc. in asyncoro
+    modules. These coroutines run in seperate AsynCoro thread (_SysAsynCoro_),
+    so if user coroutines (Coro instances) take too much CPU time, SysCoro can
+    still respond to such events quickly.
+
+    This class is not meant for users, as using this improperly may break
+    (parts of) asyncoro.
+    """
+
+    _asyncoro = None
+
+    def __init__(self, *args, **kwargs):
+        if not SysCoro._asyncoro:
+            AsynCoro.instance()
+        self._scheduler = SysCoro._asyncoro
+        super(SysCoro, self).__init__(*args, **kwargs)
+
+
 class _NetRequest(object):
     """Internal use only.
     """
@@ -61,22 +537,6 @@ class _NetRequest(object):
     def __setstate__(self, state):
         for k, v in state.iteritems():
             setattr(self, k, v)
-
-
-class PeerStatus(object):
-    """'peer_status' method of AsynCoro can be used to be notified of
-    status of peers (other AsynCoro's to communicate for distributed
-    programming). The status notifications are sent as messages to the
-    regisered coroutine. Each message is an instance of this class.
-    """
-
-    Online = 1
-    Offline = 0
-
-    def __init__(self, location, name, status):
-        self.location = location
-        self.name = name
-        self.status = status
 
 
 class _Peer(object):
@@ -350,464 +810,6 @@ class _Peer(object):
         else:
             logger.warning('invalid peer status coroutine ignored')
         _Peer._lock.release()
-
-
-class RCI(object):
-    """Remote Coro (Callable) Interface.
-
-    Methods registered with RCI can be executed as coroutines on
-    request (by remotely running coroutines).
-    """
-
-    __slots__ = ('_name', '_location', '_method')
-
-    _asyncoro = None
-
-    def __init__(self, method, name=None):
-        """'method' must be generator method; this is used to create
-        coroutines. If 'name' is not given, method's function name is
-        used for registering.
-        """
-        if not inspect.isgeneratorfunction(method):
-            raise RuntimeError('method must be generator function')
-        self._method = method
-        if name:
-            self._name = name
-        else:
-            self._name = method.__name__
-        if not RCI._asyncoro:
-            RCI._asyncoro = AsynCoro.instance()
-        self._location = RCI._asyncoro._location
-
-    @property
-    def location(self):
-        """Get Location instance where this RCI is running.
-        """
-        return copy.copy(self._location)
-
-    @property
-    def name(self):
-        """Get name of RCI.
-        """
-        return self._name
-
-    @staticmethod
-    def locate(name, location=None, timeout=None):
-        """Must be used with 'yield' as
-        'rci = yield RCI.locate("name")'.
-
-        Returns RCI instance to registered RCI at a remote peer so
-        its method can be used to execute coroutines at that peer.
-
-        If 'location' is given, RCI is looked up at that specific
-        peer; otherwise, all known peers are queried for given name.
-        """
-        if not RCI._asyncoro:
-            RCI._asyncoro = AsynCoro.instance()
-        req = _NetRequest('locate_rci', kwargs={'name': name}, dst=location, timeout=timeout)
-        req.event = Event()
-        req_id = id(req)
-        RCI._asyncoro._lock.acquire()
-        RCI._asyncoro._pending_reqs[req_id] = req
-        RCI._asyncoro._lock.release()
-        _Peer.send_req_to(req, location)
-        if (yield req.event.wait(timeout)) is False:
-            req.reply = None
-        rci = req.reply
-        RCI._asyncoro._lock.acquire()
-        RCI._asyncoro._pending_reqs.pop(req_id, None)
-        RCI._asyncoro._lock.release()
-        raise StopIteration(rci)
-
-    def register(self):
-        """RCI must be registered so it can be located.
-        """
-        if self._location != RCI._asyncoro._location:
-            return -1
-        if not inspect.isgeneratorfunction(self._method):
-            return -1
-        RCI._asyncoro._lock.acquire()
-        if RCI._asyncoro._rcis.get(self._name, None) is None:
-            RCI._asyncoro._rcis[self._name] = self
-            RCI._asyncoro._lock.release()
-            return 0
-        else:
-            RCI._asyncoro._lock.release()
-            return -1
-
-    def unregister(self):
-        """Unregister registered RCI; see 'register' above.
-        """
-        if self._location != RCI._asyncoro._location:
-            return -1
-        RCI._asyncoro._lock.acquire()
-        if RCI._asyncoro._rcis.pop(self._name, None) is None:
-            RCI._asyncoro._lock.release()
-            return -1
-        else:
-            RCI._asyncoro._lock.release()
-            return 0
-
-    def __call__(self, *args, **kwargs):
-        """Must be used with 'yeild' as 'rcoro = yield rci(*args, **kwargs)'.
-
-        Run RCI (method at remote location) with args and kwargs. Both
-        args and kwargs must be serializable. Returns (remote) Coro
-        instance.
-        """
-        req = _NetRequest('run_rci', kwargs={'name': self._name, 'args': args, 'kwargs': kwargs},
-                          dst=self._location, timeout=MsgTimeout)
-        reply = yield _Peer._sync_reply(req)
-        if isinstance(reply, Coro):
-            raise StopIteration(reply)
-        elif reply is None:
-            raise StopIteration(None)
-        else:
-            raise Exception(reply)
-
-    def __getstate__(self):
-        state = {'_name': self._name, '_location': self._location}
-        return state
-
-    def __setstate__(self, state):
-        self._name = state['_name']
-        self._location = state['_location']
-
-    def __eq__(self, other):
-        return (isinstance(other, RCI) and
-                self._name == other._name and self._location == other._location)
-
-    def __ne__(self, other):
-        return ((not isinstance(other, RCI)) or
-                self._name != other._name or self._location != other._location)
-
-    def __repr__(self):
-        s = '%s' % (self._name)
-        if self._location:
-            s = '%s@%s' % (s, self._location)
-        return s
-
-
-class AsynCoro(asyncoro.AsynCoro):
-    """This adds network services to asyncoro.AsynCoro so it can
-    communicate with peers.
-
-    If 'node' is not None, it must be either hostname or IP address
-    where asyncoro runs network services. If 'udp_port' is not None,
-    it is port number where asyncoro runs network services. If
-    'udp_port' is 0, the default port number 51350 is used. If
-    multiple instances of asyncoro are to be running on same host,
-    they all can be started with the same 'udp_port', so that asyncoro
-    instances automatically find each other.
-
-    'name' is used in locating peers. They must be unique. If 'name'
-    is not given, it is set to string 'node:tcp_port'.
-
-    'ext_ip_addr' is the IP address of NAT firewall/gateway if
-    asyncoro is behind that firewall/gateway.
-
-    If 'discover_peers' is True (default), this node broadcasts message to
-    detect other peers. If it is False, message is not broadcasted.
-
-    'secret' is string that is used to hash which is used for
-    authentication, so only peers that have same secret can
-    communicate.
-
-    'certfile' and 'keyfile' are path names for files containing SSL
-    certificates; see Python 'ssl' module.
-
-    'dest_path' is path to directory (folder) where transferred files
-    are saved. If path doesn't exist, asyncoro creates directory with
-    that path.
-
-    'max_file_size' is maximum length of file in bytes allowed for
-    transferred files. If it is 0 or None (default), there is no
-    limit.
-    """
-
-    __metaclass__ = Singleton
-
-    _instance = None
-    _sys_asyncoro = None
-
-    def __init__(self, *args, **kwargs):
-        AsynCoro._instance = self
-        atexit.register(self.finish)
-        super(self.__class__, self).__init__()
-        RCI._asyncoro = _SysAsynCoro_._asyncoro = self
-        self._sys_asyncoro = _SysAsynCoro_(*args, **kwargs)
-        self.__class__._sys_asyncoro = self._sys_asyncoro
-        self._location = self._sys_asyncoro._location
-        self._name = self._sys_asyncoro._name
-        self._certfile = self._sys_asyncoro._certfile
-        self._keyfile = self._sys_asyncoro._keyfile
-        self.__dest_path_prefix = self.__dest_path = self._sys_asyncoro.dest_path
-
-    @classmethod
-    def instance(cls, *args, **kwargs):
-        """Returns (singleton) instance of AsynCoro.
-        """
-        if not cls._instance:
-            cls._instance = cls(*args, **kwargs)
-        return cls._instance
-
-    @property
-    def dest_path(self):
-        return self.__dest_path
-
-    @dest_path.setter
-    def dest_path(self, path):
-        if not self._sys_asyncoro:
-            raise ValueError('AsynCoro not initialized!')
-        path = os.path.normpath(path)
-        if not path.startswith(self.__dest_path_prefix):
-            path = os.path.join(self.__dest_path_prefix,
-                                os.path.splitdrive(path)[1].lstrip(os.sep))
-        try:
-            os.makedirs(path)
-        except OSError as exc:
-            if exc.errno != errno.EEXIST:
-                raise
-        self._sys_asyncoro.dest_path = self.__dest_path = path
-
-    def finish(self):
-        if AsynCoro._instance:
-            super(self.__class__, self).finish()
-            AsynCoro._instance = None
-            self._sys_asyncoro.finish()
-            self._notifier.terminate()
-            logger.shutdown()
-
-    def locate(self, name, timeout=None):
-        """Must be used with 'yield' as
-        'loc = yield scheduler.locate("peer")'.
-
-        Find and return location of peer with 'name'.
-        """
-        if not self._sys_asyncoro:
-            raise StopIteration(None)
-        _Peer._lock.acquire()
-        for peer in _Peer.peers.itervalues():
-            if peer.name == name:
-                loc = peer.location
-                break
-        else:
-            loc = None
-        _Peer._lock.release()
-        if not loc:
-            req = _NetRequest('locate_peer', kwargs={'name': name})
-            req.event = Event()
-            req_id = id(req)
-            self._lock.acquire()
-            self._pending_reqs[req_id] = req
-            self._lock.release()
-            _Peer.send_req_to(req, None)
-            if (yield req.event.wait(timeout)) is False:
-                req.reply = None
-            loc = req.reply
-            self._lock.acquire()
-            self._pending_reqs.pop(req_id, None)
-            self._lock.release()
-        raise StopIteration(loc)
-
-    def peer(self, loc, udp_port=0, stream_send=False, broadcast=False):
-        """Must be used with 'yield', as
-        'status = yield scheduler.peer("loc")'.
-
-        Add asyncoro running at 'loc' as peer to communicate. Peers on
-        a local network can find each other automatically, but if they
-        are on different networks, 'peer' can be used so they find
-        each other. 'loc' can be either an instance of Location or
-        host name or IP address. If 'loc' is Location instance and
-        'port' is 0, or 'loc' is host name or IP address, then all
-        asyncoros running at the host will have streaming mode set as
-        per 'stream_send'.
-
-        If 'stream_send' is True, this asyncoro uses same connection
-        again and again to send messages (i.e., as a stream) to peer
-        'host' (instead of one message per connection).
-
-        If 'broadcast' is True, the client information is broadcast on
-        the network of peer. This can be used if client is on remote
-        network and needs to communicate with all asyncoro's available
-        on the network of peer (at 'loc').
-        """
-
-        if not self._sys_asyncoro:
-            raise StopIteration(-1)
-
-        def _peer(coro=None):
-            SysCoro(self._sys_asyncoro.peer, coro, loc, udp_port, stream_send, broadcast)
-            yield coro.recv()
-
-        yield Coro(_peer).finish()
-
-    def peer_status(self, coro):
-        """This method can be used to be notified of status of peers
-        (other AsynCoro's to communicate for distributed
-        programming). The status notifications are sent as messages to
-        the regisered coroutine. Each message is an instance of
-        PeerStatus.
-        """
-        _Peer.peer_status(coro)
-
-    def peers(self):
-        """Returns list of current peers (as Location instances).
-        """
-        return _Peer.get_peers()
-
-    def close_peer(self, location, timeout=MsgTimeout):
-        """Must be used with 'yield', as
-        'yield scheduler.close_peer("loc")'.
-
-        Close peer at 'location'.
-        """
-        if isinstance(location, Location):
-            event = Event()
-            def sys_proc(peer, timeout, done, coro=None):
-                yield _Peer.close_peer(peer, timeout=timeout, coro=coro)
-                done.set()
-            _Peer._lock.acquire()
-            peer = _Peer.peers.get((location.addr, location.port), None)
-            _Peer._lock.release()
-            if peer:
-                SysCoro(sys_proc, peer, timeout, event)
-                yield event.wait()
-
-    def ignore_peers(self, ignore):
-        """Don't respond to 'ping' from peers if 'ignore=True'. This can be used
-        during shutdown, or to limit peers to communicate.
-        """
-        if self._sys_asyncoro:
-            self._sys_asyncoro.ignore_peers(ignore)
-
-    def discover_peers(self, port=None):
-        """This method can be invoked (periodically?) to broadcast message to
-        discover peers, if there is a chance initial broadcast message may be
-        lost (as these messages are sent over UDP).
-        """
-        if not self._sys_asyncoro:
-            return
-        SysCoro(self._sys_asyncoro.discover_peers, port=port)
-
-    def send_file(self, location, file, dir=None, overwrite=False, timeout=MsgTimeout):
-        """Must be used with 'yield' as
-        'val = yield scheduler.send_file(location, "file1")'.
-
-        Transfer 'file' to peer at 'location'. If 'dir' is not None, it must be
-        a relative path (not absolute path), in which case, file will be saved
-        at peer's dest_path + dir. Returns -1 in case of error, 0 if the file is
-        transferred, 1 if the same file is already at the destination with same
-        size, timestamp and permissions (so file is not transferred) and os.stat
-        structure if a file with same name is at the destination with different
-        size/timestamp/permissions, but 'overwrite' is False. 'timeout' is max
-        seconds to transfer 1MB of data. If return value is 0, the sender may
-        want to delete file with 'del_file' later.
-        """
-        try:
-            stat_buf = os.stat(file)
-        except:
-            logger.warning('send_file: File "%s" is not valid', file)
-            raise StopIteration(-1)
-        if not ((stat.S_IMODE(stat_buf.st_mode) & stat.S_IREAD) and stat.S_ISREG(stat_buf.st_mode)):
-            logger.warning('send_file: File "%s" is not valid', file)
-            raise StopIteration(-1)
-        if dir and isinstance(dir, str):
-            dir = dir.strip()
-            # reject absolute path for dir
-            if os.path.join(os.sep, dir) == dir:
-                logger.warning('send_file: Absolute path for dir "%s" is not allowed', dir)
-                raise StopIteration(-1)
-        peer = _Peer.get_peer(location)
-        if peer is None:
-            logger.debug('%s is not a valid peer', location)
-            raise StopIteration(-1)
-        kwargs = {'file': os.path.basename(file), 'stat_buf': stat_buf,
-                  'overwrite': overwrite is True, 'dir': dir, 'sep': os.sep}
-        req = _NetRequest('send_file', kwargs=kwargs, dst=location, timeout=timeout)
-        sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
-                           keyfile=self._keyfile, certfile=self._certfile)
-        if timeout:
-            sock.settimeout(timeout)
-        fd = open(file, 'rb')
-        try:
-            yield sock.connect((location.addr, location.port))
-            req.auth = peer.auth
-            yield sock.send_msg(serialize(req))
-            recvd = yield sock.recv_msg()
-            recvd = deserialize(recvd)
-            sent = 0
-            while sent == recvd:
-                data = fd.read(1024000)
-                if not data:
-                    break
-                yield sock.sendall(data)
-                sent += len(data)
-                recvd = yield sock.recv_msg()
-                recvd = deserialize(recvd)
-            if recvd == stat_buf.st_size:
-                reply = 0
-            else:
-                reply = -1
-        except socket.error as exc:
-            reply = -1
-            logger.debug('could not send "%s" to %s', req.name, location)
-            if len(exc.args) == 1 and exc.args[0] == 'hangup':
-                logger.warning('peer "%s" not reachable', location)
-                # TODO: remove peer?
-        except:
-            logger.warning('send_file: Could not send "%s" to %s', file, location)
-            reply = -1
-        finally:
-            sock.close()
-            fd.close()
-        raise StopIteration(reply)
-
-    def del_file(self, location, file, dir=None, timeout=None):
-        """Must be used with 'yield' as
-        'loc = yield scheduler.del_file(location, "file1")'.
-
-        Delete 'file' from peer at 'location'. 'dir' must be
-        same as that used for 'send_file'.
-        """
-        if isinstance(dir, str) and dir:
-            dir = dir.strip()
-            # reject absolute path for dir
-            if os.path.join(os.sep, dir) == dir:
-                raise StopIteration(-1)
-        kwargs = {'file': os.path.basename(file), 'dir': dir}
-        req = _NetRequest('del_file', kwargs=kwargs, dst=location, timeout=timeout)
-        reply = yield _Peer._sync_reply(req)
-        if reply is None:
-            reply = -1
-        raise StopIteration(reply)
-
-    def _sys_call_(self, method, *args, **kwargs):
-        swing = {'result': None, 'event': Event()}
-        SysCoro(self._sys_asyncoro._swing_call_, swing, method, *args, **kwargs)
-        yield swing['event'].wait()
-        yield swing['result']
-
-
-class SysCoro(asyncoro.Coro):
-    """Coroutine meant for reactive components, always ready to respond to
-    events; i.e., takes very little CPU time to process events. This is meant
-    for internal use to handle network traffic, timer events etc. in asyncoro
-    modules. These coroutines run in seperate AsynCoro thread (_SysAsynCoro_),
-    so if user coroutines (Coro instances) take too much CPU time, SysCoro can
-    still respond to such events quickly.
-
-    This class is not meant for users, as using this improperly may break
-    (parts of) asyncoro.
-    """
-
-    _asyncoro = None
-
-    def __init__(self, *args, **kwargs):
-        if not SysCoro._asyncoro:
-            AsynCoro.instance()
-        self._scheduler = SysCoro._asyncoro
-        super(SysCoro, self).__init__(*args, **kwargs)
 
 
 class _SysAsynCoro_(asyncoro.AsynCoro):
