@@ -122,7 +122,7 @@ class Computation(object):
 
     def __init__(self, components, status_coro=None, timeout=MsgTimeout,
                  pulse_interval=(2*MinPulseInterval), ping_interval=None, zombie_period=0,
-                 node_filters=[]):
+                 node_filters=[], peers_communicate=False):
         """'components' should be a list, each element of which is either a
         module, a (generator or normal) function, path name of a file, a class
         or an object (in which case the code for its class is sent).
@@ -184,6 +184,7 @@ class Computation(object):
         self.zombie_period = zombie_period
         self._node_filters = node_filters
         self._location = None
+        self._peers_communicate = bool(peers_communicate)
         depends = set()
         cwd = os.getcwd()
         for dep in components:
@@ -488,11 +489,11 @@ class Computation(object):
                 if self.zombie_period and (time.time() - last_pulse) > self.zombie_period:
                     logger.warning('scheduler is zombie!')
                     if self._auth:
-                        self._pulse_coro = None
                         yield self.close()
                     break
             else:
                 logger.debug('ignoring invalid pulse message')
+        self._pulse_coro = None
 
 
 class Scheduler(object):
@@ -602,6 +603,7 @@ class Scheduler(object):
         self.__terminate = False
         self._shared = False
         self._node_port = kwargs.pop('discoronode_port', 51351)
+        self.__server_locations = set()
 
         kwargs['name'] = 'discoro_scheduler'
         clean = kwargs.pop('clean', False)
@@ -709,7 +711,6 @@ class Scheduler(object):
                             self._cur_computation.status_coro.send(node_status)
 
                 elif status in (Scheduler.ServerClosed, Scheduler.ServerDisconnected):
-                    asyncoro.logger.debug('%s: %s', location, msg['status'])
                     node = self._nodes.get(location.addr, None)
                     if not node:
                         continue
@@ -723,14 +724,15 @@ class Scheduler(object):
                             node.status = Scheduler.NodeIgnore
                     if not server:
                         continue
-                    if (self._cur_computation and self._cur_computation.status_coro):
-                        self._cur_computation.status_coro.send(DiscoroStatus(status, location))
-                        if not node.servers:
-                            self._cur_computation.status_coro.send(
-                                DiscoroStatus(Scheduler.NodeClosed, node.addr))
-                            # if all(n.status != Scheduler.NodeInitialized
-                            #        for n in self._nodes.itervalues()):
-                            #     SysCoro(self.__close_computation)
+                    if self._cur_computation:
+                        if self._cur_computation._peers_communicate:
+                            self.__server_locations.discard(server.location)
+                            # TODO: inform other servers
+                        if self._cur_computation.status_coro:
+                            self._cur_computation.status_coro.send(DiscoroStatus(status, location))
+                            if not node.servers:
+                                self._cur_computation.status_coro.send(
+                                    DiscoroStatus(Scheduler.NodeClosed, node.addr))
                 else:
                     logger.warning('Ignoring invalid status message: %s', status)
             else:
@@ -1175,9 +1177,13 @@ class Scheduler(object):
                 logger.debug('failed to transfer file %s: %s', xf, reply)
                 SysCoro(self.__close_server, server, self._cur_computation)
                 raise StopIteration(-1)
-        server.status = Scheduler.ServerInitialized
-        server.last_pulse = time.time()
         if self._cur_computation:
+            if self._cur_computation._peers_communicate:
+                server.coro.send({'req': 'peers', 'auth': self._cur_computation._auth,
+                                  'peers': list(self.__server_locations)})
+                self.__server_locations.add(server.location)
+            server.status = Scheduler.ServerInitialized
+            server.last_pulse = time.time()
             if node.status != Scheduler.NodeInitialized:
                 node.status = Scheduler.NodeInitialized
                 if self._cur_computation.status_coro:
@@ -1185,6 +1191,7 @@ class Scheduler(object):
             if self._cur_computation.status_coro:
                 self._cur_computation.status_coro.send(DiscoroStatus(server.status, server.location))
         else:
+            SysCoro(self.__close_server, server, self._cur_computation)
             raise StopIteration(-1)
         raise StopIteration(0)
 
@@ -1203,8 +1210,11 @@ class Scheduler(object):
             yield close_coro.finish()
 
     def __close_server(self, server, computation, coro=None):
+        if self.__server_locations:
+            self.__server_locations.discard(server.location)
+            # TODO: inform other servers
         if server.status != Scheduler.ServerInitialized or not computation:
-            logger.debug('Closing server %s ignored', server.location)
+            logger.debug('Closing server %s ignored: %s', server.location, server.status)
             raise StopIteration(-1)
         node = self._nodes.get(server.location.addr, None)
         if not node:
@@ -1247,6 +1257,7 @@ class Scheduler(object):
         raise StopIteration(0)
 
     def __close_computation(self, client=None, coro=None):
+        self.__server_locations.clear()
         computation, self._cur_computation = self._cur_computation, None
         if self.__cur_client_auth:
             computation_path = os.path.join(self.__dest_path, self.__cur_client_auth)
