@@ -56,9 +56,8 @@ def client_proc(computation, njobs, coro=None):
         if not isinstance(rcoro, asyncoro.Coro):
             print('failed to create rcoro %s: %s' % (i, rcoro))
 
-    # wait for all results
-    yield results_coro.finish()
-    yield computation.close()
+    # wait for all results and close computation
+    yield rcoro_scheduler.finish(close=True)
 
 
 if __name__ == '__main__':

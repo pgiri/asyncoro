@@ -21,10 +21,11 @@ framework for distributed and parallel computing.
   distributed computing.
 
 * discoro_client2.py is a variation of discoro_client1.py. In this example,
-  computations are assumed to CPU intensive (simulated using 'time.sleep'),
-  similar to using 'dispy' (http://dispy.sourceforge.net) project. It also shows
-  how to use status messages from discoro scheduler (instead of simpler
-  RemoteCoroScheduler) to run coroutines at remote server processes.
+  computations are assumed to CPU intensive, similar to using 'dispy'
+  (http://dispy.sourceforge.net) project. It also shows how to use status
+  messages from discoro scheduler to relay those messages to both
+  RemoteCoroScheduler and httpd server. Cluster status can be monitored with a
+  web browser.
 
 * discoro_client3.py uses RemoteCoroScheduler to distribute coroutine function
   and a class. The local coroutine (running at client) and remote coroutines
@@ -58,9 +59,14 @@ framework for distributed and parallel computing.
   computation, asyncoro scheduler cannot respond to network data (or anything
   else).
 
-* discoro_client9.py uses RemoteCoroScheduler to setup remote server processes
-  by reading data in files in to global variables (memory) for processing that
-  data in comptations efficiently (i.e., in-memory processing).
+* discoro_client9_posix.py uses RemoteCoroScheduler to setup nodes by reading
+  data in files in to global variables (memory) for processing that data in
+  comptations efficiently (i.e., in-memory processing). This example works only
+  with POSIX (Linux, OS X etc.), but not Windows.
+
+* discoro_client9_all.py uses RemoteCoroScheduler to setup remote server
+  processes by reading data in files in to global variables (memory) for
+  processing that data in comptations efficiently (i.e., in-memory processing).
 
 * discoro_ssh_ec2.py shows how to use ssh port forwarding to work with Amazon
   EC2 cloud computing, where the client runs locally and discoronode runs on

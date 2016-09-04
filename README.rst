@@ -37,6 +37,8 @@ Features
 
 * Asynchronous locking primitives similar to Python threading module,
 
+* Asynchronous timers and timeouts,
+
 * `Message passing <http://en.wikipedia.org/wiki/Message_passing>`_
   for (local and remote) coroutines to exchange messages one-to-one
   with `Message Queue Pattern

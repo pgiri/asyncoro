@@ -1,15 +1,15 @@
-# Run 'discoronode.py' program to start processes to execute
-# computations sent by this client, along with this program.
+# Run 'discoronode.py' program to start processes to execute computations sent
+# by this client, along with this program.
 
-# Distributed computing example where this client sends computation to
-# remote discoro process to run as remote coroutines. At any time at
-# most one computation coroutine is scheduled at a process (due to
-# ProcScheduler). This example shows how to use 'execute' method of
-# ProcScheduler to submit comutations and get their results easily.
-
-# This example can be combined with in-memory processing (see
-# 'discoro_client5.py') and streaming (see 'discoro_client6.py') for
-# efficient processing of data and communication.
+# This example illustrates in-memory processing with 'proc_available' to read
+# date in to memory by each (remote) server process. Remote coroutines
+# ('compute' in this case) then process data in memory. This example works with
+# POSIX (Linux, OS X etc.) and Windows. Note that, as data is read in to each
+# server process, a node may have multiple copies of data in memory of each
+# process on that node, so this approach is not practical / efficient when data
+# is large. See 'discoro_client9_node.py' which uses 'node_available' and
+# 'node_setup' to read data in to memory at node (and thus only one copy is in
+# memory).
 
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *
@@ -25,6 +25,7 @@ def proc_available(location, coro=None):
     # variable). 'compute' then uses the data in memory instead of reading from
     # file every time.
     def setup_server(data_file, coro=None):  # executed on remote server
+        # variables declared as 'global' will be available in coroutines
         global hashlib, data
         import os, hashlib
         with open(data_file, 'rb') as fd:
@@ -99,7 +100,7 @@ if __name__ == '__main__':
     # asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start private scheduler:
-    Scheduler()
+    # Scheduler()
     data_file = sys.argv[0] if len(sys.argv) == 1 else sys.argv[1]
     # send 'compute' generator function; data_file can also be sent with
     # 'depends', but in this case, the client sends it separately when server is

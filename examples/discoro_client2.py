@@ -15,26 +15,16 @@ import asyncoro.httpd
 # The computation in this example is simulated with 'time.sleep' (during which
 # entire asyncoro framework is suspended as well). Usually CPU bound tasks that
 # don't 'yield' (such as 'time.sleep') shouldn't be executed in coroutines, as
-# asyncoro doesn't preempt currently running task, the framework is not
-# responsive to any messages being sent to it (say, from client). In this
-# example, no messages are not sent to/from computation, so it is okay to block
-# asyncoro while computation is executed; see discomro_client8.py where
-# computations are executed with threads so messages can be sent/received while
-# computation is executed.
+# asyncoro doesn't preempt currently running task. However, in this case it is
+# okay, as each server runs at most one coroutine.
 
 # discoronode expects user computations to be generator functions (that have at
 # least one 'yield' statement) to create coroutines.
 def compute(i, n, coro=None):
-    # compute factorial of n; during this evaluation asyncoro framework cannot
-    # receive / send messages, switch coroutines etc.
-    factorial = 1
-    for k in range(2, n):
-        factorial *= k
-    # coroutines should've at least one 'yield'. Note that factorial computed is
-    # rather large and sending it to client may take time, which may casue
-    # timeout issues over slow networks; instead of sending large amount of data
-    # as messages, it may be preferable to send as file transfer
-    yield (n, factorial) # value yielded here is sent as result to client
+    import time
+    time.sleep(n)
+    # coroutines should've at least one 'yield'
+    yield (i, n) # value yielded last is sent as result to client
 
 def client_proc(computation, njobs, coro=None):
 
@@ -48,12 +38,12 @@ def client_proc(computation, njobs, coro=None):
             rcoro_scheduler.status_coro.send(msg)
             # and to httpd's status_coro:
             httpd.status_coro.send(msg)
-            if isinstance(msg, asyncoro.MonitorException):
+            if isinstance(msg, asyncoro.MonitorException): # a job finished
                 rcoro = msg.args[0]
                 result = msg.args[1][1]
                 if msg.args[1][0] == StopIteration:
-                    print('    result for job %s from %s' %
-                          (result[0], rcoro.location))
+                    print('    result for job %s from %s: %s' %
+                          (result[0], rcoro.location, result[1]))
                 else:
                     print('    %s failed: %s' % (rcoro.location, str(result)))
 
@@ -66,7 +56,7 @@ def client_proc(computation, njobs, coro=None):
 
     # submit jobs
     for i in range(njobs):
-        rcoro = yield rcoro_scheduler.schedule(compute, i, 100000 + i)
+        rcoro = yield rcoro_scheduler.schedule(compute, i, random.uniform(5, 10))
         if isinstance(rcoro, asyncoro.Coro):
             print('  job %s processed by %s' % (i, rcoro.location))
         else:
