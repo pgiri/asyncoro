@@ -67,6 +67,7 @@ def _discoro_server_coro_proc():
     for _discoro_var in ['clean', 'min_pulse_interval', 'max_pulse_interval']:
         del _discoro_config[_discoro_var]
 
+    _discoro_coro.register('discoro_server')
     asyncoro.logger.info('discoro server %s started at %s; '
                          'computation files will be saved in "%s"',
                          _discoro_config['id'], _discoro_coro.location, _discoro_dest_path)
@@ -84,15 +85,7 @@ def _discoro_server_coro_proc():
             if not isinstance(status, asyncoro.PeerStatus):
                 asyncoro.logger.warning('Invalid peer status %s ignored', type(status))
                 continue
-            if status.status == asyncoro.PeerStatus.Online:
-                if (_discoro_node_coro and _discoro_node_coro.location == status.location):
-                    _discoro_coro.register('discoro_server')
-                elif (_discoro_scheduler_coro.location == status.location):
-                    _discoro_scheduler_coro.send({'status': Scheduler.ServerInitialized,
-                                                  'coro': _discoro_coro, 'name': _discoro_name,
-                                                  'auth': _discoro_computation_auth})
-
-            else:  # status.status == asyncoro.PeerStatus.Offline
+            if status.status == asyncoro.PeerStatus.Offline:
                 if (_discoro_scheduler_coro and
                     _discoro_scheduler_coro.location == status.location):
                     if _discoro_computation_auth:
@@ -117,9 +110,10 @@ def _discoro_server_coro_proc():
     asyncoro.AsynCoro.instance().peer_status(SysCoro(_discoro_peer_status))
     yield asyncoro.AsynCoro.instance().peer(_discoro_node_coro.location)
     yield asyncoro.AsynCoro.instance().peer(_discoro_scheduler_coro.location)
+    _discoro_scheduler_coro.send({'status': Scheduler.ServerInitialized,
+                                  'coro': _discoro_coro, 'name': _discoro_name,
+                                  'auth': _discoro_computation_auth})
 
-    # _discoro_scheduler_coro = _discoro_config['scheduler_coro']
-    yield asyncoro.AsynCoro.instance().peer(_discoro_scheduler_coro.location)
     _discoro_var = _discoro_config['zombie_period']
     if _discoro_var:
         _discoro_var /= 3
@@ -853,13 +847,12 @@ if __name__ == '__main__':
                     client = msg.get('client', None)
                     if isinstance(client, asyncoro.Coro):
                         if psutil:
-                            info = DiscoroNodeAvailInfo(coro.location.addr,
-                                                        100.0 - psutil.cpu_percent(),
+                            info = DiscoroNodeAvailInfo(coro.location, 100.0 - psutil.cpu_percent(),
                                                         psutil.virtual_memory().available,
                                                         psutil.disk_usage(disk_path).free,
                                                         100.0 - psutil.swap_memory().percent)
                         else:
-                            info = None
+                            info = DiscoroNodeAvailInfo(coro.location, None, None, None, None)
                         info = DiscoroNodeInfo(_discoro_name, coro.location.addr,
                                                len(_discoro_servers), platform.platform(), info)
                         client.send(info)
@@ -969,7 +962,7 @@ if __name__ == '__main__':
                 msg = {'status': 'pulse', 'location': coro.location}
                 if psutil:
                     msg['node_status'] = DiscoroNodeAvailInfo(
-                        coro.location.addr, 100.0 - psutil.cpu_percent(),
+                        coro.location, 100.0 - psutil.cpu_percent(),
                         psutil.virtual_memory().available, psutil.disk_usage(disk_path).free,
                         100.0 - psutil.swap_memory().percent)
 

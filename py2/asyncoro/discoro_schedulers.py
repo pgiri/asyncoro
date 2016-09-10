@@ -45,10 +45,11 @@ class RemoteCoroScheduler(object):
     scheduler is not aware of those.
     """
 
-    def __init__(self, computation, proc_status=None, proc_available=None, proc_close=None):
+    def __init__(self, computation, status=None, proc_available=None, proc_close=None,
+                 node_available=None):
         """'computation' should be an instance of discoro.Computation
 
-        'proc_status' if not None should be a generator function that is called
+        'status' if not None should be a generator function that is called
         (as coroutine) with the status and info, as received by status_coro. If
         status is ServerInitialized and this function returns non-zero value,
         the server is ignored; i.e., jobs scheduled with 'schedule' or 'execute'
@@ -77,10 +78,10 @@ class RemoteCoroScheduler(object):
         server process.
         """
 
-        if proc_status:
-            if not inspect.isgeneratorfunction(proc_status):
-                asyncoro.logger.warning('Invalid proc_status ignored')
-                proc_status = None
+        if status:
+            if not inspect.isgeneratorfunction(status):
+                asyncoro.logger.warning('Invalid status ignored')
+                status = None
         if proc_available:
             if not inspect.isgeneratorfunction(proc_available):
                 asyncoro.logger.warning('Invalid proc_available ignored')
@@ -89,10 +90,17 @@ class RemoteCoroScheduler(object):
             if not inspect.isgeneratorfunction(proc_close):
                 asyncoro.logger.warning('Invalid proc_close ignored')
                 proc_close = None
+        if not node_available and computation._node_available:
+            node_available = computation._node_available
+        if node_available:
+            if not inspect.isgeneratorfunction(node_available):
+                asyncoro.logger.warning('Invalid node_available ignored')
+                node_available = None
 
-        self._proc_status = proc_status
+        self._status = status
         self._proc_available = proc_available
         self._proc_close = proc_close
+        self._node_available = node_available
         self._close_servers = {}
 
         self.computation = computation
@@ -105,6 +113,8 @@ class RemoteCoroScheduler(object):
         self._askew_results = {}
         self._servers = {}
         self._server_avail = asyncoro.Event()
+        self._remote_scheduler = False
+        self.asyncoro = asyncoro.AsynCoro()
         Coro(computation.schedule)
 
     def schedule(self, gen, *args, **kwargs):
@@ -304,14 +314,16 @@ class RemoteCoroScheduler(object):
                 if msg.status == discoro.Scheduler.ServerInitialized:
                     if self._proc_available:
                         def setup_proc(self, msg, coro=None):
+                            if self._remote_scheduler:
+                                yield self.asyncoro.peer(msg.info)
                             if (yield Coro(self._proc_available, msg.info).finish()) == 0:
                                 self._close_servers[msg.info] = msg.info
                                 self._servers[msg.info] = msg.info
                                 self._server_avail.set()
                         Coro(setup_proc, self, msg)
-                    elif self._proc_status:
+                    elif self._status:
                         def status_proc(self, msg, coro=None):
-                            if (yield Coro(self._proc_status, msg.status, msg.info).finish()) == 0:
+                            if (yield Coro(self._status, msg.status, msg.info).finish()) == 0:
                                 self._servers[msg.info] = msg.info
                                 self._server_avail.set()
                         Coro(status_proc, self, msg)
@@ -323,20 +335,44 @@ class RemoteCoroScheduler(object):
                     self._servers.pop(msg.info, None)
                     if self._close_servers.pop(msg.info, None) and self._proc_close:
                         Coro(self._proc_close, msg.status, msg.info)
-                    elif self._proc_status:
-                        Coro(self._proc_status, msg.status, msg.info)
+                    elif self._status:
+                        Coro(self._status, msg.status, msg.info)
+                elif msg.status == discoro.Scheduler.NodeDiscovered:
+                    if self._node_available:
+                        def setup_node(self, msg, coro=None):
+                            if self._remote_scheduler:
+                                yield self.asyncoro.peer(msg.info.location)
+                            try:
+                                params = yield asyncoro.Coro(self._node_available,
+                                                             msg.info).finish()
+                            except:
+                                raise StopIteration
+
+                            if not isinstance(params, tuple):
+                                if hasattr(params, '__iter__'):
+                                    params = tuple(params)
+                                else:
+                                    params = (params,)
+
+                            msg = {'req': 'setup_node', 'addr': msg.info.location.addr,
+                                   'params': params, 'auth': self.computation._auth,
+                                   'client': coro}
+                            self.computation.scheduler.send(msg)
+                        Coro(setup_node, self, msg)
                 elif msg.status == discoro.Scheduler.ComputationScheduled:
                     self.computation_sign = msg.info
-                    if self._proc_status:
-                        Coro(self._proc_status, msg.status, msg.info)
+                    if self.computation.scheduler.location != self.asyncoro.location:
+                        self._remote_scheduler = True
+                    if self._status:
+                        Coro(self._status, msg.status, msg.info)
                 elif (msg.status == discoro.Scheduler.ComputationClosed and
                       msg.info == self.computation_sign):
-                    if self._proc_status:
-                        Coro(self._proc_status, msg.status, msg.info)
+                    if self._status:
+                        Coro(self._status, msg.status, msg.info)
                     raise StopIteration
                 elif msg.status != discoro.Scheduler.CoroCreated:
-                    if self._proc_status:
-                        Coro(self._proc_status, msg.status, msg.info)
+                    if self._status:
+                        Coro(self._status, msg.status, msg.info)
 
 # This scheduler was called 'ProcScheduler' in earlier versions
 ProcScheduler = RemoteCoroScheduler
