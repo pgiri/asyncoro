@@ -2464,7 +2464,7 @@ class Coro(object):
         self._swap_generator = None
         self._hot_swappable = False
         if not Coro._asyncoro:
-            Coro._asyncoro = AsynCoro.instance()
+            Channel._asyncoro = Coro._asyncoro = AsynCoro.instance()
         if not getattr(self, '_scheduler', None):
             self._scheduler = Coro._asyncoro
         self._location = self._scheduler._location
