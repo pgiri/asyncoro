@@ -11,7 +11,8 @@ import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *
 from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
-def node_available(location, avail_info, coro=None):
+def node_available(avail_info, coro=None):
+    import os
     # 'node_available' is executed locally (at client) when a node is
     # available. 'location' is Location instance of node. When this coroutine
     # is executed, 'depends' of computation would've been transferred.
@@ -20,13 +21,13 @@ def node_available(location, avail_info, coro=None):
     # illustrate how files can be sent separately (e.g., to transfer different
     # files to different nodes), file is transferred with
     # 'node_available'.
-    if (yield asyncoro.AsynCoro().send_file(location, data_file, timeout=5)) < 0:
-        print('Could not send data file "%s" to %s' % (data_file, location))
+    if (yield asyncoro.AsynCoro().send_file(avail_info.location, data_file, timeout=5)) < 0:
+        print('Could not send data file "%s" to %s' % (data_file, avail_info.location))
         raise StopIteration(-1)
 
-    # value of coroutine (last value yield'ed or value of 'raise StopIteration'
-    # will be passed to node_setup as argument.
-    yield data_file
+    # value of coroutine (last value yield'ed or value of 'raise StopIteration')
+    # will be passed to node_setup as argument(s).
+    yield (os.path.basename(data_file),)
 
 def node_setup(data_file):
     # 'node_setup' is executed on a node with the arguments returned by
@@ -70,12 +71,13 @@ def client_proc(computation, coro=None):
 
 
 if __name__ == '__main__':
-    import logging, random, functools, sys
+    import logging, random, functools, sys, os
     # asyncoro.logger.setLevel(logging.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start private scheduler:
     Scheduler()
     data_file = sys.argv[0] if len(sys.argv) == 1 else sys.argv[1]
+    data_file = os.path.relpath(data_file)
 
     # send 'compute' generator function; data_file can also be sent with
     # 'depends', but in this case, the client sends it separately when node is

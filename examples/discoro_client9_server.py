@@ -100,8 +100,9 @@ if __name__ == '__main__':
     # asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start private scheduler:
-    # Scheduler()
+    Scheduler()
     data_file = sys.argv[0] if len(sys.argv) == 1 else sys.argv[1]
+
     # send 'compute' generator function; data_file can also be sent with
     # 'depends', but in this case, the client sends it separately when server is
     # initialized (to illustrate how client can transfer files).
