@@ -33,7 +33,7 @@ __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 
 __all__ = ['Scheduler', 'Computation', 'DiscoroStatus', 'DiscoroCoroInfo',
-           'DiscoroNodeInfo', 'DiscoroServerInfo', 'DiscoroNodeAvailInfo', 'DiscoroNodeAllocate']
+           'DiscoroNodeInfo', 'DiscoroNodeAvailInfo', 'DiscoroNodeAllocate']
 
 MsgTimeout = asyncoro.MsgTimeout
 MinPulseInterval = 10
@@ -44,7 +44,6 @@ DiscoroStatus = collections.namedtuple('DiscoroStatus', ['status', 'info'])
 DiscoroCoroInfo = collections.namedtuple('DiscoroCoroInfo', ['coro', 'args', 'kwargs', 'start_time'])
 DiscoroNodeInfo = collections.namedtuple('DiscoroNodeInfo', ['name', 'addr', 'cpus', 'platform',
                                                              'avail_info'])
-DiscoroServerInfo = collections.namedtuple('DiscoroServerInfo', ['name', 'location'])
 
 # for internal use only
 _DiscoroFunction = collections.namedtuple('_DiscoroFunction', ['name', 'code', 'args', 'kwargs'])
@@ -752,8 +751,10 @@ class Scheduler(object):
                             if node.status != Scheduler.NodeInitialized:
                                 node.status = Scheduler.NodeInitialized
                                 if self._cur_computation.status_coro:
+                                    info = DiscoroNodeInfo(node.name, node.addr, node.cpus,
+                                                           node.platform, node.avail_info)
                                     self._cur_computation.status_coro.send(
-                                        DiscoroStatus(node.status, node.addr))
+                                        DiscoroStatus(node.status, info))
                             if self._cur_computation.status_coro:
                                 self._cur_computation.status_coro.send(DiscoroStatus(server.status,
                                                                                      server.location))
@@ -857,10 +858,13 @@ class Scheduler(object):
         if self.__cur_node_available:
             if self._shared:
                 node.status = Scheduler.NodeDiscovered
-                computation.status_coro.send(DiscoroStatus(node.status, node.avail_info))
+                info = DiscoroNodeInfo(node.name, node.addr, node.cpus,
+                                       node.platform, node.avail_info)
+                computation.status_coro.send(DiscoroStatus(node.status, info))
                 raise StopIteration(0)
             try:
                 params = yield asyncoro.Coro(self.__cur_node_available, node.avail_info).finish()
+                assert params is not None
             except:
                 node.status = Scheduler.NodeIgnore
                 SysCoro(self.__close_node, node, computation)
@@ -881,7 +885,9 @@ class Scheduler(object):
                 raise StopIteration(-1)
         node.status = Scheduler.NodeInitialized
         if computation.status_coro:
-            computation.status_coro.send(DiscoroStatus(node.status, node.addr))
+            info = DiscoroNodeInfo(node.name, node.addr, node.cpus, node.platform,
+                                   node.avail_info)
+            computation.status_coro.send(DiscoroStatus(node.status, info))
 
     def __discover_node(self, msg, coro=None):
         for _ in range(10):
