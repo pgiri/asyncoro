@@ -3,16 +3,6 @@ This file is part of asyncoro project.
 See http://asyncoro.sourceforge.net for details.
 """
 
-__author__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
-__email__ = "pgiri@yahoo.com"
-__copyright__ = "Copyright 2015, Giridhar Pemmasani"
-__contributors__ = []
-__maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
-__license__ = "MIT"
-__url__ = "http://asyncoro.sourceforge.net"
-
-__all__ = ['HTTPServer']
-
 import sys
 import os
 import threading
@@ -25,7 +15,7 @@ import re
 import traceback
 
 import asyncoro.disasyncoro as asyncoro
-from asyncoro.discoro import DiscoroStatus, DiscoroNodeAvailInfo, DiscoroServerInfo
+from asyncoro.discoro import DiscoroStatus, DiscoroNodeAvailInfo
 import asyncoro.discoro as discoro
 
 if sys.version_info.major > 2:
@@ -34,6 +24,17 @@ if sys.version_info.major > 2:
 else:
     import BaseHTTPServer
     from urlparse import urlparse
+
+
+__author__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
+__email__ = "pgiri@yahoo.com"
+__copyright__ = "Copyright 2015, Giridhar Pemmasani"
+__contributors__ = []
+__maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
+__license__ = "MIT"
+__url__ = "http://asyncoro.sourceforge.net"
+
+__all__ = ['HTTPServer']
 
 
 if sys.version_info.major >= 3:
@@ -69,8 +70,7 @@ class HTTPServer(object):
             self.avail_info = None
 
     class _Server(object):
-        def __init__(self, name, location):
-            self.name = name
+        def __init__(self, location):
             self.location = location
             self.status = None
             self.coros = {}
@@ -93,8 +93,7 @@ class HTTPServer(object):
             nodes = [dict(node.__dict__) for node in dict_iter(arg, 'values')]
             for node in nodes:
                 node['servers'] = len(node['servers'])
-                if isinstance(node['avail_info'], DiscoroNodeAvailInfo):
-                    node['avail_info'] = node['avail_info'].__dict__
+                node['avail_info'] = node['avail_info'].__dict__
             return nodes
 
         def do_GET(self):
@@ -187,7 +186,7 @@ class HTTPServer(object):
                                                    for key, val in rcoro.kwargs.items()),
                                'start_time': rcoro.start_time
                                } for rcoro in rcoros]
-                    info = {'location': str(server.location), 'name': server.name,
+                    info = {'location': str(server.location),
                             'status': server.status, 'coros_submitted': server.coros_submitted,
                             'coros_done': server.coros_done, 'coros': rcoros,
                             'update_time': node.update_time}
@@ -214,8 +213,7 @@ class HTTPServer(object):
                 if node:
                     info = {'addr': node.addr, 'name': node.name,
                             'status': node.status, 'update_time': node.update_time,
-                            'avail_info': node.avail_info.__dict__ if node.avail_info else None,
-
+                            'avail_info': node.avail_info.__dict__,
                             'coros_submitted': node.coros_submitted, 'coros_done': node.coros_done,
                             'servers': [
                                 {'location': str(server.location),
@@ -343,55 +341,47 @@ class HTTPServer(object):
                             node.coros_submitted += 1
                             node.update_time = time.time()
                             self._updates[node.addr] = node
-                elif msg.status == discoro.Scheduler.ServerDiscovered:
-                    if isinstance(msg.info, DiscoroServerInfo):
-                        node = self._nodes.get(msg.info.location.addr)
-                        if not node:
-                            # name is host name followed by '-' and ID
-                            host_name = re.search(r'-\d+$', msg.info.name)
-                            if host_name:
-                                host_name = msg.info.name[:-len(host_name.group(0))]
-                            else:
-                                host_name = msg.info.name
-                            node = HTTPServer._Node(host_name, msg.info.location.addr)
-                            node.status = HTTPServer.NodeStatus[discoro.Scheduler.NodeDiscovered]
-                            self._nodes[msg.info.location.addr] = node
-                        server = HTTPServer._Server(msg.info.name, msg.info.location)
-                        server.status = HTTPServer.ServerStatus[msg.status]
-                        node.servers[str(server.location)] = server
-                        node.update_time = time.time()
-                        self._updates[node.addr] = node
-                elif msg.status in (discoro.Scheduler.ServerInitialized,
-                                    discoro.Scheduler.ServerClosed, discoro.Scheduler.ServerIgnore,
-                                    discoro.Scheduler.ServerDisconnected):
+                elif msg.status == discoro.Scheduler.ServerInitialized:
                     node = self._nodes.get(msg.info.addr)
                     if node:
-                        # node.servers.pop(str(msg.info), None)
-                        # if not node.servers:
-                        #     self._nodes.pop(msg.info.addr)
+                        server = node.servers.get(str(msg.info), None)
+                        if not server:
+                            server = HTTPServer._Server(msg.info)
+                            node.servers[str(server.location)] = server
+                        server.status = HTTPServer.ServerStatus[msg.status]
+                        node.update_time = time.time()
+                        self._updates[node.addr] = node
+                elif (msg.status == discoro.Scheduler.ServerClosed or
+                      msg.status == discoro.Scheduler.ServerDisconnected):
+                    node = self._nodes.get(msg.info.addr)
+                    if node:
                         server = node.servers.get(str(msg.info), None)
                         if server:
                             server.status = HTTPServer.ServerStatus[msg.status]
                             node.update_time = time.time()
                             self._updates[node.addr] = node
-                elif msg.status == discoro.Scheduler.NodeDiscovered:
-                    node = self._nodes.get(msg.info.addr, None)
+                elif msg.status == discoro.Scheduler.NodeInitialized:
+                    node = self._nodes.get(msg.info.addr)
                     if not node:
                         node = HTTPServer._Node(msg.info.name, msg.info.addr)
-                        node.status = HTTPServer.NodeStatus[msg.status]
+                        node.avail_info = msg.info.avail_info
+                        node.avail_info.location = None
                         self._nodes[msg.info.addr] = node
-                    node.avail_info = msg.info.avail_info
-                elif msg.status in (discoro.Scheduler.NodeInitialized,
-                                    discoro.Scheduler.NodeClosed, discoro.Scheduler.NodeIgnore,
-                                    discoro.Scheduler.NodeDisconnected):
-                    node = self._nodes.get(msg.info)
+                    node.status = HTTPServer.NodeStatus[msg.status]
+                    node.update_time = time.time()
+                    self._updates[node.addr] = node
+                elif (msg.status == discoro.Scheduler.NodeClosed or
+                      msg.status == discoro.Scheduler.NodeDisconnected):
+                    node = self._nodes.get(msg.info.addr)
                     if node:
                         node.status = HTTPServer.NodeStatus[msg.status]
                         node.update_time = time.time()
+                        self._updates[node.addr] = node
             elif isinstance(msg, DiscoroNodeAvailInfo):
-                node = self._nodes.get(msg.addr, None)
+                node = self._nodes.get(msg.location.addr, None)
                 if node:
                     node.avail_info = msg
+                    node.avail_info.location = None
                     node.update_time = time.time()
                     self._updates[node.addr] = node
             else:

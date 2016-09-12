@@ -43,7 +43,7 @@
             '<td><a href="node.html?host=' + node.addr + '" ' + 'title="View servers on ' +
             node.addr + '">' + node.addr + '</a></td><td>' + node.name + '</td><td>' +
             node.servers + '</td>';
-          if (node.avail_info) {
+          if (node.avail_info.cpu != null) {
             rows += '<td>' + node.avail_info.cpu.toFixed(2) + ' %%</td><td>' +
               formatBytes(node.avail_info.memory) + '</td><td>' +
               node.avail_info.swap.toFixed(2) + ' %%</td><td>' +

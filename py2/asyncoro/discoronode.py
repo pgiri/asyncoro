@@ -1096,10 +1096,6 @@ if __name__ == '__main__':
             elif _discoro_cmd in ('close', 'quit', 'terminate'):
                 _discoro_node_coro.send({'req': _discoro_cmd, 'auth': _discoro_node_auth})
                 break
-            else:
-                for _discoro_server in _discoro_servers:
-                    if (_discoro_server.coro and _discoro_server.coro.is_alive()):
-                        print('  Process %s is still running' % _discoro_server.id)
 
     try:
         _discoro_node_coro.value()

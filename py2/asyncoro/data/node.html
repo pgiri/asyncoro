@@ -48,7 +48,7 @@
               $('#node_coros_done').text(node.coros_done);
               $('#node_coros_running').text(node.coros_submitted - node.coros_done);
               $('#node_update').text((new Date(1000 * node.update_time)).toLocaleTimeString());
-              if (node.avail_info) {
+              if (node.avail_info.cpu != null) {
                 $('#node_cpu').text(node.avail_info.cpu.toFixed(2) + ' %%');
                 $('#node_memory').text(formatBytes(node.avail_info.memory));
                 $('#node_swap').text(node.avail_info.swap.toFixed(2) + ' %%');

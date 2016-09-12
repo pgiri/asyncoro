@@ -45,8 +45,8 @@ class RemoteCoroScheduler(object):
     scheduler is not aware of those.
     """
 
-    def __init__(self, computation, status=None, proc_available=None, proc_close=None,
-                 node_available=None):
+    def __init__(self, computation, status=None, node_available=None,
+                 proc_available=None, proc_close=None):
         """'computation' should be an instance of discoro.Computation
 
         'status' if not None should be a generator function that is called

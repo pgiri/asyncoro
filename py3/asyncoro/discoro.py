@@ -34,7 +34,7 @@ __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 
 __all__ = ['Scheduler', 'Computation', 'DiscoroStatus', 'DiscoroCoroInfo',
-           'DiscoroNodeInfo', 'DiscoroServerInfo', 'DiscoroNodeAvailInfo', 'DiscoroNodeAllocate']
+           'DiscoroNodeInfo', 'DiscoroNodeAvailInfo', 'DiscoroNodeAllocate']
 
 MsgTimeout = asyncoro.MsgTimeout
 MinPulseInterval = 10
@@ -45,8 +45,6 @@ DiscoroStatus = collections.namedtuple('DiscoroStatus', ['status', 'info'])
 DiscoroCoroInfo = collections.namedtuple('DiscoroCoroInfo', ['coro', 'args', 'kwargs', 'start_time'])
 DiscoroNodeInfo = collections.namedtuple('DiscoroNodeInfo', ['name', 'addr', 'cpus', 'platform',
                                                              'avail_info'])
-DiscoroServerInfo = collections.namedtuple('DiscoroServerInfo', ['name', 'location'])
-
 # for internal use only
 _DiscoroFunction = collections.namedtuple('_DiscoroFunction', ['name', 'code', 'args', 'kwargs'])
 
