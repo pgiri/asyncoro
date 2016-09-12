@@ -2850,9 +2850,13 @@ class Coro(object):
         """Returns True if coroutine is known to scheduler; otherwise (e.g.,
         coroutine finished) returns False.
         """
-        if self._state is None:
-            return False
-        return True
+        if self._location == Coro._asyncoro._location:
+            if self._state is None:
+                return False
+            return True
+        else:
+            logger.warning('%s: is_alive for %s is invliad',
+                           Coro._asyncoro._location, self._location)
 
     def _await_(self, timeout=None, alarm_value=None):
         """Internal use only.
