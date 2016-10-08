@@ -106,7 +106,16 @@ class RemoteCoroScheduler(object):
         self.computation = computation
         self.computation_sign = None
         self.status_coro = Coro(self._status_proc)
-        if not computation.status_coro:
+        if isinstance(computation.status_coro, Coro):
+            def chain_status_msgs(status_coro, client, coro=None):
+                coro.set_daemon()
+                while True:
+                    msg = yield coro.receive()
+                    client.send(msg)
+                    status_coro.send(msg)
+            computation.status_coro = Coro(chain_status_msgs, self.status_coro,
+                                           computation.status_coro)
+        else:
             computation.status_coro = self.status_coro
         self._rcoros = {}
         self._rcoros_done = asyncoro.Event()
