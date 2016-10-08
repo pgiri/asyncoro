@@ -12,7 +12,7 @@ import inspect
 import asyncoro.disasyncoro as asyncoro
 import asyncoro.discoro as discoro
 from asyncoro import Coro
-from asyncoro.discoro import DiscoroStatus, DiscoroServerInfo, DiscoroNodeInfo
+from asyncoro.discoro import DiscoroStatus, DiscoroNodeInfo
 
 __author__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __copyright__ = "Copyright (c) 2015 Giridhar Pemmasani"
