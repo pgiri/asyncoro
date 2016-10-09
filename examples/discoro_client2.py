@@ -54,4 +54,6 @@ if __name__ == '__main__':
     # this case httpd status_coro) with coro that chains messages
     rcoro_scheduler = RemoteCoroScheduler(computation)
     # run 10 (or given number of) jobs
-    asyncoro.Coro(client_proc, computation, 10 if len(sys.argv) < 2 else int(sys.argv[1]))
+    asyncoro.Coro(client_proc, computation, 10 if len(sys.argv) < 2 else int(sys.argv[1])).value()
+    # shutdown httpd only after computation is closed
+    httpd.shutdown()

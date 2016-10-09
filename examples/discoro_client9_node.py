@@ -40,7 +40,7 @@ def node_setup(data_file):
     with open(data_file, 'rb') as fd:
         data = fd.read()
     os.remove(data_file)  # data_file is not needed anymore
-    yield 0
+    yield 0  # coroutine must have at least one 'yield' and 0 indicates success
 
 # 'compute' is executed at remote server process repeatedly to compute checksum
 # of data in memory, initialized by 'node_setup'
