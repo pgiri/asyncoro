@@ -170,7 +170,6 @@ def _discoro_server_coro_proc():
                 Coro._asyncoro._lock.release()
             del job_coro
 
-
         elif _discoro_req == 'close' or _discoro_req == 'quit':
             _discoro_auth = _discoro_msg.get('auth', None)
             if (_discoro_auth == _discoro_computation_auth):
