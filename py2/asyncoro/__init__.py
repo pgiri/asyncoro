@@ -370,7 +370,7 @@ class _AsyncSocket(object):
     def _timed_out(self):
         """Internal use only.
         """
-        if self._read_coro:
+        if self._read_task:
             buf = None
             if isinstance(self._read_result, bytearray):
                 view = self._read_task.args[1]
@@ -383,7 +383,7 @@ class _AsyncSocket(object):
                 self._read_coro.throw(socket.timeout('timed out'))
             self._notifier.clear(self, _AsyncPoller._Read)
             self._read_task = self._read_result = self._read_coro = None
-        if self._write_coro:
+        if self._write_task:
             sent = 0
             if isinstance(self._write_result, buffer):
                 sent = self._write_task.args[1] - len(self._write_result)
@@ -424,17 +424,6 @@ class _AsyncSocket(object):
                 self._notifier.clear(self, _AsyncPoller._Read)
                 self._read_coro._proceed_(buf)
 
-        # if self._certfile and self._rsock.pending():
-        #     try:
-        #         buf = self._rsock.recv(bufsize)
-        #     except socket.error as err:
-        #         if err.args[0] != EWOULDBLOCK:
-        #             raise
-        #     else:
-        #         if buf:
-        #             self._read_coro = self._read_task = None
-        #             return buf
-
         if not self._asyncoro:
             self._asyncoro = AsynCoro.scheduler()
         self._read_coro = AsynCoro.cur_coro(self._asyncoro)
@@ -452,12 +441,9 @@ class _AsyncSocket(object):
         exception to be thrown.
         """
 
-        self._read_result = bytearray(bufsize)
-        view = [memoryview(self._read_result)]
-
-        def _recvall():
+        def _recvall(self, view):
             try:
-                recvd = self._rsock.recv_into(view[0], len(view[0]), *args)
+                recvd = self._rsock.recv_into(view, len(view), *args)
             except ssl.SSLError as err:
                 if err.args[0] == ssl.SSL_ERROR_WANT_READ:
                     pass
@@ -471,13 +457,14 @@ class _AsyncSocket(object):
                 self._read_coro.throw(*sys.exc_info())
             else:
                 if recvd:
-                    view[0] = view[0][recvd:]
-                    if len(view[0]) == 0:
+                    view = view[recvd:]
+                    if len(view) == 0:
                         buf = str(self._read_result)
                         self._read_task = self._read_result = None
                         self._notifier.clear(self, _AsyncPoller._Read)
                         self._read_coro._proceed_(buf)
                     else:
+                        self._read_task = partial_func(_recvall, self, view)
                         if self._timeout:
                             self._notifier._del_timeout(self)
                             self._notifier._add_timeout(self)
@@ -486,24 +473,13 @@ class _AsyncSocket(object):
                     self._notifier.clear(self, _AsyncPoller._Read)
                     self._read_coro._proceed_('')
 
-        # if self._certfile and self._rsock.pending():
-        #     try:
-        #         recvd = self._rsock.recv_into(view, bufsize)
-        #     except socket.error as err:
-        #         if err.args[0] != EWOULDBLOCK:
-        #             raise
-        #     else:
-        #         if recvd == bufsize:
-        #             self._read_result = None
-        #             return str(self._read_result)
-        #         elif recvd:
-        #             view = view[recvd:]
-
+        self._read_result = bytearray(bufsize)
+        view = memoryview(self._read_result)
         if not self._asyncoro:
             self._asyncoro = AsynCoro.scheduler()
         self._read_coro = AsynCoro.cur_coro(self._asyncoro)
         self._read_coro._await_()
-        self._read_task = _recvall
+        self._read_task = partial_func(_recvall, self, view)
         self._notifier.add(self, _AsyncPoller._Read)
 
     def _sync_recvall(self, bufsize, *args):
@@ -610,7 +586,7 @@ class _AsyncSocket(object):
         sent. If no data has been sent before timeout, then it causes
         'socket.timeout' exception to be thrown.
         """
-        def _sendall():
+        def _sendall(self, data_len):
             try:
                 sent = self._rsock.send(self._write_result)
                 if sent < 0:
@@ -644,7 +620,7 @@ class _AsyncSocket(object):
             self._asyncoro = AsynCoro.scheduler()
         self._write_coro = AsynCoro.cur_coro(self._asyncoro)
         self._write_coro._await_()
-        self._write_task = _sendall
+        self._write_task = partial_func(_sendall, self, len(data))
         self._notifier.add(self, _AsyncPoller._Write)
 
     def _sync_sendall(self, data):
