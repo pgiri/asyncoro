@@ -839,16 +839,19 @@ class _AsyncSocket(object):
             raise StopIteration('')
         n = struct.unpack('>L', data)[0]
         # assert n >= 0
-        try:
-            data = yield self.recvall(n)
-        except socket.error as err:
-            if err.args[0] == 'hangup':
+        if n:
+            try:
+                data = yield self.recvall(n)
+            except socket.error as err:
+                if err.args[0] == 'hangup':
+                    raise StopIteration('')
+                else:
+                    raise
+            if len(data) != n:
                 raise StopIteration('')
-            else:
-                raise
-        if len(data) != n:
+            raise StopIteration(data)
+        else:
             raise StopIteration('')
-        raise StopIteration(data)
 
     def _sync_recv_msg(self):
         """Internal use only; use 'recv_msg' instead.
