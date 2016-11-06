@@ -267,6 +267,7 @@ class _AsyncSocket(object):
                 self.sendall = self._sync_sendall
                 self.recv_msg = self._sync_recv_msg
                 self.send_msg = self._sync_send_msg
+                self.accept = self._sync_accept
             self._asyncoro = None
             self._notifier = None
         else:
@@ -742,6 +743,17 @@ class _AsyncSocket(object):
         self._read_coro._await_()
         self._read_task = _accept
         self._notifier.add(self, _AsyncPoller._Read)
+
+    def _sync_accept(self, *args):
+        """Internal use only; use 'accept' instead.
+
+        'accept' for synchronous sockets.
+        """
+
+        conn, addr = self._rsock.accept(*args)
+        conn = AsyncSocket(conn, blocking=True, keyfile=self._keyfile, certfile=self._certfile,
+                           ssl_version=self._ssl_version)
+        return (conn, addr)
 
     def _async_connect(self, *args):
         """Internal use only; use 'connect' with 'yield' instead.
