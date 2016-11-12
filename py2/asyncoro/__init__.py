@@ -408,13 +408,6 @@ class _AsyncSocket(object):
         def _recv():
             try:
                 buf = self._rsock.recv(bufsize, *args)
-            except ssl.SSLError as err:
-                if err.args[0] == ssl.SSL_ERROR_WANT_READ:
-                    pass
-                else:
-                    self._read_task = None
-                    self._notifier.clear(self, _AsyncPoller._Read)
-                    self._read_coro.throw(*sys.exc_info())
             except:
                 self._read_task = None
                 self._notifier.clear(self, _AsyncPoller._Read)
@@ -444,13 +437,6 @@ class _AsyncSocket(object):
         def _recvall(self, view):
             try:
                 recvd = self._rsock.recv_into(view, len(view), *args)
-            except ssl.SSLError as err:
-                if err.args[0] == ssl.SSL_ERROR_WANT_READ:
-                    pass
-                else:
-                    self._read_task = self._read_result = None
-                    self._notifier.clear(self, _AsyncPoller._Read)
-                    self._read_coro.throw(*sys.exc_info())
             except:
                 self._read_task = self._read_result = None
                 self._notifier.clear(self, _AsyncPoller._Read)
@@ -530,13 +516,6 @@ class _AsyncSocket(object):
         def _send():
             try:
                 sent = self._rsock.send(*args)
-            except ssl.SSLError as err:
-                if err.args[0] == ssl.SSL_ERROR_WANT_WRITE:
-                    pass
-                else:
-                    self._write_task = None
-                    self._notifier.clear(self, _AsyncPoller._Write)
-                    self._write_coro.throw(*sys.exc_info())
             except:
                 self._write_task = None
                 self._notifier.clear(self, _AsyncPoller._Write)
@@ -590,13 +569,6 @@ class _AsyncSocket(object):
             try:
                 sent = self._rsock.send(self._write_result)
                 if sent < 0:
-                    self._write_task = self._write_result = None
-                    self._notifier.clear(self, _AsyncPoller._Write)
-                    self._write_coro.throw(*sys.exc_info())
-            except ssl.SSLError as err:
-                if err.args[0] == ssl.SSL_ERROR_WANT_WRITE:
-                    pass
-                else:
                     self._write_task = self._write_result = None
                     self._notifier.clear(self, _AsyncPoller._Write)
                     self._write_coro.throw(*sys.exc_info())
@@ -832,11 +804,11 @@ class _AsyncSocket(object):
             data = yield self.recvall(n)
         except socket.error as err:
             if err.args[0] == 'hangup':
-                raise StopIteration('')
+                raise socket.error(errno.EPIPE, 'Insufficient data')
             else:
                 raise
         if len(data) != n:
-            raise StopIteration('')
+            raise socket.error(errno.EPIPE, 'Insufficient data: %s / %s' % (len(data), n))
         n = struct.unpack('>L', data)[0]
         # assert n >= 0
         if n:
@@ -844,11 +816,11 @@ class _AsyncSocket(object):
                 data = yield self.recvall(n)
             except socket.error as err:
                 if err.args[0] == 'hangup':
-                    raise StopIteration('')
+                    raise socket.error(errno.EPIPE, 'Insufficient data')
                 else:
                     raise
             if len(data) != n:
-                raise StopIteration('')
+                raise socket.error(errno.EPIPE, 'Insufficient data: %s / %s' % (len(data), n))
             raise StopIteration(data)
         else:
             raise StopIteration('')
@@ -863,23 +835,26 @@ class _AsyncSocket(object):
             data = self._sync_recvall(n)
         except socket.error as err:
             if err.args[0] == 'hangup':
-                return ''
+                raise socket.error(errno.EPIPE, 'Insufficient data')
             else:
                 raise
         if len(data) != n:
-            return ''
+            raise socket.error(errno.EPIPE, 'Insufficient data: %s / %s' % (len(data), n))
         n = struct.unpack('>L', data)[0]
         # assert n >= 0
-        try:
-            data = self._sync_recvall(n)
-        except socket.error as err:
-            if err.args[0] == 'hangup':
-                return ''
-            else:
-                raise
-        if len(data) != n:
+        if n:
+            try:
+                data = self._sync_recvall(n)
+            except socket.error as err:
+                if err.args[0] == 'hangup':
+                    raise socket.error(errno.EPIPE, 'Insufficient data')
+                else:
+                    raise
+            if len(data) != n:
+                raise socket.error(errno.EPIPE, 'Insufficient data: %s / %s' % (len(data), n))
+            return data
+        else:
             return ''
-        return data
 
     def create_connection(self, host_port, timeout=None, source_address=None):
         if timeout is not None:
