@@ -123,8 +123,6 @@ if __name__ == '__main__':
         exit(-1)
 
     program = 'discoro_client5_proc.py' # program to distribute and execute
-    program = os.path.abspath(os.path.join(os.path.dirname(sys.argv[0]), program))
-
     # if scheduler is not already running (on a node as a program),
     # start private scheduler:
     Scheduler()
