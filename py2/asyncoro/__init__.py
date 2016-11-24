@@ -52,7 +52,7 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "4.3.2"
+__version__ = "4.3.3"
 
 __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
@@ -569,6 +569,12 @@ class _AsyncSocket(object):
             try:
                 sent = self._rsock.send(self._write_result)
                 if sent < 0:
+                    self._write_task = self._write_result = None
+                    self._notifier.clear(self, _AsyncPoller._Write)
+                    self._write_coro.throw(*sys.exc_info())
+            except socket.error as exc:
+                # apparently BSD may raise EAGAIN
+                if exc.errno != errno.EAGAIN:
                     self._write_task = self._write_result = None
                     self._notifier.clear(self, _AsyncPoller._Write)
                     self._write_coro.throw(*sys.exc_info())
