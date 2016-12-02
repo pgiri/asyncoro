@@ -52,7 +52,7 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "4.3.3"
+__version__ = "4.3.4"
 
 __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
@@ -1394,10 +1394,7 @@ if platform.system() == 'Windows':
             def _iocp_recvall(self, bufsize, *args):
                 """Internal use only; use 'recvall' with 'yield' instead.
                 """
-                buf = [win32file.AllocateReadBuffer(min(bufsize, 1048576))]
-                pending = [bufsize]
-
-                def _recvall(err, n):
+                def _recvall(buf, pending, err, n):
                     if err or n == 0:
                         if self._timeout and self._notifier:
                             self._notifier._del_timeout(self)
@@ -1414,19 +1411,20 @@ if platform.system() == 'Windows':
                                 else:
                                     coro.throw(socket.error(err))
                     else:
-                        self._read_result.append(buf[0][:n])
-                        pending[0] -= n
-                        if pending[0] == 0:
-                            buf[0] = ''.join(self._read_result)
+                        self._read_result.append(buf[:n])
+                        pending -= n
+                        if pending == 0:
+                            buf = ''.join(self._read_result)
                             if self._timeout and self._notifier:
                                 self._notifier._del_timeout(self)
                             self._read_overlap.object = self._read_result = None
                             coro, self._read_coro = self._read_coro, None
                             if coro:
-                                coro._proceed_(buf[0])
+                                coro._proceed_(buf)
                         else:
-                            buf[0] = win32file.AllocateReadBuffer(min(pending[0], 1048576))
-                            err, n = win32file.WSARecv(self._fileno, buf[0], self._read_overlap, 0)
+                            buf = win32file.AllocateReadBuffer(min(pending, 1048576))
+                            self._read_overlap.object = partial_func(_recvall, buf, pending)
+                            err, n = win32file.WSARecv(self._fileno, buf, self._read_overlap, 0)
                             if err and err != winerror.ERROR_IO_PENDING:
                                 if self._timeout and self._notifier:
                                     self._notifier._del_timeout(self)
@@ -1435,7 +1433,8 @@ if platform.system() == 'Windows':
                                 if coro:
                                     coro.throw(socket.error(err))
 
-                self._read_overlap.object = _recvall
+                buf = win32file.AllocateReadBuffer(min(bufsize, 1048576))
+                self._read_overlap.object = partial_func(_recvall, buf, bufsize)
                 self._read_result = []
                 if not self._asyncoro:
                     self._asyncoro = AsynCoro.scheduler()
@@ -1443,7 +1442,7 @@ if platform.system() == 'Windows':
                 self._read_coro._await_()
                 if self._timeout:
                     self._notifier._add_timeout(self)
-                err, n = win32file.WSARecv(self._fileno, buf[0], self._read_overlap, 0)
+                err, n = win32file.WSARecv(self._fileno, buf, self._read_overlap, 0)
                 if err and err != winerror.ERROR_IO_PENDING:
                     self._read_coro._proceed_(None)
                     self._read_overlap.object = self._read_result = self._read_coro = None

@@ -11,9 +11,10 @@ import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *
 import asyncoro.discoro_schedulers
 
-# rcoro_proc is sent to remote server to execute discomp7_proc.py program. It
-# uses message passing to get data from client that is written to pipe and read
-# output from program that is sent back to client.
+# rcoro_proc is sent to remote server to execute discoro_client5_proc.py
+# program. It uses message passing to get data from client that is sent to the
+# program's stdin using pipe and read output from program that is sent back to
+# client.
 def rcoro_proc(client, program, coro=None):
     import sys
     import os
