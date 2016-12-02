@@ -1427,7 +1427,7 @@ if platform.system() == 'Windows':
                         else:
                             buf[0] = win32file.AllocateReadBuffer(min(pending[0], 1048576))
                             err, n = win32file.WSARecv(self._fileno, buf[0], self._read_overlap, 0)
-                            if err and err != winerror.ERROR_IO_PENDING[0]:
+                            if err and err != winerror.ERROR_IO_PENDING:
                                 if self._timeout and self._notifier:
                                     self._notifier._del_timeout(self)
                                 self._read_overlap.object = self._read_result = None
