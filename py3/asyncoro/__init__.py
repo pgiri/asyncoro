@@ -117,11 +117,32 @@ class Logger(object):
         self.stream = stream
         self.level = level if level else Logger.INFO
         self.log_ms = log_ms
+        self.setLevel(self.level)
 
     def setLevel(self, level):
         """Set to new log level.
         """
         self.level = level
+        if level <= Logger.DEBUG:
+            self.debug = self.log
+        else:
+            self.debug = self.nolog
+        if level <= Logger.WARNING:
+            self.warn = self.warning = self.log
+        else:
+            self.warn = self.warning = self.nolog
+        if level <= Logger.INFO:
+            self.info = self.log
+        else:
+            self.info = self.nolog
+        if level <= Logger.ERROR:
+            self.error = self.log
+        else:
+            self.error = self.nolog
+        if level <= Logger.FATAL:
+            self.critical = self.fatal = self.log
+        else:
+            self.critical = self.fatal = self.nolog
 
     def show_ms(self, flag):
         """If 'flag' is True, milliseconds is shown in timestamp.
@@ -141,29 +162,8 @@ class Logger(object):
                               (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now)),
                                self.name, message))
 
-    def debug(self, message, *args):
-        if self.level <= Logger.DEBUG:
-            self.log(message, *args)
-
-    def info(self, message, *args):
-        if self.level <= Logger.INFO:
-            self.log(message, *args)
-
-    def warning(self, message, *args):
-        if self.level <= Logger.WARNING:
-            self.log(message, *args)
-
-    warn = warning
-
-    def error(self, message, *args):
-        if self.level <= Logger.ERROR:
-            self.log(message, *args)
-
-    def fatal(self, message, *args):
-        if self.level <= Logger.FATAL:
-            self.log(message, *args)
-
-    critical = fatal
+    def nolog(self, message, *args):
+        return
 
     def flush(self):
         self.stream.flush()
