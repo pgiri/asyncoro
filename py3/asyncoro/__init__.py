@@ -1408,7 +1408,12 @@ if platform.system() == 'Windows':
             def _iocp_recvall(self, bufsize, *args):
                 """Internal use only; use 'recvall' with 'yield' instead.
                 """
-                def _recvall(view, err, n):
+                self._read_result = win32file.AllocateReadBuffer(bufsize)
+                # buffer is memoryview object
+                view = self._read_result
+
+                def _recvall(err, n):
+                    nonlocal view
                     if err or n == 0:
                         if self._timeout and self._notifier:
                             self._notifier._del_timeout(self)
@@ -1427,17 +1432,7 @@ if platform.system() == 'Windows':
                                     coro.throw(socket.error(err))
                     else:
                         view = view[n:]
-                        if len(view) == 0:
-                            buf = self._read_result.tobytes()
-                            self._read_result.release()
-                            if self._timeout and self._notifier:
-                                self._notifier._del_timeout(self)
-                            self._read_overlap.object = self._read_result = None
-                            coro, self._read_coro = self._read_coro, None
-                            if coro:
-                                coro._proceed_(buf)
-                        else:
-                            self._read_overlap.object = partial_func(_recvall, view)
+                        if view:
                             err, n = win32file.WSARecv(self._fileno, view, self._read_overlap, 0)
                             if err and err != winerror.ERROR_IO_PENDING:
                                 if self._timeout and self._notifier:
@@ -1447,17 +1442,24 @@ if platform.system() == 'Windows':
                                 coro, self._read_coro = self._read_coro, None
                                 if coro:
                                     coro.throw(socket.error(err))
+                        else:
+                            buf = self._read_result.tobytes()
+                            self._read_result.release()
+                            if self._timeout and self._notifier:
+                                self._notifier._del_timeout(self)
+                            self._read_overlap.object = self._read_result = None
+                            coro, self._read_coro = self._read_coro, None
+                            if coro:
+                                coro._proceed_(buf)
 
-                self._read_result = win32file.AllocateReadBuffer(bufsize)
-                # buffer is memoryview object
-                self._read_overlap.object = partial_func(_recvall, self._read_result)
+                self._read_overlap.object = _recvall
                 if not self._asyncoro:
                     self._asyncoro = AsynCoro.scheduler()
                 self._read_coro = AsynCoro.cur_coro(self._asyncoro)
                 self._read_coro._await_()
                 if self._timeout:
                     self._notifier._add_timeout(self)
-                err, n = win32file.WSARecv(self._fileno, self._read_result, self._read_overlap, 0)
+                err, n = win32file.WSARecv(self._fileno, view, self._read_overlap, 0)
                 if err and err != winerror.ERROR_IO_PENDING:
                     self._read_coro._proceed_(None)
                     self._read_overlap.object = self._read_result = self._read_coro = None
