@@ -16,6 +16,7 @@ import tempfile
 import threading
 import errno
 import atexit
+import ssl
 try:
     import netifaces
 except ImportError:
@@ -994,7 +995,8 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
 
             if loc.port:
                 req = _NetRequest('signature', kwargs={'version': __version__}, dst=loc)
-                sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
+                sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                                   keyfile=self._keyfile, certfile=self._certfile)
                 sock.settimeout(2)
                 try:
                     yield sock.connect((loc.addr, loc.port))
@@ -1114,7 +1116,16 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
     def _tcp_proc(self, coro=None):
         coro.set_daemon()
         while 1:
-            conn, addr = yield self._tcp_sock.accept()
+            try:
+                conn, addr = yield self._tcp_sock.accept()
+            except ssl.SSLError as err:
+                logger.debug('SSL connection failed: %s', str(err))
+                continue
+            except GeneratorExit:
+                break
+            except:
+                logger.debug(traceback.format_exc())
+                continue
             SysCoro(self._tcp_task, conn, addr)
 
     def _tcp_task(self, conn, addr, coro=None):

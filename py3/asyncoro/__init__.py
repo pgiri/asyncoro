@@ -356,13 +356,9 @@ class _AsyncSocket(object):
             else:
                 self._rsock.settimeout(timeout)
         else:
-            if timeout is None:
-                self.setblocking(1)
-            elif isinstance(timeout, (int, float)) and timeout >= 0:
-                self._timeout = timeout
-                # self._notifier._del_timeout(self)
-            else:
-                logger.warning('invalid timeout %s ignored', timeout)
+            if self._timeout_id:
+                self._notifier._del_timeout(self)
+            self._timeout = timeout
 
     def gettimeout(self):
         if self._blocking:
@@ -429,6 +425,18 @@ class _AsyncSocket(object):
         self._read_coro._await_()
         self._read_task = _recv
         self._notifier.add(self, _AsyncPoller._Read)
+        if self._certfile and self._rsock.pending():
+            try:
+                buf = self._rsock.recv(bufsize, *args)
+            except:
+                self._read_task = None
+                self._notifier.clear(self, _AsyncPoller._Read)
+                self._read_coro.throw(*sys.exc_info())
+            else:
+                if buf:
+                    self._read_task = None
+                    self._notifier.clear(self, _AsyncPoller._Read)
+                    self._read_coro._proceed_(buf)
 
     def _async_recvall(self, bufsize, *args):
         """Internal use only; use 'recvall' with 'yield' instead.
@@ -476,6 +484,23 @@ class _AsyncSocket(object):
         self._read_coro._await_()
         self._read_task = partial_func(_recvall, self, view)
         self._notifier.add(self, _AsyncPoller._Read)
+        if self._certfile and self._rsock.pending():
+            try:
+                recvd = self._rsock.recv_into(view, len(view), *args)
+            except:
+                self._read_task = self._read_result = None
+                self._notifier.clear(self, _AsyncPoller._Read)
+                self._read_coro.throw(*sys.exc_info())
+            else:
+                if recvd == bufsize:
+                    view.release()
+                    buf = self._read_result
+                    self._read_task = self._read_result = None
+                    self._notifier.clear(self, _AsyncPoller._Read)
+                    self._read_coro._proceed_(buf)
+                elif recvd:
+                    view = view[recvd:]
+                    self._read_task = functools.partial(_recvall, self, view)
 
     def _sync_recvall(self, bufsize, *args):
         """Internal use only; use 'recvall' instead.
@@ -658,8 +683,7 @@ class _AsyncSocket(object):
             # SSL connection
             if not self.ssl_server_ctx and hasattr(ssl, 'create_default_context'):
                 self.ssl_server_ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-                self.ssl_server_ctx.load_cert_chain(certfile=self._certfile,
-                                                    keyfile=self._keyfile)
+                self.ssl_server_ctx.load_cert_chain(self._certfile, keyfile=self._keyfile)
 
             conn = AsyncSocket(conn, blocking=False, keyfile=self._keyfile,
                                certfile=self._certfile, ssl_version=self._ssl_version)
@@ -669,8 +693,8 @@ class _AsyncSocket(object):
                                                                   server_side=True,
                                                                   do_handshake_on_connect=False)
                 else:
-                    conn._rsock = ssl.wrap_socket(conn._rsock, certfile=self._certfile,
-                                                  keyfile=self._keyfile,
+                    conn._rsock = ssl.wrap_socket(conn._rsock, keyfile=self._keyfile,
+                                                  certfile=self._certfile,
                                                   ssl_version=self._ssl_version, server_side=True,
                                                   do_handshake_on_connect=False)
             except:
