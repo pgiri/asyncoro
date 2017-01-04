@@ -17,6 +17,7 @@ import threading
 import errno
 import atexit
 import ssl
+import struct
 try:
     import netifaces
 except ImportError:
@@ -297,7 +298,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
         kwargs = {'file': os.path.basename(file), 'stat_buf': stat_buf,
                   'overwrite': overwrite is True, 'dir': dir, 'sep': os.sep}
         req = _NetRequest('send_file', kwargs=kwargs, dst=location, timeout=timeout)
-        sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+        sock = AsyncSocket(socket.socket(self._sys_asyncoro.sock_family, socket.SOCK_STREAM),
                            keyfile=self._keyfile, certfile=self._certfile)
         if timeout:
             sock.settimeout(timeout)
@@ -691,7 +692,8 @@ class _Peer(object):
                     break
             req = self.reqs.popleft()
             if not self.conn:
-                self.conn = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                self.conn = AsyncSocket(socket.socket(_Peer._asyncoro.sock_family,
+                                                      socket.SOCK_STREAM),
                                         keyfile=self.keyfile, certfile=self.certfile)
                 if req.timeout:
                     self.conn.settimeout(req.timeout)
@@ -844,25 +846,34 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
     _asyncoro = None
 
     def __init__(self, udp_port=0, tcp_port=0, node=None, ext_ip_addr=None,
-                 name=None, discover_peers=True,
+                 socket_family=socket.AF_INET, name=None, discover_peers=True,
                  secret='', certfile=None, keyfile=None, notifier=None,
                  dest_path=None, max_file_size=None):
         super(self.__class__, self).__init__()
         SysCoro._asyncoro = _Peer._asyncoro = self
-        if node:
-            node = socket.gethostbyname(node)
-        else:
+        if not node:
             if netifaces:
                 for iface in netifaces.interfaces():
-                    for link in netifaces.ifaddresses(iface).get(netifaces.AF_INET, []):
-                        if link.get('broadcast', None) and link.get('netmask', None):
-                            node = socket.gethostbyname(link.get('addr', ''))
-                            break
+                    for link in netifaces.ifaddresses(iface).get(socket_family, []):
+                        if socket_family == socket.AF_INET:
+                            if link.get('broadcast', None) and link.get('netmask', None):
+                                node = link.get('addr', '')
+                                break
+                        elif socket_family == socket.AF_INET6:
+                            if link.get('netmask', None):
+                                node = link.get('addr', '')
+                                break
                     else:
                         continue
                     break
             if not node:
-                node = socket.gethostbyname(socket.gethostname())
+                node = socket.gethostname()
+        try:
+            node = socket.getaddrinfo(node, None, socket.AF_INET, socket.SOCK_STREAM)
+        except:
+            node = socket.getaddrinfo(node, None, socket.AF_INET6, socket.SOCK_STREAM)
+        self.sock_family, node = node[0][0], node[0][4][0]
+
         if not udp_port:
             udp_port = 51350
         if not dest_path:
@@ -881,13 +892,18 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
         self.max_file_size = max_file_size
         self._certfile = certfile
         self._keyfile = keyfile
-        self._udp_sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+        self._udp_sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_DGRAM))
         if hasattr(socket, 'SO_REUSEADDR'):
             self._udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         if hasattr(socket, 'SO_REUSEPORT'):
             self._udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         self._udp_sock.bind(('', udp_port))
-        self._tcp_sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+        if self.sock_family == socket.AF_INET6:
+            self._broadcast = 'ff15:7079:7468:6f6e:6465:6d6f:6d63:6173'
+            mreq = socket.inet_pton(self.sock_family, self._broadcast) + struct.pack('@I', 0)
+            self._udp_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
+
+        self._tcp_sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_STREAM),
                                      keyfile=self._keyfile, certfile=self._certfile)
         if tcp_port:
             if hasattr(socket, 'SO_REUSEADDR'):
@@ -895,7 +911,7 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
             if hasattr(socket, 'SO_REUSEPORT'):
                 self._tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         self._tcp_sock.bind((node, tcp_port))
-        self._location = Location(*self._tcp_sock.getsockname())
+        self._location = Location(*(self._tcp_sock.getsockname()[:2]))
         if not self._location.port:
             raise Exception('could not start network server at %s' % (self._location))
         if name:
@@ -920,16 +936,17 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
         self._tcp_sock.listen(32)
         logger.info('network server %s@ %s, udp_port=%s', '"%s" ' % name if name else '',
                     self._location, self._udp_sock.getsockname()[1])
-        self._broadcast = '<broadcast>'
-        if netifaces:
-            for iface in netifaces.interfaces():
-                for link in netifaces.ifaddresses(iface).get(netifaces.AF_INET, []):
-                    if link['addr'] == self._location.addr:
-                        self._broadcast = link.get('broadcast', '<broadcast>')
-                        break
-                else:
-                    continue
-                break
+        if self.sock_family == socket.AF_INET:
+            self._broadcast = '<broadcast>'
+            if netifaces:
+                for iface in netifaces.interfaces():
+                    for link in netifaces.ifaddresses(iface).get(netifaces.AF_INET, []):
+                        if link['addr'] == self._location.addr:
+                            self._broadcast = link.get('broadcast', '<broadcast>')
+                            break
+                    else:
+                        continue
+                    break
         self._ignore_peers = False
         self._tcp_coro = SysCoro(self._tcp_proc)
         self._udp_coro = SysCoro(self._udp_proc, discover_peers)
@@ -995,7 +1012,7 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
 
             if loc.port:
                 req = _NetRequest('signature', kwargs={'version': __version__}, dst=loc)
-                sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+                sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_STREAM),
                                    keyfile=self._keyfile, certfile=self._certfile)
                 sock.settimeout(2)
                 try:
@@ -1019,7 +1036,7 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
                 ping_msg = {'location': self._location, 'signature': self._signature,
                             'name': self._name, 'version': __version__, 'broadcast': broadcast}
                 ping_msg = 'ping:'.encode() + serialize(ping_msg)
-                sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+                sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_DGRAM))
                 sock.settimeout(2)
                 try:
                     yield sock.sendto(ping_msg, (loc.addr, udp_port))
@@ -1032,7 +1049,7 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
         client.send(ret)
 
     def _acquaint_(self, peer_location, peer_signature, coro=None):
-        sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM),
+        sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_STREAM),
                            keyfile=self._keyfile, certfile=self._certfile)
         sock.settimeout(MsgTimeout)
         req = _NetRequest('peer', kwargs={'signature': self._signature, 'name': self._name,
@@ -1054,10 +1071,16 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
         raise StopIteration(0)
 
     def discover_peers(self, port=None, coro=None):
-        ping_sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
-        ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        ping_sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_DGRAM))
         ping_sock.settimeout(2)
-        ping_sock.bind((self._tcp_sock.getsockname()[0], 0))
+        if self.sock_family == socket.AF_INET:
+            ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            # ping_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, struct.pack('@i', 1))
+            ping_sock.bind((self._tcp_sock.getsockname()[0], 0))
+        elif self.sock_family == socket.AF_INET6:
+            ping_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS,
+                                 struct.pack('@i', 1))
+
         ping_msg = {'location': self._location, 'signature': self._signature,
                     'name': self._name, 'version': __version__}
         ping_msg = 'ping:'.encode() + serialize(ping_msg)
@@ -1504,7 +1527,7 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
 
             elif req.name == 'relay_ping':
                 yield conn.send_msg(serialize(0))
-                ping_sock = AsyncSocket(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+                ping_sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_DGRAM))
                 ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
                 ping_sock.settimeout(2)
                 ping_msg = 'ping:'.encode() + serialize(req.kwargs)
