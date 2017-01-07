@@ -850,33 +850,71 @@ class _SysAsynCoro_(asyncoro.AsynCoro):
     _asyncoro = None
 
     def __init__(self, udp_port=0, tcp_port=0, node=None, ext_ip_addr=None,
-                 socket_family=socket.AF_INET, name=None, discover_peers=True,
+                 socket_family=None, name=None, discover_peers=True,
                  secret='', certfile=None, keyfile=None, notifier=None,
                  dest_path=None, max_file_size=None):
         super(self.__class__, self).__init__()
         SysCoro._asyncoro = _Peer._asyncoro = self
-        if not node:
-            if netifaces:
-                for iface in netifaces.interfaces():
-                    for link in netifaces.ifaddresses(iface).get(socket_family, []):
-                        if socket_family == socket.AF_INET:
-                            if link.get('broadcast', None) and link.get('netmask', None):
-                                node = link.get('addr', '')
+
+        if node:
+            node = socket.getaddrinfo(node, None)[0]
+            if not socket_family:
+                socket_family = node[0]
+            elif node[0] != socket_family:
+                node = None
+            if node:
+                node = node[4][0]
+            if not socket_family:
+                socket_family = socket.AF_INET
+        if not socket_family:
+            socket_family = socket.getaddrinfo(socket.gethostbyname(socket.gethostname()), None)[0][0]
+        assert socket_family in (socket.AF_INET, socket.AF_INET6)
+
+        ifn, self.nodeaddrinfo = 0, None
+        if netifaces:
+            for iface in netifaces.interfaces():
+                if socket_family == socket.AF_INET:
+                    if self.nodeaddrinfo:
+                        break
+                else: # socket_family == socket.AF_INET6
+                    if ifn and self.nodeaddrinfo:
+                        break
+                    ifn, self.nodeaddrinfo = 0, None
+                for link in netifaces.ifaddresses(iface).get(socket_family, []):
+                    if socket_family == socket.AF_INET:
+                        if link.get('broadcast', '').startswith(link['addr'].split('.')[0]):
+                            if (not node) or (link['addr'] == node):
+                                self.nodeaddrinfo = socket.getaddrinfo(link['addr'], None)[0]
                                 break
-                        elif socket_family == socket.AF_INET6:
-                            if link.get('netmask', None):
-                                node = link.get('addr', '')
-                                break
-                    else:
-                        continue
-                    break
+                    else: # socket_family == socket.AF_INET6
+                        if link['addr'].startswith('fe80:'):
+                            addr = link['addr']
+                            if '%' not in addr.split(':')[-1]:
+                                addr = addr + '%' + interface
+                            for addrinfo in socket.getaddrinfo(addr, None):
+                                if addrinfo[2] == socket.IPPROTO_TCP:
+                                    ifn = addrinfo[4][-1]
+                                    break
+                        elif link['addr'].startswith('fd'):
+                            for addrinfo in socket.getaddrinfo(link['addr'], None):
+                                if addrinfo[2] == socket.IPPROTO_TCP:
+                                    self.nodeaddrinfo = addrinfo
+                                    break
+
+        if self.nodeaddrinfo:
             if not node:
-                node = socket.gethostname()
-        try:
-            node = socket.getaddrinfo(node, None, socket.AF_INET, socket.SOCK_STREAM)
-        except:
-            node = socket.getaddrinfo(node, None, socket.AF_INET6, socket.SOCK_STREAM)
-        self.sock_family, node = node[0][0], node[0][4][0]
+                node = self.nodeaddrinfo[4][0]
+            if not socket_family:
+                socket_family = self.nodeaddrinfo[0]
+        if not node:
+            node = socket.gethostbyname(socket.gethostname())
+
+        node = socket.getaddrinfo(node, None, socket_family, socket.SOCK_STREAM)[0]
+        if socket_family == socket.AF_INET6:
+            self.nodeaddrinfo = list(node)
+            self.nodeaddrinfo[4] = self.nodeaddrinfo[4][:-1] + (ifn,)
+            self.nodeaddrinfo = tuple(self.nodeaddrinfo)
+        self.sock_family, node = node[0], node[4][0]
 
         if not udp_port:
             udp_port = 51350
@@ -902,10 +940,6 @@ class _SysAsynCoro_(asyncoro.AsynCoro):
         if hasattr(socket, 'SO_REUSEPORT'):
             self._udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         self._udp_sock.bind(('', udp_port))
-        if self.sock_family == socket.AF_INET6:
-            self._broadcast = 'ff15:7079:7468:6f6e:6465:6d6f:6d63:6173'
-            mreq = socket.inet_pton(self.sock_family, self._broadcast) + struct.pack('@I', 0)
-            self._udp_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
 
         self._tcp_sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_STREAM),
                                      keyfile=self._keyfile, certfile=self._certfile)
@@ -941,6 +975,7 @@ class _SysAsynCoro_(asyncoro.AsynCoro):
         self._tcp_sock.listen(32)
         logger.info('network server %s@ %s, udp_port=%s', '"%s" ' % name if name else '',
                     self._location, self._udp_sock.getsockname()[1])
+
         if self.sock_family == socket.AF_INET:
             self._broadcast = '<broadcast>'
             if netifaces:
@@ -952,6 +987,13 @@ class _SysAsynCoro_(asyncoro.AsynCoro):
                     else:
                         continue
                     break
+        else: # self.sock_family == socket.AF_INET6
+            self._broadcast = 'ff02::1'
+            addrinfo = socket.getaddrinfo(self._broadcast, None)[0]
+            mreq = socket.inet_pton(addrinfo[0], addrinfo[4][0])
+            mreq += struct.pack('@I', self.nodeaddrinfo[4][-1])
+            self._udp_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
+
         self._ignore_peers = False
         self._tcp_coro = SysCoro(self._tcp_proc)
         self._udp_coro = SysCoro(self._udp_proc, discover_peers)
@@ -1078,21 +1120,27 @@ class _SysAsynCoro_(asyncoro.AsynCoro):
     def discover_peers(self, port=None, coro=None):
         ping_sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_DGRAM))
         ping_sock.settimeout(2)
+        if not port:
+            port = self._udp_sock.getsockname()[1]
         if self.sock_family == socket.AF_INET:
             ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            # ping_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, struct.pack('@i', 1))
             ping_sock.bind((self._tcp_sock.getsockname()[0], 0))
-        elif self.sock_family == socket.AF_INET6:
+            addr = (self._broadcast, port)
+        else: # self.sock_family == socket.AF_INET6
             ping_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS,
                                  struct.pack('@i', 1))
+            addr = list(self.nodeaddrinfo[4])
+            addr[1] = 0
+            ping_sock.bind(tuple(addr))
+            addr[0] = self._broadcast
+            addr[1] = port
+            addr = tuple(addr)
 
         ping_msg = {'location': self._location, 'signature': self._signature,
                     'name': self._name, 'version': __version__}
         ping_msg = 'ping:'.encode() + serialize(ping_msg)
-        if not port:
-            port = self._udp_sock.getsockname()[1]
         try:
-            yield ping_sock.sendto(ping_msg, (self._broadcast, port))
+            yield ping_sock.sendto(ping_msg, addr)
         except:
             pass
         ping_sock.close()

@@ -55,7 +55,7 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "4.3.4"
+__version__ = "4.4.0"
 
 __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
@@ -683,7 +683,7 @@ class _AsyncSocket(object):
             # SSL connection
             if not self.ssl_server_ctx and hasattr(ssl, 'create_default_context'):
                 self.ssl_server_ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-                self.ssl_server_ctx.load_cert_chain(self._certfile, keyfile=self._keyfile)
+                self.ssl_server_ctx.load_cert_chain(certfile=self._certfile, keyfile=self._keyfile)
 
             conn = AsyncSocket(conn, blocking=False, keyfile=self._keyfile,
                                certfile=self._certfile, ssl_version=self._ssl_version)
