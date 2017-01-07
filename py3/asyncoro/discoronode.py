@@ -500,9 +500,9 @@ if __name__ == '__main__':
                         help='maximum file size of any file transferred')
     parser.add_argument('-s', '--secret', dest='secret', default='',
                         help='authentication secret for handshake with peers')
-    parser.add_argument('--certfile', dest='certfile', default='',
+    parser.add_argument('--certfile', dest='certfile', default=None,
                         help='file containing SSL certificate')
-    parser.add_argument('--keyfile', dest='keyfile', default='',
+    parser.add_argument('--keyfile', dest='keyfile', default=None,
                         help='file containing SSL key')
     parser.add_argument('--serve', dest='serve', default=-1, type=int,
                         help='number of clients to serve before exiting')
