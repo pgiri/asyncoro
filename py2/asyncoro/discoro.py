@@ -1316,9 +1316,9 @@ if __name__ == '__main__':
                         help='maximum file size of any file transferred')
     parser.add_argument('-s', '--secret', dest='secret', default='',
                         help='authentication secret for handshake with peers')
-    parser.add_argument('--certfile', dest='certfile', default=None,
+    parser.add_argument('--certfile', dest='certfile', default='',
                         help='file containing SSL certificate')
-    parser.add_argument('--keyfile', dest='keyfile', default=None,
+    parser.add_argument('--keyfile', dest='keyfile', default='',
                         help='file containing SSL key')
     parser.add_argument('--node', action='append', dest='nodes', default=[],
                         help='additional remote nodes (names or IP address) to use')
@@ -1347,6 +1347,15 @@ if __name__ == '__main__':
     else:
         logger.setLevel(logging.INFO)
     del config['loglevel']
+
+    if config['certfile']:
+        config['certfile'] = os.path.abspath(config['certfile'])
+    else:
+        config['certfile'] = None
+    if config['keyfile']:
+        config['keyfile'] = os.path.abspath(config['keyfile'])
+    else:
+        config['keyfile'] = None
 
     daemon = config.pop('daemon', False)
     _discoro_scheduler = Scheduler(**config)

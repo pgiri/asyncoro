@@ -498,9 +498,9 @@ if __name__ == '__main__':
                         help='maximum file size of any file transferred')
     parser.add_argument('-s', '--secret', dest='secret', default='',
                         help='authentication secret for handshake with peers')
-    parser.add_argument('--certfile', dest='certfile', default=None,
+    parser.add_argument('--certfile', dest='certfile', default='',
                         help='file containing SSL certificate')
-    parser.add_argument('--keyfile', dest='keyfile', default=None,
+    parser.add_argument('--keyfile', dest='keyfile', default='',
                         help='file containing SSL key')
     parser.add_argument('--serve', dest='serve', default=-1, type=int,
                         help='number of clients to serve before exiting')
@@ -696,6 +696,15 @@ if __name__ == '__main__':
     else:
         _discoro_config['max_file_size'] = 0
 
+    if _discoro_config['certfile']:
+        _discoro_config['certfile'] = os.path.abspath(_discoro_config['certfile'])
+    else:
+        _discoro_config['certfile'] = None
+    if _discoro_config['keyfile']:
+        _discoro_config['keyfile'] = os.path.abspath(_discoro_config['keyfile'])
+    else:
+        _discoro_config['keyfile'] = None
+
     _discoro_node_auth = hashlib.sha1(os.urandom(10).encode('hex')).hexdigest()
 
     class _discoro_Struct(object):
@@ -724,7 +733,7 @@ if __name__ == '__main__':
 
         coro.register('discoro_node')
         coro_scheduler = asyncoro.AsynCoro.instance()
-        last_pulse = last_proc_check = last_ping = time.time()
+        last_pulse = last_ping = time.time()
         scheduler_coro = cur_computation_auth = None
         interval = _discoro_config['max_pulse_interval']
         ping_interval = _discoro_config.pop('ping_interval')
@@ -899,7 +908,7 @@ if __name__ == '__main__':
                             if interval:
                                 interval = min(interval, _discoro_config['max_pulse_interval'])
                             else:
-                                interal = _discoro_config['max_pulse_interval']
+                                interval = _discoro_config['max_pulse_interval']
                             if computation.zombie_period:
                                 interval = min(interval, computation.zombie_period / 3)
                             _discoro_busy_time.value = int(time.time())
