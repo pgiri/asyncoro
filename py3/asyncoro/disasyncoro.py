@@ -935,7 +935,14 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
             self._udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         if hasattr(socket, 'SO_REUSEPORT'):
             self._udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        self._udp_sock.bind(('', udp_port))
+        if self.sock_family == socket.AF_INET:
+            addr = ('', udp_port)
+        else: # self.sock_family == socket.AF_INET6
+            addr = list(self.nodeaddrinfo[4])
+            addr[0] = ''
+            addr[1] = udp_port
+            addr = tuple(addr)
+        self._udp_sock.bind(addr)
 
         self._tcp_sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_STREAM),
                                      keyfile=self._keyfile, certfile=self._certfile)
@@ -944,7 +951,14 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
                 self._tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             if hasattr(socket, 'SO_REUSEPORT'):
                 self._tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        self._tcp_sock.bind((node, tcp_port))
+        if self.sock_family == socket.AF_INET:
+            addr = ('', tcp_port)
+        else: # self.sock_family == socket.AF_INET6
+            addr = list(self.nodeaddrinfo[4])
+            addr[0] = node
+            addr[1] = tcp_port
+            addr = tuple(addr)
+        self._tcp_sock.bind(addr)
         self._location = Location(*(self._tcp_sock.getsockname()[:2]))
         if not self._location.port:
             raise Exception('could not start network server at %s' % (self._location))
@@ -1119,7 +1133,6 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
             port = self._udp_sock.getsockname()[1]
         if self.sock_family == socket.AF_INET:
             ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            ping_sock.bind((self._tcp_sock.getsockname()[0], 0))
             addr = (self._broadcast, port)
         else: # self.sock_family == socket.AF_INET6
             ping_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS,
