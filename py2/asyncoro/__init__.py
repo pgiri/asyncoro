@@ -284,8 +284,11 @@ class _AsyncSocket(object):
                 self.recv_msg = self._async_recv_msg
                 self.send_msg = self._async_send_msg
             self._asyncoro = AsynCoro.scheduler()
-            self._notifier = _AsyncNotifier.instance()
-            self._register()
+            if self._asyncoro:
+                self._notifier = self._asyncoro._notifier
+                self._register()
+            else:
+                self._notifier = None
 
     def _register(self):
         """Internal use only.
@@ -415,6 +418,8 @@ class _AsyncSocket(object):
 
         if not self._asyncoro:
             self._asyncoro = AsynCoro.scheduler()
+            self._notifier = self._asyncoro._notifier
+            self._register()
         self._read_coro = AsynCoro.cur_coro(self._asyncoro)
         self._read_coro._await_()
         self._read_task = _recv
@@ -471,6 +476,8 @@ class _AsyncSocket(object):
         view = memoryview(self._read_result)
         if not self._asyncoro:
             self._asyncoro = AsynCoro.scheduler()
+            self._notifier = self._asyncoro._notifier
+            self._register()
         self._read_coro = AsynCoro.cur_coro(self._asyncoro)
         self._read_coro._await_()
         self._read_task = partial_func(_recvall, self, view)
@@ -490,7 +497,7 @@ class _AsyncSocket(object):
                     self._read_coro._proceed_(buf)
                 elif recvd:
                     view = view[recvd:]
-                    self._read_task = functools.partial(_recvall, self, view)
+                    self._read_task = partial_func(_recvall, self, view)
 
     def _sync_recvall(self, bufsize, *args):
         """Internal use only; use 'recvall' instead.
@@ -527,6 +534,8 @@ class _AsyncSocket(object):
 
         if not self._asyncoro:
             self._asyncoro = AsynCoro.scheduler()
+            self._notifier = self._asyncoro._notifier
+            self._register()
         self._read_coro = AsynCoro.cur_coro(self._asyncoro)
         self._read_coro._await_()
         self._read_task = _recvfrom
@@ -551,6 +560,8 @@ class _AsyncSocket(object):
 
         if not self._asyncoro:
             self._asyncoro = AsynCoro.scheduler()
+            self._notifier = self._asyncoro._notifier
+            self._register()
         self._write_coro = AsynCoro.cur_coro(self._asyncoro)
         self._write_coro._await_()
         self._write_task = _send
@@ -580,7 +591,7 @@ class _AsyncSocket(object):
         self._write_task = _sendto
         self._notifier.add(self, _AsyncPoller._Write)
 
-    def _async_sendall(self, data):
+    def _async_sendall(self, data, *args):
         """Internal use only; use 'sendall' with 'yield' instead.
 
         Asynchronous version of socket sendall method. If socket's
@@ -591,7 +602,7 @@ class _AsyncSocket(object):
         """
         def _sendall(self, data_len):
             try:
-                sent = self._rsock.send(self._write_result)
+                sent = self._rsock.send(self._write_result, *args)
                 if sent < 0:
                     self._write_task = self._write_result = None
                     self._notifier.clear(self, _AsyncPoller._Write)
@@ -620,12 +631,14 @@ class _AsyncSocket(object):
         self._write_result = buffer(data)
         if not self._asyncoro:
             self._asyncoro = AsynCoro.scheduler()
+            self._notifier = self._asyncoro._notifier
+            self._register()
         self._write_coro = AsynCoro.cur_coro(self._asyncoro)
         self._write_coro._await_()
         self._write_task = partial_func(_sendall, self, len(data))
         self._notifier.add(self, _AsyncPoller._Write)
 
-    def _sync_sendall(self, data):
+    def _sync_sendall(self, data, *args):
         """Internal use only; use 'sendall' instead.
 
         Synchronous version of async_sendall.
@@ -633,7 +646,7 @@ class _AsyncSocket(object):
         # TODO: is socket's sendall better?
         buf = buffer(data)
         while len(buf) > 0:
-            sent = self._rsock.send(buf)
+            sent = self._rsock.send(buf, *args)
             if sent < 0:
                 raise socket.error('hangup')
             buf = buf[sent:]
@@ -716,6 +729,8 @@ class _AsyncSocket(object):
 
         if not self._asyncoro:
             self._asyncoro = AsynCoro.scheduler()
+            self._notifier = self._asyncoro._notifier
+            self._register()
         self._read_coro = AsynCoro.cur_coro(self._asyncoro)
         self._read_coro._await_()
         self._read_task = _accept
@@ -793,6 +808,8 @@ class _AsyncSocket(object):
 
         if not self._asyncoro:
             self._asyncoro = AsynCoro.scheduler()
+            self._notifier = self._asyncoro._notifier
+            self._register()
         self._write_coro = AsynCoro.cur_coro(self._asyncoro)
         self._write_coro._await_()
         self._write_task = _connect
@@ -913,22 +930,11 @@ if platform.system() == 'Windows':
             """Internal use only.
             """
 
-            __metaclass__ = Singleton
-            _instance = None
-
             _Read = 0x1
             _Write = 0x2
             _Error = 0x4
 
-            @classmethod
-            def instance(cls):
-                if cls._instance:
-                    return cls._instance
-                cls._instance = cls()
-                return cls._instance
-
             def __init__(self, iocp_notifier):
-                self.__class__._instance = self
                 self._fds = {}
                 self._events = {}
                 self._terminate = False
@@ -1119,20 +1125,9 @@ if platform.system() == 'Windows':
             """Internal use only.
             """
 
-            __metaclass__ = Singleton
-            _instance = None
-
             _Block = win32event.INFINITE
 
-            @classmethod
-            def instance(cls):
-                if cls._instance:
-                    return cls._instance
-                cls._instance = cls()
-                return cls._instance
-
             def __init__(self):
-                self.__class__._instance = self
                 self._poller_name = 'IOCP'
                 self.iocp = win32file.CreateIoCompletionPort(win32file.INVALID_HANDLE_VALUE,
                                                              None, 0, 0)
@@ -1149,9 +1144,6 @@ if platform.system() == 'Windows':
                     logger.warning('WSARecv error: %s', err)
                 self._lock = threading.RLock()
                 self._polling = False
-                self.poll_thread = threading.Thread(target=self.poll)
-                self.poll_thread.daemon = True
-                self.poll_thread.start()
 
             def cmd_rsock_recv(self, err, n):
                 if n == 0:
@@ -1175,46 +1167,51 @@ if platform.system() == 'Windows':
             def modify(self, fd, event):
                 pass
 
-            def poll(self):
-                while 1:
-                    self._lock.acquire()
-                    if self._timeouts:
-                        timeout = self._timeouts[0][0] - _time()
-                        if timeout < 0.0001:
-                            timeout = 0
+            def poll(self, timeout):
+                self._lock.acquire()
+                if timeout == 0:
+                    self.poll_timeout = 0
+                elif self._timeouts:
+                    self.poll_timeout = self._timeouts[0][0] - _time()
+                    if self.poll_timeout < 0.0001:
+                        self.poll_timeout = 0
+                    elif timeout is not None:
+                        self.poll_timeout = min(timeout, self.poll_timeout)
+                elif timeout is None:
+                    self.poll_timeout = _AsyncNotifier._Block
+                else:
+                    self.poll_timeout = timeout
+                timeout = self.poll_timeout
+                self._lock.release()
+                if timeout and timeout != _AsyncNotifier._Block:
+                    timeout = int(timeout * 1000)
+                self._polling = True
+                err, n, key, overlap = win32file.GetQueuedCompletionStatus(self.iocp, timeout)
+                self._polling = False
+                while err != winerror.WAIT_TIMEOUT:
+                    if overlap and overlap.object:
+                        overlap.object(err, n)
+                    elif not self.iocp:
+                        if (err == winerror.ERROR_INVALID_HANDLE or
+                            err == winerror.ERROR_ABANDONED_WAIT_0):
+                            pass
                         else:
-                            timeout = int(timeout * 1000)
+                            logger.warning('IOCP handle closed error: %d', err)
+                        return
                     else:
-                        timeout = _AsyncNotifier._Block
-                    self._lock.release()
+                        logger.warning('invalid overlap: %s', err)
+                        break
+                    err, n, key, overlap = win32file.GetQueuedCompletionStatus(self.iocp, 0)
 
-                    self._polling = True
-                    err, n, key, overlap = win32file.GetQueuedCompletionStatus(self.iocp, timeout)
-                    self._polling = False
-                    while err != winerror.WAIT_TIMEOUT:
-                        if overlap and overlap.object:
-                            overlap.object(err, n)
-                        elif not self.iocp:
-                            if (err == winerror.ERROR_INVALID_HANDLE or
-                                err == winerror.ERROR_ABANDONED_WAIT_0):
-                                pass
-                            else:
-                                logger.warning('IOCP handle closed error: %d', err)
-                            return
-                        else:
-                            logger.warning('invalid overlap: %s', err)
-                            break
-                        err, n, key, overlap = win32file.GetQueuedCompletionStatus(self.iocp, 0)
-
-                    self._lock.acquire()
-                    if self._timeouts:
-                        now = _time() + 0.0001
-                        while self._timeouts and self._timeouts[0][0] <= now:
-                            fd_timeout, fd = self._timeouts.pop(0)
-                            if fd._timeout_id == fd_timeout:
-                                fd._timeout_id = None
-                                fd._timed_out()
-                    self._lock.release()
+                self._lock.acquire()
+                if self._timeouts:
+                    now = _time() + 0.0001
+                    while self._timeouts and self._timeouts[0][0] <= now:
+                        fd_timeout, fd = self._timeouts.pop(0)
+                        if fd._timeout_id == fd_timeout:
+                            fd._timeout_id = None
+                            fd._timed_out()
+                self._lock.release()
 
             def _add_timeout(self, fd):
                 if fd._timeout:
@@ -1369,6 +1366,8 @@ if platform.system() == 'Windows':
                 self._read_result = win32file.AllocateReadBuffer(bufsize)
                 if not self._asyncoro:
                     self._asyncoro = AsynCoro.scheduler()
+                    self._notifier = self._asyncoro._notifier
+                    self._register()
                 self._read_coro = AsynCoro.cur_coro(self._asyncoro)
                 self._read_coro._await_()
                 if self._timeout:
@@ -1404,6 +1403,8 @@ if platform.system() == 'Windows':
                 self._write_overlap.object = _send
                 if not self._asyncoro:
                     self._asyncoro = AsynCoro.scheduler()
+                    self._notifier = self._asyncoro._notifier
+                    self._register()
                 self._write_coro = AsynCoro.cur_coro(self._asyncoro)
                 self._write_coro._await_()
                 if self._timeout:
@@ -1462,6 +1463,8 @@ if platform.system() == 'Windows':
                 self._read_result = []
                 if not self._asyncoro:
                     self._asyncoro = AsynCoro.scheduler()
+                    self._notifier = self._asyncoro._notifier
+                    self._register()
                 self._read_coro = AsynCoro.cur_coro(self._asyncoro)
                 self._read_coro._await_()
                 if self._timeout:
@@ -1512,6 +1515,8 @@ if platform.system() == 'Windows':
                 self._write_result = buffer(data)
                 if not self._asyncoro:
                     self._asyncoro = AsynCoro.scheduler()
+                    self._notifier = self._asyncoro._notifier
+                    self._register()
                 self._write_coro = AsynCoro.cur_coro(self._asyncoro)
                 self._write_coro._await_()
                 if self._timeout:
@@ -1599,6 +1604,8 @@ if platform.system() == 'Windows':
                 self._read_overlap.object = _connect
                 if not self._asyncoro:
                     self._asyncoro = AsynCoro.scheduler()
+                    self._notifier = self._asyncoro._notifier
+                    self._register()
                 self._read_coro = AsynCoro.cur_coro(self._asyncoro)
                 self._read_coro._await_()
                 if self._timeout:
@@ -1700,6 +1707,8 @@ if platform.system() == 'Windows':
                 self._read_overlap.object = _accept
                 if not self._asyncoro:
                     self._asyncoro = AsynCoro.scheduler()
+                    self._notifier = self._asyncoro._notifier
+                    self._register()
                 self._read_coro = AsynCoro.cur_coro(self._asyncoro)
                 self._read_coro._await_()
                 if self._timeout:
@@ -1723,9 +1732,6 @@ if not hasattr(sys.modules[__name__], '_AsyncNotifier'):
         """Internal use only.
         """
 
-        __metaclass__ = Singleton
-        _instance = None
-
         _Read = None
         _Write = None
         _Hangup = None
@@ -1734,7 +1740,6 @@ if not hasattr(sys.modules[__name__], '_AsyncNotifier'):
         _Block = None
 
         def __init__(self):
-            self.__class__._instance = self
             self.timeout_multiplier = 1
 
             if hasattr(select, 'epoll'):
@@ -1785,85 +1790,74 @@ if not hasattr(sys.modules[__name__], '_AsyncNotifier'):
             self._fds = {}
             self._events = {}
             self._timeouts = []
-            self._lock = threading.RLock()
-            self._polling = False
-            self._run = True
-            self.cmd_read, self.cmd_write = _AsyncPoller._cmd_read_write_fds()
-            self.poll_thread = threading.Thread(target=self.poll)
-            self.poll_thread.daemon = True
-            self.poll_thread.start()
-
-        @classmethod
-        def instance(cls):
-            if cls._instance:
-                return cls._instance
-            cls._instance = cls()
-            return cls._instance
-
-        def poll(self):
+            self.cmd_read, self.cmd_write = _AsyncPoller._cmd_read_write_fds(self)
             if hasattr(self.cmd_write, 'getsockname'):
                 self.cmd_read = AsyncSocket(self.cmd_read)
                 self.cmd_read._read_task = lambda: self.cmd_read._rsock.recv(128)
-                self._interrupt = lambda: self.cmd_write.send('I')
+                self.interrupt = lambda: self.cmd_write.send('I')
             else:
-                self._interrupt = lambda: os.write(self.cmd_write._fileno, 'I')
+                self.interrupt = lambda: os.write(self.cmd_write._fileno, 'I')
             self.add(self.cmd_read, _AsyncPoller._Read)
-            while self._run:
-                self._lock.acquire()
-                if self._timeouts:
-                    timeout = self._timeouts[0][0] - _time()
-                    if timeout < 0.0001:
-                        timeout = 0
-                else:
-                    timeout = _AsyncPoller._Block
-                self._polling = True
-                self._lock.release()
-                try:
-                    events = self._poller.poll(timeout)
-                except:
-                    logger.debug(traceback.format_exc())
-                    # prevent tight loops
-                    time.sleep(5)
-                    continue
-                self._lock.acquire()
-                self._polling = False
-                try:
-                    for fileno, event in events:
-                        fd = self._fds.get(fileno, None)
-                        if not fd:
-                            if not (event & _AsyncPoller._Hangup):
-                                logger.debug('invalid fd %s for event %s', fileno, event)
-                            continue
-                        if event & _AsyncPoller._Read:
-                            if fd._read_task:
-                                fd._read_task()
-                            else:
-                                logger.debug('fd %s is not registered for reading!', fd._fileno)
-                                self.unregister(fd)
-                        elif event & _AsyncPoller._Write:
-                            if fd._write_task:
-                                fd._write_task()
-                            else:
-                                logger.debug('fd %s is not registered for writing!', fd._fileno)
-                                self.unregister(fd)
-                        elif event & _AsyncPoller._Hangup:
-                            fd._eof()
-                        elif event & _AsyncPoller._Error:
-                            logger.warning('error on fd %s', fd._fileno)
+
+        def poll(self, timeout):
+            if timeout == 0:
+                poll_timeout = timeout
+            elif self._timeouts:
+                poll_timeout = self._timeouts[0][0] - _time()
+                if timeout is not None:
+                    poll_timeout = min(timeout, poll_timeout)
+                if poll_timeout < 0.0001:
+                    poll_timeout = 0
+                poll_timeout *= self.timeout_multiplier
+            elif timeout is None:
+                poll_timeout = _AsyncPoller._Block
+            else:
+                poll_timeout = timeout * self.timeout_multiplier
+
+            try:
+                events = self._poller.poll(poll_timeout)
+            except:
+                logger.debug(traceback.format_exc())
+                # prevent tight loops
+                time.sleep(5)
+                return
+
+            try:
+                for fileno, event in events:
+                    fd = self._fds.get(fileno, None)
+                    if not fd:
+                        if not (event & _AsyncPoller._Hangup):
+                            logger.debug('invalid fd %s for event %s', fileno, event)
+                        continue
+                    if event & _AsyncPoller._Read:
+                        if fd._read_task:
+                            fd._read_task()
+                        else:
+                            logger.debug('fd %s is not registered for reading!', fd._fileno)
                             self.unregister(fd)
-                except:
-                    logger.debug(traceback.format_exc())
+                    elif event & _AsyncPoller._Write:
+                        if fd._write_task:
+                            fd._write_task()
+                        else:
+                            logger.debug('fd %s is not registered for writing!', fd._fileno)
+                            self.unregister(fd)
+                    elif event & _AsyncPoller._Hangup:
+                        fd._eof()
+                    elif event & _AsyncPoller._Error:
+                        logger.warning('error on fd %s', fd._fileno)
+                        self.unregister(fd)
+            except:
+                logger.debug(traceback.format_exc())
 
-                if self._timeouts:
-                    now = _time() + 0.0001
-                    while self._timeouts and self._timeouts[0][0] <= now:
-                        fd_timeout, fd = self._timeouts.pop(0)
-                        if fd._timeout_id == fd_timeout:
-                            fd._timeout_id = None
-                            fd._timed_out()
-                self._lock.release()
+            if self._timeouts:
+                now = _time() + 0.0001
+                while self._timeouts and self._timeouts[0][0] <= now:
+                    fd_timeout, fd = self._timeouts.pop(0)
+                    if fd._timeout_id == fd_timeout:
+                        fd._timeout_id = None
+                        fd._timed_out()
 
-            self._lock.acquire()
+        def terminate(self):
             if hasattr(self.cmd_write, 'getsockname'):
                 self.cmd_write.close()
             self.cmd_read.close()
@@ -1876,58 +1870,43 @@ if not hasattr(sys.modules[__name__], '_AsyncNotifier'):
                 fd._notifier = None
             self._fds.clear()
             self._timeouts = []
+            if hasattr(self._poller, 'terminate'):
+                self._poller.terminate()
             self._poller = None
             self.cmd_read = self.cmd_write = None
-            self.__class__._instance = None
-            self._lock.release()
-
-        def terminate(self):
-            if self._run:
-                self._lock.acquire()
-                self._run = False
-                self._interrupt()
-                self._lock.release()
-                self.poll_thread.join(0.2)
 
         def _add_timeout(self, fd):
-            self._lock.acquire()
-            fd._timeout_id = _time() + fd._timeout
-            i = bisect_left(self._timeouts, (fd._timeout_id, fd))
-            self._timeouts.insert(i, (fd._timeout_id, fd))
-            self._lock.release()
+            if fd._timeout:
+                fd._timeout_id = _time() + fd._timeout
+                i = bisect_left(self._timeouts, (fd._timeout_id, fd))
+                self._timeouts.insert(i, (fd._timeout_id, fd))
+            else:
+                fd._timeout_id = None
 
         def _del_timeout(self, fd):
-            self._lock.acquire()
-            i = bisect_left(self._timeouts, (fd._timeout_id, fd))
-            # in case of identical timeouts (unlikely?), search for
-            # correct index where fd is
-            while i < len(self._timeouts):
-                if self._timeouts[i] == (fd._timeout_id, fd):
-                    del self._timeouts[i]
-                    fd._timeout_id = None
-                    break
-                if fd._timeout_id != self._timeouts[i][0]:
-                    logger.warning('fd %s with %s is not found', fd._fileno, fd._timeout_id)
-                    break
-                i += 1
-            self._lock.release()
+            if fd._timeout_id:
+                i = bisect_left(self._timeouts, (fd._timeout_id, fd))
+                # in case of identical timeouts (unlikely?), search for
+                # correct index where fd is
+                while i < len(self._timeouts):
+                    if self._timeouts[i] == (fd._timeout_id, fd):
+                        del self._timeouts[i]
+                        fd._timeout_id = None
+                        break
+                    if fd._timeout_id != self._timeouts[i][0]:
+                        logger.warning('fd %s with %s is not found', fd._fileno, fd._timeout_id)
+                        break
+                    i += 1
 
         def unregister(self, fd):
-            self._lock.acquire()
             if self._fds.pop(fd._fileno, None) is None:
                 logger.debug('fd %s is not registered', fd._fileno)
-                self._lock.release()
                 return
             self._events.pop(fd._fileno, None)
             self._poller.unregister(fd._fileno)
-            if self._polling:
-                self._interrupt()
-            self._lock.release()
-            if fd._timeout_id:
-                self._del_timeout(fd)
+            self._del_timeout(fd)
 
         def add(self, fd, event):
-            self._lock.acquire()
             cur_event = self._events.get(fd._fileno, None)
             if cur_event is None:
                 self._fds[fd._fileno] = fd
@@ -1941,12 +1920,8 @@ if not hasattr(sys.modules[__name__], '_AsyncNotifier'):
                 self._add_timeout(fd)
             else:
                 fd._timeout_id = None
-            if self._polling:
-                self._interrupt()
-            self._lock.release()
 
-        def clear(self, fd, event):
-            self._lock.acquire()
+        def clear(self, fd, event=0):
             cur_event = self._events.get(fd._fileno, None)
             if cur_event:
                 if event:
@@ -1955,14 +1930,11 @@ if not hasattr(sys.modules[__name__], '_AsyncNotifier'):
                     cur_event = 0
                 self._events[fd._fileno] = cur_event
                 self._poller.modify(fd._fileno, cur_event)
-                if not cur_event and fd._timeout_id:
+                if not cur_event:
                     self._del_timeout(fd)
-                if self._polling:
-                    self._interrupt()
-            self._lock.release()
 
         @staticmethod
-        def _cmd_read_write_fds():
+        def _cmd_read_write_fds(notifier):
             if sys.modules.get('fcntl'):
                 class PipeFD(object):
 
@@ -1970,7 +1942,7 @@ if not hasattr(sys.modules[__name__], '_AsyncNotifier'):
                         self._fileno = fileno
                         self._timeout = None
                         self._timeout_id = None
-                        self._notifier = _AsyncNotifier.instance()
+                        self._notifier = notifier
                         flags = fcntl.fcntl(self._fileno, fcntl.F_GETFL)
                         fcntl.fcntl(self._fileno, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
@@ -2421,6 +2393,12 @@ class _NetRequest(object):
     pass
 
 
+class SysCoro(object):
+    """Internal use only.
+    """
+    pass
+
+
 class Coro(object):
     """Creates coroutine with the given generator function and
     schedules that coroutine to be executed with AsynCoro. If the
@@ -2450,9 +2428,8 @@ class Coro(object):
         self._swap_generator = None
         self._hot_swappable = False
         if not Coro._asyncoro:
-            Channel._asyncoro = Coro._asyncoro = AsynCoro.instance()
-        if not getattr(self, '_scheduler', None):
-            self._scheduler = Coro._asyncoro
+            Coro._asyncoro = self._scheduler = AsynCoro.instance()
+        self._scheduler = self.__class__._asyncoro
         self._location = self._scheduler._location
         self._scheduler._add(self)
         if self._scheduler == Coro._asyncoro:
@@ -2495,9 +2472,9 @@ class Coro(object):
         if not location or location == Coro._asyncoro._location:
             rcoro = Coro._asyncoro._rcoros.get(name, None)
             if not rcoro and Coro._asyncoro._location:
-                Coro._asyncoro._sys_asyncoro._lock.acquire()
-                rcoro = Coro._asyncoro._sys_asyncoro._rcoros.get(name, None)
-                Coro._asyncoro._sys_asyncoro._lock.release()
+                SysCoro._asyncoro._lock.acquire()
+                rcoro = SysCoro._asyncoro._rcoros.get(name, None)
+                SysCoro._asyncoro._lock.release()
             if rcoro or location == Coro._asyncoro._location:
                 raise StopIteration(rcoro)
         req = _NetRequest('locate_coro', kwargs={'name': name}, dst=location, timeout=timeout)
@@ -2826,7 +2803,7 @@ class Coro(object):
                 self._scheduler = Coro._asyncoro
             elif self._location and self._name[0] == '!':
                 self._id = int(self._id)
-                self._scheduler = Coro._asyncoro._sys_asyncoro
+                self._scheduler = SysCoro._asyncoro
             else:
                 logger.warning('invalid scheduler: %s', self._scheduler)
                 self._scheduler = None
@@ -2939,7 +2916,7 @@ class Channel(object):
         if self._scheduler == Channel._asyncoro:
             self._name = '~' + self._name
         else:
-            # assert self._location and self._scheduler == Channel._asyncoro._sys_asyncoro
+            # assert self._location and self._scheduler == SysCoro._asyncoro
             self._name = '!' + self._name
         self._subscribers = set()
         self._subscribe_event = Event()
@@ -3261,7 +3238,7 @@ class Channel(object):
             if self._name[0] == '~':
                 self._scheduler = Channel._asyncoro
             elif self._location and self._name[0] == '!':
-                self._scheduler = Channel._asyncoro._sys_asyncoro
+                self._scheduler = SysCoro._asyncoro
             else:
                 logger.warning('invalid scheduler: %s', self._scheduler)
                 self._scheduler = None
@@ -3388,8 +3365,7 @@ class AsynCoro(object):
         if not AsynCoro._instance:
             AsynCoro._instance = self
             Coro._asyncoro = Channel._asyncoro = self
-        self._notifier = _AsyncNotifier.instance()
-        self._lock = self._notifier._lock
+        self._notifier = _AsyncNotifier()
         self._location = None
         self._name = ''
         self.__cur_coro = None
@@ -3398,8 +3374,6 @@ class AsynCoro(object):
         self._suspended = set()
         self._timeouts = []
         self._quit = False
-        self._complete = threading.Event()
-        self._complete.set()
         self._daemons = 0
         self._channels = {}
         self._rcoros = {}
@@ -3409,9 +3383,11 @@ class AsynCoro(object):
         self._pending_reqs = {}
         self._atexit = []
         self._polling = False
-        self._poll_event = threading.Event()
+        self._lock = threading.RLock()
+        self._complete = threading.Event()
+        self._complete.set()
         self._scheduler = threading.Thread(target=self._schedule)
-        AsynCoro._schedulers[self._scheduler] = self
+        AsynCoro._schedulers[id(self._scheduler)] = self
         self._scheduler.daemon = True
         self._scheduler.start()
         if AsynCoro._instance == self:
@@ -3440,14 +3416,14 @@ class AsynCoro(object):
 
     @staticmethod
     def scheduler():
-        return AsynCoro._schedulers.get(threading.current_thread(), None)
+        return AsynCoro._schedulers.get(id(threading.current_thread()), None)
 
     @staticmethod
     def cur_coro(scheduler=None):
         """Must be called from a coro only.
         """
         if not scheduler:
-            scheduler = AsynCoro._schedulers.get(threading.current_thread(), None)
+            scheduler = AsynCoro._schedulers.get(id(threading.current_thread()), None)
             if not scheduler:
                 return None
         return scheduler.__cur_coro
@@ -3460,8 +3436,8 @@ class AsynCoro(object):
         self._complete.clear()
         coro._state = AsynCoro._Scheduled
         self._scheduled.add(coro._id)
-        if self._polling:
-            self._poll_event.set()
+        if self._polling and len(self._scheduled) == 1:
+            self._notifier.interrupt()
         self._lock.release()
 
     def _remove(self, coro):
@@ -3562,8 +3538,8 @@ class AsynCoro(object):
             self._suspended.discard(cid)
             self._scheduled.add(cid)
             coro._state = AsynCoro._Scheduled
-            if self._polling:
-                self._poll_event.set()
+            if self._polling and len(self._scheduled) == 1:
+                self._notifier.interrupt()
         elif state == AsynCoro._AwaitMsg_:
             coro._msgs.append((state, update))
         else:
@@ -3588,8 +3564,8 @@ class AsynCoro(object):
             self._suspended.discard(cid)
             self._scheduled.add(cid)
             coro._state = AsynCoro._Scheduled
-            if self._polling:
-                self._poll_event.set()
+            if self._polling and len(self._scheduled) == 1:
+                self._notifier.interrupt()
         self._lock.release()
         return 0
 
@@ -3612,8 +3588,8 @@ class AsynCoro(object):
             coro._state = AsynCoro._Scheduled
             coro._timeout = None
             coro._callers = []
-            if self._polling:
-                self._poll_event.set()
+            if self._polling and len(self._scheduled) == 1:
+                self._notifier.interrupt()
         coro._exceptions.append((GeneratorExit, GeneratorExit('close')))
         self._lock.release()
         return 0
@@ -3654,9 +3630,9 @@ class AsynCoro(object):
                     self._suspended.discard(cid)
                     self._scheduled.add(cid)
                     coro._state = AsynCoro._Scheduled
+            if self._polling and len(self._scheduled) == 1:
+                self._notifier.interrupt()
             coro._swap_generator = None
-            if self._polling:
-                self._poll_event.set()
         self._lock.release()
         return 0
 
@@ -3664,6 +3640,8 @@ class AsynCoro(object):
         """Internal use only.
         """
         while not self._quit:
+            # process I/O events
+            self._notifier.poll(0)
             self._lock.acquire()
             if not self._scheduled:
                 if self._timeouts:
@@ -3673,9 +3651,8 @@ class AsynCoro(object):
                 else:
                     timeout = None
                 self._polling = True
-                self._poll_event.clear()
                 self._lock.release()
-                self._poll_event.wait(timeout)
+                self._notifier.poll(timeout)
                 self._lock.acquire()
                 self._polling = False
             if self._timeouts:
@@ -3932,14 +3909,12 @@ class AsynCoro(object):
             # add a dummy timeout so scheduler will not wait for any other
             # timeouts left behind by coroutines that may have quit already
             heappush(self._timeouts, (_time() + 0.1, None, None))
-            self._poll_event.set()
             self._lock.release()
+            self._notifier.interrupt()
             self._complete.wait()
         else:
             self._lock.release()
-        if not self._location:
-            self._notifier.terminate()
-            logger.shutdown()
+        logger.shutdown()
 
     def finish(self):
         """Wait until all non-daemon coroutines finish and then

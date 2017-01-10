@@ -96,20 +96,19 @@ class AsynCoro(asyncoro.AsynCoro):
     __metaclass__ = Singleton
 
     _instance = None
-    _sys_asyncoro = None
+    _asyncoro = None
 
     def __init__(self, *args, **kwargs):
         AsynCoro._instance = self
         atexit.register(self.finish)
         super(self.__class__, self).__init__()
         RCI._asyncoro = _SysAsynCoro_._asyncoro = self
-        self._sys_asyncoro = _SysAsynCoro_(*args, **kwargs)
-        self.__class__._sys_asyncoro = self._sys_asyncoro
-        self._location = self._sys_asyncoro._location
-        self._name = self._sys_asyncoro._name
-        self._certfile = self._sys_asyncoro._certfile
-        self._keyfile = self._sys_asyncoro._keyfile
-        self.__dest_path_prefix = self.__dest_path = self._sys_asyncoro.dest_path
+        self.__class__._asyncoro = _SysAsynCoro_(*args, **kwargs)
+        self._location = AsynCoro._asyncoro._location
+        self._name = AsynCoro._asyncoro._name
+        self._certfile = AsynCoro._asyncoro._certfile
+        self._keyfile = AsynCoro._asyncoro._keyfile
+        self.__dest_path_prefix = self.__dest_path = AsynCoro._asyncoro.dest_path
 
     @classmethod
     def instance(cls, *args, **kwargs):
@@ -125,7 +124,7 @@ class AsynCoro(asyncoro.AsynCoro):
 
     @dest_path.setter
     def dest_path(self, path):
-        if not self._sys_asyncoro:
+        if not AsynCoro._asyncoro:
             raise ValueError('AsynCoro not initialized!')
         path = os.path.normpath(path)
         if not path.startswith(self.__dest_path_prefix):
@@ -136,13 +135,13 @@ class AsynCoro(asyncoro.AsynCoro):
         except OSError as exc:
             if exc.errno != errno.EEXIST:
                 raise
-        self._sys_asyncoro.dest_path = self.__dest_path = path
+        AsynCoro._asyncoro.dest_path = self.__dest_path = path
 
     def finish(self):
         if AsynCoro._instance:
             super(self.__class__, self).finish()
             AsynCoro._instance = None
-            self._sys_asyncoro.finish()
+            AsynCoro._asyncoro.finish()
             self._notifier.terminate()
             logger.shutdown()
 
@@ -152,7 +151,7 @@ class AsynCoro(asyncoro.AsynCoro):
 
         Find and return location of peer with 'name'.
         """
-        if not self._sys_asyncoro:
+        if not AsynCoro._asyncoro:
             raise StopIteration(None)
         _Peer._lock.acquire()
         for peer in _Peer.peers.itervalues():
@@ -201,11 +200,11 @@ class AsynCoro(asyncoro.AsynCoro):
         on the network of peer (at 'loc').
         """
 
-        if not self._sys_asyncoro:
+        if not AsynCoro._asyncoro:
             raise StopIteration(-1)
 
         def _peer(coro=None):
-            SysCoro(self._sys_asyncoro.peer, coro, loc, udp_port, stream_send, broadcast)
+            SysCoro(AsynCoro._asyncoro.peer, coro, loc, udp_port, stream_send, broadcast)
             yield coro.recv()
 
         yield Coro(_peer).finish()
@@ -248,17 +247,17 @@ class AsynCoro(asyncoro.AsynCoro):
         """Don't respond to 'ping' from peers if 'ignore=True'. This can be used
         during shutdown, or to limit peers to communicate.
         """
-        if self._sys_asyncoro:
-            self._sys_asyncoro.ignore_peers(ignore)
+        if AsynCoro._asyncoro:
+            AsynCoro._asyncoro.ignore_peers(ignore)
 
     def discover_peers(self, port=None):
         """This method can be invoked (periodically?) to broadcast message to
         discover peers, if there is a chance initial broadcast message may be
         lost (as these messages are sent over UDP).
         """
-        if not self._sys_asyncoro:
+        if not AsynCoro._asyncoro:
             return
-        SysCoro(self._sys_asyncoro.discover_peers, port=port)
+        SysCoro(AsynCoro._asyncoro.discover_peers, port=port)
 
     def send_file(self, location, file, dir=None, overwrite=False, timeout=MsgTimeout):
         """Must be used with 'yield' as
@@ -300,7 +299,7 @@ class AsynCoro(asyncoro.AsynCoro):
         kwargs = {'file': os.path.basename(file), 'stat_buf': stat_buf,
                   'overwrite': overwrite is True, 'dir': dir, 'sep': os.sep}
         req = _NetRequest('send_file', kwargs=kwargs, dst=location, timeout=timeout)
-        sock = AsyncSocket(socket.socket(self._sys_asyncoro.sock_family, socket.SOCK_STREAM),
+        sock = AsyncSocket(socket.socket(AsynCoro._asyncoro.sock_family, socket.SOCK_STREAM),
                            keyfile=self._keyfile, certfile=self._certfile)
         if timeout:
             sock.settimeout(timeout)
@@ -359,7 +358,7 @@ class AsynCoro(asyncoro.AsynCoro):
 
     def _sys_call_(self, method, *args, **kwargs):
         swing = {'result': None, 'event': Event()}
-        SysCoro(self._sys_asyncoro._swing_call_, swing, method, *args, **kwargs)
+        SysCoro(AsynCoro._asyncoro._swing_call_, swing, method, *args, **kwargs)
         yield swing['event'].wait()
         yield swing['result']
 
@@ -517,7 +516,7 @@ class SysCoro(asyncoro.Coro):
     def __init__(self, *args, **kwargs):
         if not SysCoro._asyncoro:
             AsynCoro.instance()
-        self._scheduler = SysCoro._asyncoro
+        self.__class__._asyncoro = self._scheduler = SysCoro._asyncoro
         super(SysCoro, self).__init__(*args, **kwargs)
 
 
@@ -956,7 +955,7 @@ class _SysAsynCoro_(asyncoro.AsynCoro):
             if hasattr(socket, 'SO_REUSEPORT'):
                 self._tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         if self.sock_family == socket.AF_INET:
-            addr = ('', tcp_port)
+            addr = (node, tcp_port)
         else: # self.sock_family == socket.AF_INET6
             addr = list(self.nodeaddrinfo[4])
             addr[0] = node
