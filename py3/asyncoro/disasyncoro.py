@@ -32,7 +32,7 @@ __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 
 __version__ = asyncoro.__version__
-__all__ = asyncoro.__all__ + ['RCI']
+__all__ = asyncoro.__all__ + ['RCI', 'ReactCoro']
 
 # if connections to a peer are not successful consecutively
 # MaxConnectionErrors times, peer is assumed dead and removed
@@ -100,8 +100,8 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
         AsynCoro._instance = self
         atexit.register(self.finish)
         super(self.__class__, self).__init__()
-        RCI._asyncoro = _SysAsynCoro_._asyncoro = self
-        self.__class__._asyncoro = _SysAsynCoro_(*args, **kwargs)
+        RCI._asyncoro = _ReactAsynCoro_._asyncoro = self
+        self.__class__._asyncoro = _ReactAsynCoro_(*args, **kwargs)
         self._location = AsynCoro._asyncoro._location
         self._name = AsynCoro._asyncoro._name
         self._certfile = AsynCoro._asyncoro._certfile
@@ -202,7 +202,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
             raise StopIteration(-1)
 
         def _peer(coro=None):
-            SysCoro(AsynCoro._asyncoro.peer, coro, loc, udp_port, stream_send, broadcast)
+            ReactCoro(AsynCoro._asyncoro.peer, coro, loc, udp_port, stream_send, broadcast)
             yield coro.recv()
 
         yield Coro(_peer).finish()
@@ -233,12 +233,12 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
             _Peer._lock.release()
             if peer:
 
-                def sys_proc(peer, timeout, done, coro=None):
+                def react_proc(peer, timeout, done, coro=None):
                     yield _Peer.close_peer(peer, timeout=timeout, coro=coro)
                     done.set()
 
                 event = Event()
-                SysCoro(sys_proc, peer, timeout, event)
+                ReactCoro(react_proc, peer, timeout, event)
                 yield event.wait()
 
     def ignore_peers(self, ignore):
@@ -255,7 +255,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
         """
         if not AsynCoro._asyncoro:
             return
-        SysCoro(AsynCoro._asyncoro.discover_peers, port=port)
+        ReactCoro(AsynCoro._asyncoro.discover_peers, port=port)
 
     def send_file(self, location, file, dir=None, overwrite=False, timeout=MsgTimeout):
         """Must be used with 'yield' as
@@ -354,9 +354,9 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
             reply = -1
         raise StopIteration(reply)
 
-    def _sys_call_(self, method, *args, **kwargs):
+    def _react_call_(self, method, *args, **kwargs):
         swing = {'result': None, 'event': Event()}
-        SysCoro(AsynCoro._asyncoro._swing_call_, swing, method, *args, **kwargs)
+        ReactCoro(AsynCoro._asyncoro._swing_call_, swing, method, *args, **kwargs)
         yield swing['event'].wait()
         yield swing['result']
 
@@ -497,25 +497,24 @@ class RCI(object):
         return s
 
 
-class SysCoro(asyncoro.Coro):
-    """Coroutine meant for reactive components, always ready to respond to
-    events; i.e., takes very little CPU time to process events. This is meant
-    for internal use to handle network traffic, timer events etc. in asyncoro
-    modules. These coroutines run in seperate AsynCoro thread (_SysAsynCoro_),
-    so if user coroutines (Coro instances) take too much CPU time, SysCoro can
-    still respond to such events quickly.
+class ReactCoro(asyncoro.Coro):
+    """Coroutine meant for reactive components that are always ready to respond
+    to events; i.e., takes very little CPU time to process events. Typically
+    such coroutines process I/O events, timer events etc. and any time consuming
+    processing is handed off to Coro instances.
 
-    This class is not meant for users, as using this improperly may break
-    (parts of) asyncoro.
+    These coroutines run in seperate AsynCoro thread (_ReactAsynCoro_), so if
+    user coroutines (Coro instances) take too much CPU time, ReactCoro can still
+    respond to such events immediately.
     """
 
     _asyncoro = None
 
     def __init__(self, *args, **kwargs):
-        if not SysCoro._asyncoro:
+        if not ReactCoro._asyncoro:
             AsynCoro.instance()
-        self.__class__._asyncoro = self._scheduler = SysCoro._asyncoro
-        super(SysCoro, self).__init__(*args, **kwargs)
+        self.__class__._asyncoro = self._scheduler = ReactCoro._asyncoro
+        super(ReactCoro, self).__init__(*args, **kwargs)
 
 
 class _NetRequest(object):
@@ -568,18 +567,18 @@ class _Peer(object):
         _Peer._lock.acquire()
         _Peer.peers[(location.addr, location.port)] = self
         _Peer._lock.release()
-        self.req_coro = SysCoro(self.req_proc)
+        self.req_coro = ReactCoro(self.req_proc)
         logger.debug('%s: found peer %s', _Peer._asyncoro._location, self.location)
         if _Peer.status_coro:
             _Peer.status_coro.send(PeerStatus(location, name, PeerStatus.Online))
 
-        _SysAsynCoro_._asyncoro._lock.acquire()
-        if ((location.addr, location.port) in _SysAsynCoro_._asyncoro._stream_peers or
-            (location.addr, 0) in _SysAsynCoro_._asyncoro._stream_peers):
+        _ReactAsynCoro_._asyncoro._lock.acquire()
+        if ((location.addr, location.port) in _ReactAsynCoro_._asyncoro._stream_peers or
+            (location.addr, 0) in _ReactAsynCoro_._asyncoro._stream_peers):
             self.stream = True
 
         # send pending (async) requests
-        for pending_req in _SysAsynCoro_._asyncoro._pending_reqs.values():
+        for pending_req in _ReactAsynCoro_._asyncoro._pending_reqs.values():
             if (pending_req.name == 'locate_peer' and pending_req.kwargs['name'] == self.name):
                 pending_req.reply = location
                 pending_req.event.set()
@@ -589,7 +588,7 @@ class _Peer(object):
                     _Peer.send_req(pending_req)
             else:
                 _Peer.send_req_to(pending_req, location)
-        _SysAsynCoro_._asyncoro._lock.release()
+        _ReactAsynCoro_._asyncoro._lock.release()
 
     @staticmethod
     def get_peers():
@@ -667,13 +666,14 @@ class _Peer(object):
     def shutdown(timeout=MsgTimeout):
         _Peer._lock.acquire()
         for peer in _Peer.peers.values():
-            SysCoro(_Peer.close_peer, peer, timeout)
+            ReactCoro(_Peer.close_peer, peer, timeout)
         _Peer._lock.release()
 
     def req_proc(self, coro=None):
         coro.set_daemon()
         conn_errors = 0
         req = None
+        sock_family = _Peer._asyncoro.sock_family
         while 1:
             _Peer._lock.acquire()
             if self.reqs:
@@ -691,8 +691,7 @@ class _Peer(object):
                     break
             req = self.reqs.popleft()
             if not self.conn:
-                self.conn = AsyncSocket(socket.socket(_Peer._asyncoro.sock_family,
-                                                      socket.SOCK_STREAM),
+                self.conn = AsyncSocket(socket.socket(sock_family, socket.SOCK_STREAM),
                                         keyfile=self.keyfile, certfile=self.certfile)
                 if req.timeout:
                     self.conn.settimeout(req.timeout)
@@ -837,7 +836,7 @@ class _Peer(object):
         _Peer._lock.release()
 
 
-class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
+class _ReactAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
     """Internal use only.
     """
 
@@ -849,7 +848,7 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
                  secret='', certfile=None, keyfile=None, notifier=None,
                  dest_path=None, max_file_size=None):
         super(self.__class__, self).__init__()
-        SysCoro._asyncoro = _Peer._asyncoro = self
+        ReactCoro._asyncoro = _Peer._asyncoro = self
 
         if node:
             node = socket.getaddrinfo(node, None)[0]
@@ -1003,12 +1002,12 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
             self._udp_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
 
         self._ignore_peers = False
-        self._tcp_coro = SysCoro(self._tcp_proc)
-        self._udp_coro = SysCoro(self._udp_proc, discover_peers)
+        self._tcp_coro = ReactCoro(self._tcp_proc)
+        self._udp_coro = ReactCoro(self._udp_proc, discover_peers)
 
     @staticmethod
     def instance():
-        return _SysAsynCoro_._instance
+        return _ReactAsynCoro_._instance
 
     @property
     def dest_path(self):
@@ -1029,7 +1028,7 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
 
     def peer(self, client, loc, udp_port=0, stream_send=False, broadcast=False, coro=None):
         """
-        _Must_ be called with SysCoro
+        _Must_ be called with ReactCoro
         """
         def _peer(loc, udp_port, stream_send, broadcast):
             if not isinstance(loc, Location):
@@ -1040,7 +1039,7 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
                     raise StopIteration(-1)
                 loc = Location(loc, 0)
 
-            _SysAsynCoro_._asyncoro._lock.acquire()
+            _ReactAsynCoro_._asyncoro._lock.acquire()
             if stream_send:
                 self._stream_peers[(loc.addr, loc.port)] = True
             else:
@@ -1053,7 +1052,7 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
                 if peer:
                     peer.stream = stream_send
                     if not broadcast:
-                        _SysAsynCoro_._asyncoro._lock.release()
+                        _ReactAsynCoro_._asyncoro._lock.release()
                         raise StopIteration(0)
             else:
                 _Peer._lock.acquire()
@@ -1063,7 +1062,7 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
                         if not stream_send:
                             self._stream_peers.pop((addr, port), None)
                 _Peer._lock.release()
-            _SysAsynCoro_._asyncoro._lock.release()
+            _ReactAsynCoro_._asyncoro._lock.release()
 
             if loc.port:
                 req = _NetRequest('signature', kwargs={'version': __version__}, dst=loc)
@@ -1093,8 +1092,19 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
                 ping_msg = 'ping:'.encode() + serialize(ping_msg)
                 sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_DGRAM))
                 sock.settimeout(2)
+                if self.sock_family == socket.AF_INET:
+                    addr = (loc.addr, udp_port)
+                else: # self.sock_family == socket.AF_INET6
+                    sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS,
+                                         struct.pack('@i', 1))
+                    addr = list(self.nodeaddrinfo[4])
+                    addr[1] = 0
+                    ping_sock.bind(tuple(addr))
+                    addr[0] = loc.addr
+                    addr[1] = udp_port
+                    addr = tuple(addr)
                 try:
-                    yield sock.sendto(ping_msg, (loc.addr, udp_port))
+                    yield sock.sendto(ping_msg, addr)
                 except:
                     pass
                 sock.close()
@@ -1161,7 +1171,7 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
     def _udp_proc(self, discover_peers, coro=None):
         coro.set_daemon()
         if discover_peers:
-            SysCoro(self.discover_peers)
+            ReactCoro(self.discover_peers)
 
         while 1:
             msg, addr = yield self._udp_sock.recvfrom(1024)
@@ -1194,7 +1204,7 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
                 peer = None
 
             if not peer:
-                SysCoro(self._acquaint_, peer_location, ping_info['signature'])
+                ReactCoro(self._acquaint_, peer_location, ping_info['signature'])
 
     def _tcp_proc(self, coro=None):
         coro.set_daemon()
@@ -1209,7 +1219,7 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
             except:
                 logger.debug(traceback.format_exc())
                 continue
-            SysCoro(self._tcp_task, conn, addr)
+            ReactCoro(self._tcp_task, conn, addr)
 
     def _tcp_task(self, conn, addr, coro=None):
         while 1:
@@ -1545,6 +1555,8 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
             elif req.name == 'peer':
                 # synchronous message
                 if req.kwargs.get('version', None) != __version__:
+                    logger.debug('Ignoring peer due to version mismatch: %s != %s',
+                                 req.kwargs.get('version', None), __version__)
                     yield conn.send_msg(serialize(-1))
                     break
                 auth = hashlib.sha1((req.kwargs['signature'] + self._secret).encode()).hexdigest()
@@ -1557,7 +1569,7 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
                 peer_loc = req.kwargs.get('location', None)
                 if peer_loc:
                     # TODO: remove from _stream_peers?
-                    # _SysAsynCoro_._asyncoro._stream_peers.pop((peer_loc.addr, peer_loc.port))
+                    # _ReactAsynCoro_._asyncoro._stream_peers.pop((peer_loc.addr, peer_loc.port))
                     _Peer.remove(peer_loc)
                 yield conn.send_msg(b'closed')
                 break
@@ -1582,7 +1594,7 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
                     _Peer.remove(peer_location)
                     peer = None
                 if not peer:
-                    SysCoro(self._acquaint_, peer_location, req.kwargs['signature'])
+                    ReactCoro(self._acquaint_, peer_location, req.kwargs['signature'])
                 yield conn.send_msg(serialize(0))
 
             elif req.name == 'relay_ping':
@@ -1591,9 +1603,21 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
                 ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
                 ping_sock.settimeout(2)
                 ping_msg = 'ping:'.encode() + serialize(req.kwargs)
+                port = self._udp_sock.getsockname()[1]
+                if self.sock_family == socket.AF_INET:
+                    ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                    addr = (self._broadcast, port)
+                else: # self.sock_family == socket.AF_INET6
+                    ping_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS,
+                                         struct.pack('@i', 1))
+                    addr = list(self.nodeaddrinfo[4])
+                    addr[1] = 0
+                    ping_sock.bind(tuple(addr))
+                    addr[0] = self._broadcast
+                    addr[1] = port
+                    addr = tuple(addr)
                 try:
-                    yield ping_sock.sendto(ping_msg,
-                                           (self._broadcast, self._udp_sock.getsockname()[1]))
+                    yield ping_sock.sendto(ping_msg, addr)
                 except:
                     pass
                 finally:
@@ -1618,5 +1642,4 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
 
 asyncoro._NetRequest = _NetRequest
 asyncoro._Peer = _Peer
-asyncoro.SysCoro = SysCoro
-asyncoro.AsynCoro = AsynCoro
+asyncoro.ReactCoro = ReactCoro
