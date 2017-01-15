@@ -172,8 +172,6 @@ if platform.system() == 'Windows':
         useful when used as file objects in asynchronous pipes.
         """
 
-        _notifier = None
-
         def __init__(self, path_handle, mode='r', share=None):
             """If 'path_handle' is a string, opens that file for
             asynchronous I/O; if it is a handle (pipe client / server,
@@ -181,9 +179,10 @@ if platform.system() == 'Windows':
             per 'open' Python function, although limited to
             basic/common modes.
             """
-            if not _AsyncFile._notifier:
-                _AsyncFile._notifier = asyncoro._AsyncNotifier.instance()
             self._asyncoro = AsynCoro.scheduler()
+            if not self._asyncoro:
+                raise Exception('AsyncFile must be initialized from a coroutine')
+            self._notifier = self._asyncoro._notifier
             self._overlap = pywintypes.OVERLAPPED()
             if isinstance(path_handle, str):
                 self._path = path_handle
@@ -241,7 +240,7 @@ if platform.system() == 'Windows':
             self._write_result = None
             self._timeout = None
             self._timeout_id = None
-            _AsyncFile._notifier.register(self._handle)
+            self._notifier.register(self._handle)
 
         def read(self, size=0, full=False, timeout=None):
             """Read at most 'size' bytes from file; if 'size' <= 0,
@@ -264,7 +263,7 @@ if platform.system() == 'Windows':
             def _read(size, full, rc, n):
                 if rc or n == 0:
                     if self._timeout:
-                        _AsyncFile._notifier._del_timeout(self)
+                        self._notifier._del_timeout(self)
                     self._overlap.object = self._read_result = None
                     if rc != winerror.ERROR_OPERATION_ABORTED:
                         if (self._buflist or rc == winerror.ERROR_HANDLE_EOF or
@@ -294,14 +293,14 @@ if platform.system() == 'Windows':
                         buf, self._buflist = ''.join(self._buflist), []
                         self._overlap.object = self._read_result = None
                         if self._timeout:
-                            _AsyncFile._notifier._del_timeout(self)
+                            self._notifier._del_timeout(self)
                         self._read_coro._proceed_(buf)
                         self._read_coro = None
                     return
                 if self._buflist:
                     buf, self._buflist = ''.join(self._buflist), []
                 if self._timeout:
-                    _AsyncFile._notifier._del_timeout(self)
+                    self._notifier._del_timeout(self)
                 self._overlap.object = self._read_result = None
                 self._read_coro._proceed_(buf)
                 self._read_coro = None
@@ -321,8 +320,6 @@ if platform.system() == 'Windows':
                 count = size
             self._read_result = win32file.AllocateReadBuffer(count)
             self._overlap.object = partial_func(_read, size, full)
-            if not self._asyncoro:
-                self._asyncoro = AsynCoro.scheduler()
             self._read_coro = AsynCoro.cur_coro(self._asyncoro)
             self._read_coro._await_()
             try:
@@ -340,7 +337,7 @@ if platform.system() == 'Windows':
                 self._read_coro.throw(IOError(rc, 'ReadFile', str(rc)))
             if timeout:
                 self._timeout = timeout
-                _AsyncFile._notifier._add_timeout(self)
+                self._notifier._add_timeout(self)
 
         def write(self, buf, full=False, timeout=None):
             """Write data in 'buf' to file. If 'full' is True, the function
@@ -361,7 +358,7 @@ if platform.system() == 'Windows':
             def _write(written, rc, n):
                 if rc or n == 0:
                     if self._timeout:
-                        _AsyncFile._notifier._del_timeout(self)
+                        self._notifier._del_timeout(self)
                     if rc != winerror.ERROR_OPERATION_ABORTED:
                         if written:
                             self._write_coro._proceed_(written)
@@ -376,7 +373,7 @@ if platform.system() == 'Windows':
                 if not full or len(self._write_result) == 0:
                     self._overlap.object = self._write_result = None
                     if self._timeout:
-                        _AsyncFile._notifier._del_timeout(self)
+                        self._notifier._del_timeout(self)
                     self._write_coro._proceed_(written)
                     self._write_coro = None
                     return
@@ -389,7 +386,7 @@ if platform.system() == 'Windows':
                 if rc and rc != winerror.ERROR_IO_PENDING:
                     self._overlap.object = self._write_result = None
                     if self._timeout:
-                        _AsyncFile._notifier._del_timeout(self)
+                        self._notifier._del_timeout(self)
                     if written:
                         self._write_coro._proceed_(written)
                     else:
@@ -399,8 +396,6 @@ if platform.system() == 'Windows':
 
             self._write_result = buffer(buf)
             self._overlap.object = partial_func(_write, 0)
-            if not self._asyncoro:
-                self._asyncoro = AsynCoro.scheduler()
             self._write_coro = AsynCoro.cur_coro(self._asyncoro)
             self._write_coro._await_()
             try:
@@ -418,7 +413,7 @@ if platform.system() == 'Windows':
                 raise IOError(rc, 'WriteFile', str(rc))
             if timeout:
                 self._timeout = timeout
-                _AsyncFile._notifier._add_timeout(self)
+                self._notifier._add_timeout(self)
 
         def seek(self, offset, whence=os.SEEK_SET):
             """Similar to 'seek' of file descriptor; works only for
@@ -464,7 +459,7 @@ if platform.system() == 'Windows':
                 def _close_(rc, n):
                     win32file.CloseHandle(self._handle)
                     self._overlap = None
-                    _AsyncFile._notifier.unregister(self._handle)
+                    self._notifier.unregister(self._handle)
                     self._handle = None
                     self._read_result = self._write_result = None
                     self._read_coro = self._write_coro = None
@@ -500,18 +495,17 @@ else:
         work on other Unix variants.
         """
 
-        _notifier = None
-
         def __init__(self, fd):
             """'fd' is either a file object (e.g., obtained with 'open')
             or a file number (e.g., obtained with socket's fileno()).
             """
-            if _AsyncFile._notifier is None:
-                _AsyncFile._notifier = asyncoro._AsyncNotifier.instance()
             self._asyncoro = AsynCoro.scheduler()
+            if not self._asyncoro:
+                raise ValueError('AsyncFile must be initialized from a coroutine')
+            self._notifier = self._asyncoro._notifier
             if hasattr(fd, 'fileno'):
                 if hasattr(fd, '_fileno'):
-                    _AsyncFile._notifier.unregister(fd)
+                    self._notifier.unregister(fd)
                 self._fd = fd
                 self._fileno = fd.fileno()
             elif isinstance(fd, int):
@@ -559,7 +553,7 @@ else:
                     else:
                         raise
                 except:
-                    _AsyncFile._notifier.clear(self, _AsyncPoller._Read)
+                    self._notifier.clear(self, _AsyncPoller._Read)
                     self._read_coro.throw(*sys.exc_info())
                     self._read_coro = self._read_task = None
                     return
@@ -576,7 +570,7 @@ else:
                         return
                 if self._buflist:
                     buf, self._buflist = ''.join(self._buflist), []
-                _AsyncFile._notifier.clear(self, _AsyncPoller._Read)
+                self._notifier.clear(self, _AsyncPoller._Read)
                 self._read_coro._proceed_(buf)
                 self._read_coro = self._read_task = None
 
@@ -597,7 +591,7 @@ else:
             self._read_coro = AsynCoro.cur_coro(self._asyncoro)
             self._read_coro._await_()
             self._read_task = partial_func(_read, size, full)
-            _AsyncFile._notifier.add(self, _AsyncPoller._Read)
+            self._notifier.add(self, _AsyncPoller._Read)
 
         def write(self, buf, full=False, timeout=None):
             """Write data in 'buf' to file. If 'full' is True, the function
@@ -622,13 +616,13 @@ else:
                     if exc.errno in (errno.EAGAIN, errno.EINTR):
                         n = 0
                     else:
-                        _AsyncFile._notifier.clear(self, _AsyncPoller._Write)
+                        self._notifier.clear(self, _AsyncPoller._Write)
                         self._write_coro.throw(*sys.exc_info())
                         self._write_coro = self._write_task = None
                         return
                 written += n
                 if n == len(view) or not full:
-                    _AsyncFile._notifier.clear(self, _AsyncPoller._Write)
+                    self._notifier.clear(self, _AsyncPoller._Write)
                     self._write_coro._proceed_(written)
                     self._write_coro = self._write_task = None
                 else:
@@ -645,13 +639,13 @@ else:
             self._write_coro = AsynCoro.cur_coro(self._asyncoro)
             self._write_coro._await_()
             self._write_task = partial_func(_write, view, 0)
-            _AsyncFile._notifier.add(self, _AsyncPoller._Write)
+            self._notifier.add(self, _AsyncPoller._Write)
 
         def close(self):
             """Close file descriptor.
             """
             if self._fileno:
-                _AsyncFile._notifier.unregister(self)
+                self._notifier.unregister(self)
                 if self._fd:
                     self._fd.close()
                 self._fd = self._fileno = None
@@ -671,7 +665,7 @@ else:
             if self._read_coro:
                 if self._read_task and self._buflist:
                     buf, self._buflist = ''.join(self._buflist), []
-                    _AsyncFile._notifier.clear(self, _AsyncPoller._Read)
+                    self._notifier.clear(self, _AsyncPoller._Read)
                     self._read_coro._proceed_(buf)
                 else:
                     self._read_coro.throw(IOError('timedout'))
@@ -680,7 +674,7 @@ else:
                 written = 0
                 if self._write_task:
                     written = self._write_task.args[2]
-                _AsyncFile._notifier.clear(self, _AsyncPoller._Write)
+                self._notifier.clear(self, _AsyncPoller._Write)
                 self._write_coro._proceed_(written)
                 self._write_coro = self._write_task = None
 

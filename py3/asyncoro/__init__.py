@@ -2449,7 +2449,7 @@ class _NetRequest(object):
     pass
 
 
-class ReactCoro(object):
+class SysCoro(object):
     """Internal use only.
     """
     pass
@@ -2491,7 +2491,7 @@ class Coro(object):
         if self._scheduler == Coro._asyncoro:
             self._name = '~' + self._name
         else:
-            # assert self._location and self._scheduler == ReactCoro._asyncoro
+            # assert self._location and self._scheduler == SysCoro._asyncoro
             self._name = '!' + self._name
 
     @property
@@ -2528,9 +2528,9 @@ class Coro(object):
         if not location or location == Coro._asyncoro._location:
             rcoro = Coro._asyncoro._rcoros.get(name, None)
             if not rcoro and Coro._asyncoro._location:
-                ReactCoro._asyncoro._lock.acquire()
-                rcoro = ReactCoro._asyncoro._rcoros.get(name, None)
-                ReactCoro._asyncoro._lock.release()
+                SysCoro._asyncoro._lock.acquire()
+                rcoro = SysCoro._asyncoro._rcoros.get(name, None)
+                SysCoro._asyncoro._lock.release()
             if rcoro or location == Coro._asyncoro._location:
                 raise StopIteration(rcoro)
         req = _NetRequest('locate_coro', kwargs={'name': name}, dst=location, timeout=timeout)
@@ -2859,7 +2859,7 @@ class Coro(object):
                 self._scheduler = Coro._asyncoro
             elif self._location and self._name[0] == '!':
                 self._id = int(self._id)
-                self._scheduler = ReactCoro._asyncoro
+                self._scheduler = SysCoro._asyncoro
             else:
                 logger.warning('invalid scheduler: %s', self._scheduler)
                 self._scheduler = None
@@ -2972,7 +2972,7 @@ class Channel(object):
         if self._scheduler == Channel._asyncoro:
             self._name = '~' + self._name
         else:
-            # assert self._location and self._scheduler == ReactCoro._asyncoro
+            # assert self._location and self._scheduler == SysCoro._asyncoro
             self._name = '!' + self._name
         self._subscribers = set()
         self._subscribe_event = Event()
@@ -3294,7 +3294,7 @@ class Channel(object):
             if self._name[0] == '~':
                 self._scheduler = Channel._asyncoro
             elif self._location and self._name[0] == '!':
-                self._scheduler = ReactCoro._asyncoro
+                self._scheduler = SysCoro._asyncoro
             else:
                 logger.warning('invalid scheduler: %s', self._scheduler)
                 self._scheduler = None
