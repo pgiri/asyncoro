@@ -179,10 +179,6 @@ if platform.system() == 'Windows':
             per 'open' Python function, although limited to
             basic/common modes.
             """
-            self._asyncoro = AsynCoro.scheduler()
-            if not self._asyncoro:
-                raise Exception('AsyncFile must be initialized from a coroutine')
-            self._notifier = self._asyncoro._notifier
             self._overlap = pywintypes.OVERLAPPED()
             if isinstance(path_handle, str):
                 self._path = path_handle
@@ -240,7 +236,12 @@ if platform.system() == 'Windows':
             self._write_result = None
             self._timeout = None
             self._timeout_id = None
-            self._notifier.register(self._handle)
+            self._asyncoro = AsynCoro.scheduler()
+            if self._asyncoro:
+                self._notifier = self._asyncoro._notifier
+                self._notifier.register(self._handle)
+            else:
+                self._notifier = None
 
         def read(self, size=0, full=False, timeout=None):
             """Read at most 'size' bytes from file; if 'size' <= 0,
@@ -305,6 +306,10 @@ if platform.system() == 'Windows':
                 self._read_coro._proceed_(buf)
                 self._read_coro = None
 
+            if not self._asyncoro:
+                self._asyncoro = AsynCoro.scheduler()
+                self._notifier = self._asyncoro._notifier
+                self._notifier.register(self._handle)
             if not size or size < 0:
                 count = 16384
                 full = True
@@ -394,6 +399,10 @@ if platform.system() == 'Windows':
                     self._write_coro = None
                 return
 
+            if not self._asyncoro:
+                self._asyncoro = AsynCoro.scheduler()
+                self._notifier = self._asyncoro._notifier
+                self._notifier.register(self._handle)
             self._write_result = buffer(buf)
             self._overlap.object = partial_func(_write, 0)
             self._write_coro = AsynCoro.cur_coro(self._asyncoro)
@@ -459,7 +468,8 @@ if platform.system() == 'Windows':
                 def _close_(rc, n):
                     win32file.CloseHandle(self._handle)
                     self._overlap = None
-                    self._notifier.unregister(self._handle)
+                    if self._notifier:
+                        self._notifier.unregister(self._handle)
                     self._handle = None
                     self._read_result = self._write_result = None
                     self._read_coro = self._write_coro = None
@@ -499,20 +509,20 @@ else:
             """'fd' is either a file object (e.g., obtained with 'open')
             or a file number (e.g., obtained with socket's fileno()).
             """
-            self._asyncoro = AsynCoro.scheduler()
-            if not self._asyncoro:
-                raise ValueError('AsyncFile must be initialized from a coroutine')
-            self._notifier = self._asyncoro._notifier
             if hasattr(fd, 'fileno'):
-                if hasattr(fd, '_fileno'):
-                    self._notifier.unregister(fd)
                 self._fd = fd
                 self._fileno = fd.fileno()
             elif isinstance(fd, int):
-                self._fd = None
-                self._fileno = fd
+                self._fd, self._fileno = None, self._fd
             else:
                 raise ValueError('invalid file descriptor')
+            self._asyncoro = AsynCoro.scheduler()
+            if self._asyncoro:
+                self._notifier = self._asyncoro._notifier
+                if hasattr(fd, '_fileno'): # assume it is AsyncSocket
+                    self._notifier.unregister(fd)
+            else:
+                self._notifier = None
             self._timeout = None
             self._read_task = None
             self._write_task = None
@@ -574,6 +584,11 @@ else:
                 self._read_coro._proceed_(buf)
                 self._read_coro = self._read_task = None
 
+            if not self._asyncoro:
+                self._asyncoro = AsynCoro.scheduler()
+                self._notifier = self._asyncoro._notifier
+                if hasattr(self._fd, '_fileno'):
+                    self._notifier.unregister(self._fd)
             if not size or size < 0:
                 size = 0
                 full = True
@@ -586,8 +601,6 @@ else:
                 self._buflist = [buf]
                 size -= len(buf)
             self._timeout = timeout
-            if not self._asyncoro:
-                self._asyncoro = AsynCoro.scheduler()
             self._read_coro = AsynCoro.cur_coro(self._asyncoro)
             self._read_coro._await_()
             self._read_task = partial_func(_read, size, full)
@@ -629,13 +642,16 @@ else:
                     view = view[n:]
                     self._write_task = partial_func(_write, view, written)
 
+            if not self._asyncoro:
+                self._asyncoro = AsynCoro.scheduler()
+                self._notifier = self._asyncoro._notifier
+                if hasattr(self._fd, '_fileno'):
+                    self._notifier.unregister(self._fd)
             if full:
                 view = buffer(buf)
             else:
                 view = buf
             self._timeout = timeout
-            if not self._asyncoro:
-                self._asyncoro = AsynCoro.scheduler()
             self._write_coro = AsynCoro.cur_coro(self._asyncoro)
             self._write_coro._await_()
             self._write_task = partial_func(_write, view, 0)
