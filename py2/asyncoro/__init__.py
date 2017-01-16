@@ -1558,6 +1558,7 @@ if platform.system() == 'Windows':
                             self._rsock.do_handshake()
                         except ssl.SSLError as exc:
                             if exc.args[0] == ssl.SSL_ERROR_WANT_READ:
+                                self._read_result = win32file.AllocateReadBuffer(0)
                                 err, n = win32file.WSARecv(self._fileno, self._read_result,
                                                            self._read_overlap, 0)
                             elif exc.args[0] == ssl.SSL_ERROR_WANT_WRITE:
@@ -1617,8 +1618,8 @@ if platform.system() == 'Windows':
                 socket (instance of AsyncSocket with blocking=False).
                 """
                 sock = socket.socket(self._rsock.family, self._rsock.type, self._rsock.proto)
-                conn = [AsyncSocket(sock, keyfile=self._keyfile, certfile=self._certfile,
-                                    ssl_version=self._ssl_version)]
+                conn = AsyncSocket(sock, keyfile=self._keyfile, certfile=self._certfile,
+                                   ssl_version=self._ssl_version)
                 self._read_result = win32file.AllocateReadBuffer(
                     win32file.CalculateSocketEndPointSize(sock))
 
@@ -1632,10 +1633,10 @@ if platform.system() == 'Windows':
                             coro.throw(socket.error(err))
                         return
 
-                    family, laddr, raddr = win32file.GetAcceptExSockaddrs(conn[0],
+                    family, laddr, raddr = win32file.GetAcceptExSockaddrs(conn,
                                                                           self._read_result)
                     # TODO: unpack raddr if family != AF_INET
-                    conn[0]._rsock.setsockopt(socket.SOL_SOCKET, win32file.SO_UPDATE_ACCEPT_CONTEXT,
+                    conn._rsock.setsockopt(socket.SOL_SOCKET, win32file.SO_UPDATE_ACCEPT_CONTEXT,
                                               struct.pack('P', self._fileno))
 
                     if not self._certfile:
@@ -1644,7 +1645,7 @@ if platform.system() == 'Windows':
                         self._read_overlap.object = self._read_result = None
                         coro, self._read_coro = self._read_coro, None
                         if coro:
-                            coro._proceed_((conn[0], raddr))
+                            coro._proceed_((conn, raddr))
                         return
 
                     # accept SSL connection
@@ -1653,30 +1654,31 @@ if platform.system() == 'Windows':
                         self.ssl_server_ctx.load_cert_chain(certfile=self._certfile,
                                                             keyfile=self._keyfile)
                     if self.ssl_server_ctx:
-                        conn[0]._rsock = self.ssl_server_ctx.wrap_socket(
-                            conn[0]._rsock, server_side=True, do_handshake_on_connect=False)
+                        conn._rsock = self.ssl_server_ctx.wrap_socket(
+                            conn._rsock, server_side=True, do_handshake_on_connect=False)
                     else:
-                        conn[0]._rsock = ssl.wrap_socket(conn[0]._rsock, certfile=self._certfile,
-                                                         keyfile=self._keyfile, server_side=True,
-                                                         ssl_version=self._ssl_version,
-                                                         do_handshake_on_connect=False)
+                        conn._rsock = ssl.wrap_socket(conn._rsock, certfile=self._certfile,
+                                                      keyfile=self._keyfile, server_side=True,
+                                                      ssl_version=self._ssl_version,
+                                                      do_handshake_on_connect=False)
 
                     def _ssl_handshake(err, n):
                         try:
-                            conn[0]._rsock.do_handshake()
+                            conn._rsock.do_handshake()
                         except ssl.SSLError as exc:
                             if exc.args[0] == ssl.SSL_ERROR_WANT_READ:
-                                err, n = win32file.WSARecv(conn[0]._fileno, self._read_result,
+                                self._read_result = win32file.AllocateReadBuffer(0)
+                                err, n = win32file.WSARecv(conn._fileno, self._read_result,
                                                            self._read_overlap, 0)
                             elif exc.args[0] == ssl.SSL_ERROR_WANT_WRITE:
-                                err, n = win32file.WSASend(conn[0]._fileno, '',
+                                err, n = win32file.WSASend(conn._fileno, '',
                                                            self._read_overlap, 0)
                             else:
                                 if self._timeout and self._notifier:
                                     self._notifier._del_timeout(self)
                                 self._read_overlap.object = self._read_result = None
                                 coro, self._read_coro = self._read_coro, None
-                                conn[0].close()
+                                conn.close()
                                 if coro:
                                     coro.throw(*sys.exc_info())
                         except:
@@ -1684,7 +1686,7 @@ if platform.system() == 'Windows':
                                 self._notifier._del_timeout(self)
                             self._read_overlap.object = self._read_result = None
                             coro, self._read_coro = self._read_coro, None
-                            conn[0].close()
+                            conn.close()
                             if err != winerror.ERROR_OPERATION_ABORTED and coro:
                                 coro.throw(socket.error(err))
                         else:
@@ -1693,7 +1695,7 @@ if platform.system() == 'Windows':
                             self._read_overlap.object = self._read_result = None
                             coro, self._read_coro = self._read_coro, None
                             if coro:
-                                coro._proceed_((conn[0], raddr))
+                                coro._proceed_((conn, raddr))
 
                     self._read_result = win32file.AllocateReadBuffer(0)
                     self._read_overlap.object = _ssl_handshake
@@ -1708,7 +1710,7 @@ if platform.system() == 'Windows':
                 self._read_coro._await_()
                 if self._timeout:
                     self._notifier._add_timeout(self)
-                err = win32file.AcceptEx(self._fileno, conn[0]._fileno, self._read_result,
+                err = win32file.AcceptEx(self._fileno, conn._fileno, self._read_result,
                                          self._read_overlap)
                 if err != winerror.ERROR_IO_PENDING and err:
                     self._read_overlap.object(err, n)
