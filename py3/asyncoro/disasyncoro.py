@@ -1232,7 +1232,6 @@ class _SysAsynCoro_(asyncoro.AsynCoro, metaclass=Singleton):
             try:
                 req = deserialize(msg)
             except:
-                print(traceback.format_exc())
                 logger.debug('%s ignoring invalid message', self._location)
                 break
             if req.auth != self._auth_code:

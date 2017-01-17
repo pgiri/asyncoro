@@ -76,18 +76,6 @@ def deserialize(pkl):
 unserialize = deserialize
 
 
-# MetaSingelton is not used in asyncoro anymore, but dispy uses it, so keeping
-# it for now
-class MetaSingleton(type):
-
-    __instance = None
-
-    def __call__(cls, *args, **kwargs):
-        if cls.__instance is None:
-            cls.__instance = super(MetaSingleton, cls).__call__(*args, **kwargs)
-        return cls.__instance
-
-
 class Singleton(type):
 
     def __call__(cls, *args, **kwargs):
@@ -339,6 +327,20 @@ class _AsyncSocket(object):
         if isinstance(other, AsyncSocket):
             return self._fileno < other._fileno
         return 1
+
+    @classmethod
+    def get_ssl_version(cls):
+        """
+        Get default SSL version.
+        """
+        return _AsyncSocket._ssl_protocol
+
+    @classmethod
+    def set_ssl_version(cls, version):
+        """
+        Set default SSL version.
+        """
+        _AsyncSocket._ssl_protocol = version
 
     def setdefaulttimeout(self, timeout):
         if isinstance(timeout, (int, float)) and timeout > 0:
@@ -1583,8 +1585,12 @@ if platform.system() == 'Windows':
                                 self._read_result = win32file.AllocateReadBuffer(0)
                                 err, n = win32file.WSARecv(self._fileno, self._read_result,
                                                            self._read_overlap, 0)
+                                if err != winerror.ERROR_IO_PENDING and err:
+                                    logger.warning('SSL handshake failed (%s)?', err)
                             elif exc.args[0] == ssl.SSL_ERROR_WANT_WRITE:
                                 err, n = win32file.WSASend(self._fileno, b'', self._read_overlap, 0)
+                                if err != winerror.ERROR_IO_PENDING and err:
+                                    logger.warning('SSL handshake failed (%s)?', err)
                             else:
                                 if self._timeout and self._notifier:
                                     self._notifier._del_timeout(self)
@@ -1639,11 +1645,9 @@ if platform.system() == 'Windows':
                 instead. Socket in returned pair is asynchronous
                 socket (instance of AsyncSocket with blocking=False).
                 """
-                sock = socket.socket(self._rsock.family, self._rsock.type, self._rsock.proto)
-                conn = AsyncSocket(sock, keyfile=self._keyfile, certfile=self._certfile,
+                conn = socket.socket(self._rsock.family, self._rsock.type, self._rsock.proto)
+                conn = AsyncSocket(conn, keyfile=self._keyfile, certfile=self._certfile,
                                    ssl_version=self._ssl_version)
-                self._read_result = win32file.AllocateReadBuffer(
-                    win32file.CalculateSocketEndPointSize(sock))
 
                 def _accept(err, n):
                     if err:
@@ -1697,9 +1701,12 @@ if platform.system() == 'Windows':
                                 self._read_result = win32file.AllocateReadBuffer(0)
                                 err, n = win32file.WSARecv(conn._fileno, self._read_result,
                                                            self._read_overlap, 0)
+                                if err != winerror.ERROR_IO_PENDING and err:
+                                    logger.warning('SSL handshake failed (%s)?', err)
                             elif exc.args[0] == ssl.SSL_ERROR_WANT_WRITE:
-                                err, n = win32file.WSASend(conn._fileno, b'',
-                                                           self._read_overlap, 0)
+                                err, n = win32file.WSASend(conn._fileno, b'', self._read_overlap, 0)
+                                if err != winerror.ERROR_IO_PENDING and err:
+                                    logger.warning('SSL handshake failed (%s)?', err)
                             else:
                                 if self._timeout and self._notifier:
                                     self._notifier._del_timeout(self)
@@ -1732,6 +1739,8 @@ if platform.system() == 'Windows':
                     self._asyncoro = AsynCoro.scheduler()
                     self._notifier = self._asyncoro._notifier
                     self._register()
+                self._read_result = win32file.AllocateReadBuffer(
+                    win32file.CalculateSocketEndPointSize(conn._rsock))
                 self._read_overlap.object = _accept
                 self._read_coro = AsynCoro.cur_coro(self._asyncoro)
                 self._read_coro._await_()
