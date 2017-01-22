@@ -62,6 +62,8 @@ def rcoro_proc(client, program, coro=None):
 
 # client (local) coroutine submits computations
 def client_proc(computation, program_path, n, coro=None):
+    # use RemoteCoroScheduler to run jobs
+    rcoro_scheduler = asyncoro.discoro_schedulers.RemoteCoroScheduler(computation)
     # send 10 random numbers to remote process (rcoro_proc)
     def send_input(rcoro, coro=None):
         for i in range(10):
@@ -129,8 +131,6 @@ if __name__ == '__main__':
     Scheduler()
     # send rcoro_proc and program
     computation = Computation([rcoro_proc, program])
-    # use RemoteCoroScheduler to run jobs
-    rcoro_scheduler = asyncoro.discoro_schedulers.RemoteCoroScheduler(computation)
 
     # Or (see 'Either' above), get the path as discoro would: If current
     # directory is a parent of program's path, get relative path to it, or just

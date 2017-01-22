@@ -2,7 +2,10 @@ Example files in this directory are meant to illustrate features of asyncoro
 framework. They are not necessarily efficient versions, nor very useful. The
 descriptions below are sorted on the names of files, so some examples at the
 beginning use advanced features, whereas later files (especially files that
-start with 'tut_') may be easier to follow.
+start with 'tut_') may be easier to follow. In some cases, 'encode' method is
+called on strings so same code works with Python 2 (where 'encode' returns
+string itself) and Python 3 (where 'encode' returns bytes as needed). When
+programming with Python 2 exclusively, there is no need to call 'encode'.
 
 dispy project (http://dispy.sourceforge.net) uses asyncoro to implement Python
 framework for distributed and parallel computing.

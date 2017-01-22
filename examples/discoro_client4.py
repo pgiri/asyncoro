@@ -82,6 +82,10 @@ def client_proc(job_id, rcoro, coro=None):
 
 
 def submit_jobs_proc(computation, njobs, coro=None):
+    # use RemoteCoroScheduler to schedule/submit coroutines; scheduler must be
+    # created before computation is scheduled (next step below)
+    rcoro_scheduler = RemoteCoroScheduler(computation)
+
     for i in range(njobs):
         # create remote coroutine
         rcoro = yield rcoro_scheduler.schedule(rcoro_proc)
@@ -103,9 +107,6 @@ if __name__ == '__main__':
     # instead, it is sent each time a job is submitted,
     # which is a bit inefficient
     computation = Computation([C])
-    # use RemoteCoroScheduler to schedule/submit coroutines; scheduler must be
-    # created before computation is scheduled (next step below)
-    rcoro_scheduler = RemoteCoroScheduler(computation)
 
     # run 10 jobs
     asyncoro.Coro(submit_jobs_proc, computation, 10)

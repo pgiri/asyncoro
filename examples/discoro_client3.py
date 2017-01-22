@@ -36,6 +36,9 @@ def compute(obj, client, coro=None):
 
 
 def client_proc(computation, njobs, coro=None):
+    # use RemoteCoroScheduler to schedule/submit coroutines; scheduler must be
+    # created before computation is scheduled (next step below)
+    rcoro_scheduler = RemoteCoroScheduler(computation)
     # create a separate coroutine to receive results, so they can be processed
     # as soon as received
     def recv_results(coro=None):
@@ -69,8 +72,5 @@ if __name__ == '__main__':
     # send generator function and class C (as the computation uses
     # objects of C)
     computation = Computation([compute, C])
-    # use RemoteCoroScheduler to schedule/submit coroutines; scheduler must be
-    # created before computation is scheduled (next step below)
-    rcoro_scheduler = RemoteCoroScheduler(computation)
     # create 10 remote coroutines (jobs)
     asyncoro.Coro(client_proc, computation, 10)

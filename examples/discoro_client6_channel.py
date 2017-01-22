@@ -70,6 +70,9 @@ def trend_proc(coro=None):
 # server processes, two local coroutines, one to receive trend signal from one
 # of the remote coroutines, and another to send data to two remote coroutines
 def client_proc(computation, coro=None):
+    # use RemoteCoroScheduler to schedule/submit coroutines; scheduler must be
+    # created before computation is scheduled (next step below)
+    rcoro_scheduler = RemoteCoroScheduler(computation)
     # in discoro_client6.py, data is sent to each remote coroutine; here, data
     # is broadcast over channel and remote coroutines subscribe to it
     data_channel = asyncoro.Channel('data_channel')
@@ -121,7 +124,4 @@ if __name__ == '__main__':
     # othrwise, start private scheduler:
     Scheduler()
     computation = Computation([])
-    # use RemoteCoroScheduler to schedule/submit coroutines; scheduler must be
-    # created before computation is scheduled (next step below)
-    rcoro_scheduler = RemoteCoroScheduler(computation)
     asyncoro.Coro(client_proc, computation)

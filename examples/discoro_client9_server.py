@@ -79,6 +79,10 @@ def compute(alg, n, coro=None):
 
 
 def client_proc(computation, coro=None):
+    # Use RemoteCoroScheduler to run at most one coroutine at a server process
+    # This should be created before scheduling computation
+    rcoro_scheduler = RemoteCoroScheduler(computation, proc_available=proc_available,
+                                          proc_close=proc_close)
     # execute 10 jobs (coroutines) and get their results. Note that
     # number of jobs created can be more than number of server
     # processes available; the scheduler will use as many processes as
@@ -107,8 +111,4 @@ if __name__ == '__main__':
     # 'depends', but in this case, the client sends it separately when server is
     # initialized (to illustrate how client can transfer files).
     computation = Computation([compute])
-    # Use RemoteCoroScheduler to run at most one coroutine at a server process
-    # This should be created before scheduling computation
-    rcoro_scheduler = RemoteCoroScheduler(computation, proc_available=proc_available,
-                                          proc_close=proc_close)
     asyncoro.Coro(client_proc, computation)

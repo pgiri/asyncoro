@@ -23,6 +23,9 @@ def compute(n, coro=None):
     yield coro.sleep(n)
 
 def client_proc(computation, njobs, coro=None):
+    # create rcoro scheduler; this replaces computation's current staus_coro (in
+    # this case httpd status_coro) with coro that chains messages
+    rcoro_scheduler = RemoteCoroScheduler(computation)
 
     # submit jobs
     for i in range(njobs):
@@ -50,9 +53,6 @@ if __name__ == '__main__':
     # to illustrate relaying of status messages to multiple coroutines, httpd is
     # also used in this example; this sets computation's status_coro to httpd's status_coro
     httpd = asyncoro.httpd.HTTPServer(computation)
-    # create rcoro scheduler; this replaces computation's current staus_coro (in
-    # this case httpd status_coro) with coro that chains messages
-    rcoro_scheduler = RemoteCoroScheduler(computation)
     # run 10 (or given number of) jobs
     asyncoro.Coro(client_proc, computation, 10 if len(sys.argv) < 2 else int(sys.argv[1])).value()
     # shutdown httpd only after computation is closed

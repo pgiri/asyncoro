@@ -60,6 +60,9 @@ def trend_proc(coro=None):
 # server processes, two local coroutines, one to receive trend signal from one
 # of the remote coroutines, and another to send data to two remote coroutines
 def client_proc(computation, coro=None):
+    # use RemoteCoroScheduler to schedule/submit coroutines; scheduler must be
+    # created before computation is scheduled (next step below)
+    rcoro_scheduler = RemoteCoroScheduler(computation)
     trend_coro = asyncoro.Coro(trend_proc)
 
     rcoro_avg = yield rcoro_scheduler.schedule(rcoro_avg_proc, 0.4, trend_coro, 10)
@@ -103,7 +106,4 @@ if __name__ == '__main__':
     # othrwise, start private scheduler:
     Scheduler()
     computation = Computation([])
-    # use RemoteCoroScheduler to schedule/submit coroutines; scheduler must be
-    # created before computation is scheduled (next step below)
-    rcoro_scheduler = RemoteCoroScheduler(computation)
     asyncoro.Coro(client_proc, computation)

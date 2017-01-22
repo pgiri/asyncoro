@@ -53,6 +53,9 @@ def compute(alg, n, coro=None):
 
 
 def client_proc(computation, coro=None):
+    # Use RemoteCoroScheduler to run at most one coroutine at a server process
+    # This should be created before scheduling computation
+    rcoro_scheduler = RemoteCoroScheduler(computation)
 
     # execute 10 jobs (coroutines) and get their results. Note that number of
     # jobs created can be more than number of server processes available; the
@@ -88,7 +91,4 @@ if __name__ == '__main__':
     node_allocations = [DiscoroNodeAllocate(node='*', platform='Windows', cpus=0)]
     computation = Computation([compute], node_available=node_available, node_setup=node_setup,
                               node_allocations=node_allocations)
-    # Use RemoteCoroScheduler to run at most one coroutine at a server process
-    # This should be created before scheduling computation
-    rcoro_scheduler = RemoteCoroScheduler(computation)
     asyncoro.Coro(client_proc, computation)

@@ -30,6 +30,9 @@ def compute_coro(coro=None):
 
 # client (local) coroutine submits computations
 def client_proc(computation, njobs, coro=None):
+    # use RemoteCoroScheduler to start coroutines at servers (should be done
+    # before scheduling computation)
+    rcoro_scheduler = RemoteCoroScheduler(computation)
     # send 5 requests to remote process (compute_coro)
     def send_requests(rcoro, coro=None):
         # first send this local coroutine (to whom rcoro sends result)
@@ -65,8 +68,5 @@ if __name__ == '__main__':
     Scheduler()
     # package computation fragments
     computation = Computation([compute_coro])
-    # use RemoteCoroScheduler to start coroutines at servers (should be done
-    # before scheduling computation)
-    rcoro_scheduler = RemoteCoroScheduler(computation)
     # run n jobs
     asyncoro.Coro(client_proc, computation, 10 if len(sys.argv) < 2 else int(sys.argv[1]))

@@ -14,6 +14,9 @@ def compute(i, n, coro=None):
 
 # client (local) coroutine submits computations
 def client_proc(computation, njobs, coro=None):
+    # use RemoteCoroScheduler to start coroutines at servers (should be done
+    # before scheduling computation)
+    rcoro_scheduler = RemoteCoroScheduler(computation)
     # execute n jobs (coroutines) and get their results. Number of jobs created
     # can be more than number of server processes available; the scheduler will
     # use as many processes as necessary/available, running one job at a server
@@ -38,8 +41,5 @@ if __name__ == '__main__':
     Scheduler()
     # package computation fragments
     computation = Computation([compute])
-    # use RemoteCoroScheduler to start coroutines at servers (should be done
-    # before scheduling computation)
-    rcoro_scheduler = RemoteCoroScheduler(computation)
     # run 10 (or given number of) jobs
     asyncoro.Coro(client_proc, computation, 10 if len(sys.argv) < 2 else int(sys.argv[1]))
