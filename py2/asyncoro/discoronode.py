@@ -72,9 +72,7 @@ def _discoro_server_coro_proc():
                          'computation files will be saved in "%s"',
                          _discoro_config['id'], _discoro_coro.location, _discoro_dest_path)
     _discoro_req = _discoro_client = _discoro_auth = _discoro_msg = None
-    _discoro_peer_status = None
-    _discoro_monitor_coro = _discoro_monitor_proc = None
-    _discoro_func = _discoro_var = None
+    _discoro_peer_status = _discoro_monitor_coro = _discoro_monitor_proc = _discoro_func = None
     _discoro_job_coros = set()
     _discoro_jobs_done = asyncoro.Event()
 
@@ -149,26 +147,25 @@ def _discoro_server_coro_proc():
                     exec(_discoro_func.code) in globals()
             except:
                 asyncoro.logger.debug('invalid computation to run')
-                job_coro = (sys.exc_info()[0], getattr(_discoro_func, 'name', _discoro_func),
-                            traceback.format_exc())
-                _discoro_client.send(job_coro)
+                _discoro_var = (sys.exc_info()[0], getattr(_discoro_func, 'name', _discoro_func),
+                                traceback.format_exc())
+                _discoro_client.send(_discoro_var)
             else:
                 Coro._asyncoro._lock.acquire()
                 try:
-                    job_coro = Coro(globals()[_discoro_func.name],
-                                    *(_discoro_func.args), **(_discoro_func.kwargs))
+                    _discoro_var = Coro(globals()[_discoro_func.name],
+                                        *(_discoro_func.args), **(_discoro_func.kwargs))
                 except:
-                    job_coro = (sys.exc_info()[0], getattr(_discoro_func, 'name', _discoro_func),
-                                traceback.format_exc())
+                    _discoro_var = (sys.exc_info()[0], getattr(_discoro_func, 'name', _discoro_func),
+                                    traceback.format_exc())
                 else:
-                    _discoro_job_coros.add(job_coro)
+                    _discoro_job_coros.add(_discoro_var)
                     _discoro_busy_time.value = int(time.time())
-                    asyncoro.logger.debug('coro %s created', job_coro)
-                    job_coro.notify(_discoro_monitor_coro)
-                    job_coro.notify(_discoro_scheduler_coro)
-                _discoro_client.send(job_coro)
+                    asyncoro.logger.debug('coro %s created', _discoro_var)
+                    _discoro_var.notify(_discoro_monitor_coro)
+                    _discoro_var.notify(_discoro_scheduler_coro)
+                _discoro_client.send(_discoro_var)
                 Coro._asyncoro._lock.release()
-            del job_coro
 
         elif _discoro_req == 'close' or _discoro_req == 'quit':
             _discoro_auth = _discoro_msg.get('auth', None)
@@ -650,6 +647,14 @@ if __name__ == '__main__':
                 _discoro_daemon = True
         except:
             pass
+        if os.name == 'nt':
+            # Python 3 under Windows blocks multiprocessing.Process on reading
+            # input; pressing "Enter" twice works (for one subprocess). Until
+            # this is understood / fixed, disable reading input.
+            print('\nReading standard input disabled, as multiprocessing does not seem to work'
+                  'with reading input under Windows\n')
+            _discoro_daemon = True
+
     _discoro_config['discover_peers'] = False
 
     # time at start of day
@@ -705,7 +710,8 @@ if __name__ == '__main__':
     else:
         _discoro_config['keyfile'] = None
 
-    _discoro_node_auth = hashlib.sha1(os.urandom(10).encode('hex')).hexdigest()
+    _discoro_node_auth = os.urandom(10).encode('hex')
+    _discoro_node_auth = hashlib.sha1(_discoro_node_auth.encode()).hexdigest()
 
     class _discoro_Struct(object):
 

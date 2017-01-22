@@ -213,7 +213,7 @@ class Computation(object):
                     if not name.endswith('.py'):
                         raise Exception('Invalid module "%s" - must be python source.' % dep)
                     if name.startswith(cwd):
-                        dst = os.path.dirname(name[len(cwd+os.sep):])
+                        dst = os.path.dirname(name[len(cwd):].lstrip(os.sep))
                     elif dep.__package__:
                         dst = dep.__package__.replace('.', os.sep)
                     else:
@@ -221,7 +221,7 @@ class Computation(object):
                 else:
                     name = os.path.abspath(dep)
                     if name.startswith(cwd):
-                        dst = os.path.dirname(name[len(cwd+os.sep):])
+                        dst = os.path.dirname(name[len(cwd):].lstrip(os.sep))
                     else:
                         dst = '.'
                 if name in depends:
@@ -255,7 +255,7 @@ class Computation(object):
         # scope, so make an alias to '__main__'.  Do so even if scheduler is not
         # running on Windows; it is possible the client is not Windows, but a
         # node is.
-        if '__mp_main__' not in sys.modules:
+        if os.name == 'nt' and '__mp_main__' not in sys.modules:
             sys.modules['__mp_main__'] = sys.modules['__main__']
 
     def schedule(self, location=None, timeout=None):
@@ -288,7 +288,7 @@ class Computation(object):
                 logger.debug('Could not send computation to scheduler %s: %s',
                              self.scheduler, self._auth)
                 raise StopIteration(-1)
-            SysCoro.scheduler().atexit(10, lambda: SysCoro(self.close).value())
+            SysCoro.scheduler().atexit(10, lambda: SysCoro(self.close))
             if coro.location != self.scheduler.location:
                 for xf, dst, sep in self._xfer_files:
                     drive, xf = os.path.splitdrive(xf)
@@ -562,6 +562,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
             self.load = 0.0
             self.status = None
             self.coro = None
+            self.lock = asyncoro.Lock()
 
         def run(self, func, computation, client):
             where = None
@@ -645,7 +646,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
         self.__timer_coro = SysCoro(self.__timer_proc)
         Scheduler.__status_coro = self.__status_coro = SysCoro(self.__status_proc)
         self.__client_coro.register('discoro_scheduler')
-        self.asyncoro.discover_peers(port=self._node_port)
+        SysCoro(self.asyncoro.discover_peers, port=self._node_port)
 
     def status(self):
         pending = sum(node.ncoros for node in self._nodes.values())
@@ -838,16 +839,26 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
         computation = self._cur_computation
         if not computation:
             raise StopIteration(-1)
+        # this coroutine may be invoked in two different paths (when a node is
+        # found righ after computation is already scheduled, and when
+        # computation is scheduled right after a node is found). To prevent
+        # concurrent execution, lock is used
+        yield node.lock.acquire()
+        if node.status == Scheduler.NodeInitialized:
+            node.lock.release()
+            raise StopIteration(0)
         node.coro.send({'req': 'computation', 'computation': computation, 'cpus': cpus,
                         'status_coro': self.__status_coro, 'client': coro})
         cpus = yield coro.receive(timeout=computation.timeout, alarm_value=-1)
         if not cpus:
             logger.warning('setup of %s failed', node.coro)
             # self._nodes.pop(node.addr, None)
+            node.lock.release()
             SysCoro(self.__close_node, node, computation)
             raise StopIteration(-1)
         node.cpus = cpus
         if not self._cur_computation:
+            node.lock.release()
             raise StopIteration(0)
 
         xfer_files = computation._xfer_files
@@ -857,6 +868,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                                                   timeout=timeout)
             if reply < 0:
                 logger.debug('failed to transfer file %s: %s', xf, reply)
+                node.lock.release()
                 SysCoro(self.__close_node, node, computation)
                 raise StopIteration(-1)
 
@@ -866,12 +878,14 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                 info = DiscoroNodeInfo(node.name, node.addr, node.cpus,
                                        node.platform, node.avail_info)
                 computation.status_coro.send(DiscoroStatus(node.status, info))
+                node.lock.release()
                 raise StopIteration(0)
             try:
                 params = yield asyncoro.Coro(self.__cur_node_available, node.avail_info).finish()
                 assert params is not None
             except:
                 node.status = Scheduler.NodeIgnore
+                node.lock.release()
                 SysCoro(self.__close_node, node, computation)
                 raise StopIteration(-1)
             else:
@@ -886,6 +900,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
         if computation._node_setup:
             if (yield node.coro.deliver({'req': 'setup', 'params': params,
                                          'auth': computation._auth})) != 1:
+                node.lock.release()
                 SysCoro(self.__close_node, node, computation)
                 raise StopIteration(-1)
         node.status = Scheduler.NodeInitialized
@@ -893,6 +908,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
             info = DiscoroNodeInfo(node.name, node.addr, node.cpus, node.platform,
                                    node.avail_info)
             computation.status_coro.send(DiscoroStatus(node.status, info))
+        node.lock.release()
 
     def __discover_node(self, msg, coro=None):
         for _ in range(10):

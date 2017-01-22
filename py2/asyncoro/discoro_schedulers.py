@@ -289,7 +289,7 @@ class RemoteCoroScheduler(object):
         """
 
         coro.set_daemon()
-        coro.scheduler().atexit(15, lambda: Coro(self.finish, True).value())
+        coro.scheduler().atexit(15, lambda: Coro(self.finish, True))
         while 1:
             msg = yield coro.receive()
             if isinstance(msg, asyncoro.MonitorException):
