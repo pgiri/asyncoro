@@ -52,7 +52,7 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "4.4.0"
+__version__ = "4.4.1"
 
 __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
@@ -1352,34 +1352,28 @@ if platform.system() == 'Windows':
                         self._notifier._del_timeout(self)
                     if err or n == 0:
                         self._read_overlap.object = self._read_result = None
-                        if err == winerror.ERROR_OPERATION_ABORTED:
-                            self._read_coro = None
+                        if not err:
+                            err = winerror.ERROR_CONNECTION_INVALID
+                        if (err == winerror.ERROR_CONNECTION_INVALID or
+                            err == winerror.ERROR_OPERATION_ABORTED):
+                            self._read_coro._proceed_('')
                         else:
-                            if not err:
-                                err = winerror.ERROR_CONNECTION_INVALID
-                            coro, self._read_coro = self._read_coro, None
-                            if coro:
-                                if err == winerror.ERROR_CONNECTION_INVALID:
-                                    coro._proceed_('')
-                                else:
-                                    coro.throw(socket.error(err))
+                            self._read_coro.throw(socket.error(err))
                     else:
                         buf = self._read_result[:n]
                         self._read_overlap.object = self._read_result = None
-                        coro, self._read_coro = self._read_coro, None
-                        if coro:
-                            coro._proceed_(buf)
+                        self._read_coro._proceed_(buf)
 
                 if not self._asyncoro:
                     self._asyncoro = AsynCoro.scheduler()
                     self._notifier = self._asyncoro._notifier
                     self._register()
+                if self._timeout:
+                    self._notifier._add_timeout(self)
                 self._read_overlap.object = _recv
                 self._read_result = win32file.AllocateReadBuffer(bufsize)
                 self._read_coro = AsynCoro.cur_coro(self._asyncoro)
                 self._read_coro._await_()
-                if self._timeout:
-                    self._notifier._add_timeout(self)
                 err, n = win32file.WSARecv(self._fileno, self._read_result, self._read_overlap, 0)
                 if err != winerror.ERROR_IO_PENDING and err:
                     self._read_overlap.object(err, n)
@@ -1392,29 +1386,26 @@ if platform.system() == 'Windows':
                         self._notifier._del_timeout(self)
                     if err or n == 0:
                         self._write_overlap.object = self._write_result = None
-                        if err == winerror.ERROR_OPERATION_ABORTED:
-                            self._write_coro = None
+                        if not err:
+                            err = winerror.ERROR_CONNECTION_INVALID
+                        if (err == winerror.ERROR_CONNECTION_INVALID or
+                            err == winerror.ERROR_OPERATION_ABORTED):
+                            self._write_coro._proceed_(0)
                         else:
-                            if not err:
-                                err = winerror.ERROR_CONNECTION_INVALID
-                            coro, self._write_coro = self._write_coro, None
-                            if coro:
-                                coro.throw(socket.error(err))
+                            self._write_coro.throw(socket.error(err))
                     else:
                         self._write_overlap.object = None
-                        coro, self._write_coro = self._write_coro, None
-                        if coro:
-                            coro._proceed_(n)
+                        self._write_coro._proceed_(n)
 
                 if not self._asyncoro:
                     self._asyncoro = AsynCoro.scheduler()
                     self._notifier = self._asyncoro._notifier
                     self._register()
+                if self._timeout:
+                    self._notifier._add_timeout(self)
                 self._write_overlap.object = _send
                 self._write_coro = AsynCoro.cur_coro(self._asyncoro)
                 self._write_coro._await_()
-                if self._timeout:
-                    self._notifier._add_timeout(self)
                 err, n = win32file.WSASend(self._fileno, buf, self._write_overlap, 0)
                 if err != winerror.ERROR_IO_PENDING and err:
                     self._write_overlap.object(err, n)
@@ -1430,17 +1421,13 @@ if platform.system() == 'Windows':
                         if self._timeout and self._notifier:
                             self._notifier._del_timeout(self)
                         self._read_overlap.object = self._read_result = None
-                        if err == winerror.ERROR_OPERATION_ABORTED:
-                            self._read_coro = None
+                        if not err:
+                            err = winerror.ERROR_CONNECTION_INVALID
+                        if (err == winerror.ERROR_CONNECTION_INVALID or
+                            err == winerror.ERROR_OPERATION_ABORTED):
+                            self._read_coro._proceed_('')
                         else:
-                            if not err:
-                                err = winerror.ERROR_CONNECTION_INVALID
-                            coro, self._read_coro = self._read_coro, None
-                            if coro:
-                                if err == winerror.ERROR_CONNECTION_INVALID:
-                                    coro._proceed_('')
-                                else:
-                                    coro.throw(socket.error(err))
+                            self._read_coro.throw(socket.error(err))
                     else:
                         self._read_result.append(buf[0][:n])
                         pending[0] -= n
@@ -1451,28 +1438,24 @@ if platform.system() == 'Windows':
                                 if self._timeout and self._notifier:
                                     self._notifier._del_timeout(self)
                                 self._read_overlap.object = self._read_result = None
-                                coro, self._read_coro = self._read_coro, None
-                                if coro:
-                                    coro.throw(socket.error(err))
+                                self._read_coro.throw(socket.error(err))
                         else:
                             buf[0] = ''.join(self._read_result)
                             if self._timeout and self._notifier:
                                 self._notifier._del_timeout(self)
                             self._read_overlap.object = self._read_result = None
-                            coro, self._read_coro = self._read_coro, None
-                            if coro:
-                                coro._proceed_(buf[0])
+                            self._read_coro._proceed_(buf[0])
 
                 if not self._asyncoro:
                     self._asyncoro = AsynCoro.scheduler()
                     self._notifier = self._asyncoro._notifier
                     self._register()
+                if self._timeout:
+                    self._notifier._add_timeout(self)
                 self._read_overlap.object = _recvall
                 self._read_result = []
                 self._read_coro = AsynCoro.cur_coro(self._asyncoro)
                 self._read_coro._await_()
-                if self._timeout:
-                    self._notifier._add_timeout(self)
                 err, n = win32file.WSARecv(self._fileno, buf[0], self._read_overlap, 0)
                 if err != winerror.ERROR_IO_PENDING and err:
                     self._read_overlap.object(err, n)
@@ -1485,23 +1468,16 @@ if platform.system() == 'Windows':
                         if self._timeout and self._notifier:
                             self._notifier._del_timeout(self)
                         self._write_overlap.object = self._write_result = None
-                        if err == winerror.ERROR_OPERATION_ABORTED:
-                            self._write_coro = None
-                        else:
-                            if not err:
-                                err = winerror.ERROR_CONNECTION_INVALID
-                            coro, self._write_coro = self._write_coro, None
-                            if coro:
-                                coro.throw(socket.error(err))
+                        if not err:
+                            err = winerror.ERROR_CONNECTION_INVALID
+                        self._write_coro.throw(socket.error(err))
                     else:
                         self._write_result = self._write_result[n:]
                         if len(self._write_result) == 0:
                             if self._timeout and self._notifier:
                                 self._notifier._del_timeout(self)
                             self._write_overlap.object = self._write_result = None
-                            coro, self._write_coro = self._write_coro, None
-                            if coro:
-                                coro._proceed_(0)
+                            self._write_coro._proceed_(0)
                         else:
                             err, n = win32file.WSASend(self._fileno, self._write_result,
                                                        self._write_overlap, 0)
@@ -1509,20 +1485,18 @@ if platform.system() == 'Windows':
                                 if self._timeout and self._notifier:
                                     self._notifier._del_timeout(self)
                                 self._write_overlap.object = self._write_result = None
-                                coro, self._write_coro = self._write_coro, None
-                                if coro:
-                                    coro.throw(socket.error(err))
+                                self._write_coro.throw(socket.error(err))
 
                 if not self._asyncoro:
                     self._asyncoro = AsynCoro.scheduler()
                     self._notifier = self._asyncoro._notifier
                     self._register()
+                if self._timeout:
+                    self._notifier._add_timeout(self)
                 self._write_overlap.object = _sendall
                 self._write_result = buffer(data)
                 self._write_coro = AsynCoro.cur_coro(self._asyncoro)
                 self._write_coro._await_()
-                if self._timeout:
-                    self._notifier._add_timeout(self)
                 err, n = win32file.WSASend(self._fileno, self._write_result, self._write_overlap, 0)
                 if err != winerror.ERROR_IO_PENDING and err:
                     self._write_overlap.object(err, n)
@@ -1538,9 +1512,7 @@ if platform.system() == 'Windows':
                         if err == winerror.ERROR_OPERATION_ABORTED:
                             self._read_coro = None
                         else:
-                            coro, self._read_coro = self._read_coro, None
-                            if coro:
-                                coro.throw(socket.error(err))
+                            self._read_coro.throw(socket.error(err))
                         return
 
                     self._rsock.setsockopt(socket.SOL_SOCKET,
@@ -1549,9 +1521,7 @@ if platform.system() == 'Windows':
                         if self._timeout and self._notifier:
                             self._notifier._del_timeout(self)
                         self._read_overlap.object = self._read_result = None
-                        coro, self._read_coro = self._read_coro, None
-                        if coro:
-                            coro._proceed_(0)
+                        self._read_coro._proceed_(0)
                         return
 
                     # SSL connect
@@ -1566,8 +1536,7 @@ if platform.system() == 'Windows':
                                 if err != winerror.ERROR_IO_PENDING and err:
                                     logger.warning('SSL handshake failed (%s)?', err)
                             elif exc.args[0] == ssl.SSL_ERROR_WANT_WRITE:
-                                err, n = win32file.WSASend(self._fileno, '',
-                                                           self._read_overlap, 0)
+                                err, n = win32file.WSASend(self._fileno, '', self._read_overlap, 0)
                                 if err != winerror.ERROR_IO_PENDING and err:
                                     logger.warning('SSL handshake failed (%s)?', err)
                             else:
@@ -1590,9 +1559,7 @@ if platform.system() == 'Windows':
                             if self._timeout and self._notifier:
                                 self._notifier._del_timeout(self)
                             self._read_overlap.object = self._read_result = None
-                            coro, self._read_coro = self._read_coro, None
-                            if coro:
-                                coro._proceed_(0)
+                            self._read_coro._proceed_(0)
 
                     self._rsock = ssl.wrap_socket(self._rsock, ca_certs=self._certfile,
                                                   cert_reqs=ssl.CERT_REQUIRED, server_side=False,
@@ -1601,20 +1568,20 @@ if platform.system() == 'Windows':
                     self._read_overlap.object = _ssl_handshake
                     self._read_overlap.object(None, 0)
 
-                if not self._asyncoro:
-                    self._asyncoro = AsynCoro.scheduler()
-                    self._notifier = self._asyncoro._notifier
-                    self._register()
                 try:
                     self._rsock.bind(('0.0.0.0', 0))
                 except socket.error as exc:
                     if exc[0] != EINVAL:
                         raise
+                if not self._asyncoro:
+                    self._asyncoro = AsynCoro.scheduler()
+                    self._notifier = self._asyncoro._notifier
+                    self._register()
+                if self._timeout:
+                    self._notifier._add_timeout(self)
                 self._read_overlap.object = _connect
                 self._read_coro = AsynCoro.cur_coro(self._asyncoro)
                 self._read_coro._await_()
-                if self._timeout:
-                    self._notifier._add_timeout(self)
                 err, n = win32file.ConnectEx(self._rsock, host_port, self._read_overlap)
                 if err != winerror.ERROR_IO_PENDING and err:
                     self._read_overlap.object(err, n)
@@ -1648,9 +1615,7 @@ if platform.system() == 'Windows':
                         if self._timeout and self._notifier:
                             self._notifier._del_timeout(self)
                         self._read_overlap.object = self._read_result = None
-                        coro, self._read_coro = self._read_coro, None
-                        if coro:
-                            coro._proceed_((conn, raddr))
+                        self._read_coro._proceed_((conn, raddr))
                         return
 
                     # accept SSL connection
@@ -1678,8 +1643,7 @@ if platform.system() == 'Windows':
                                 if err != winerror.ERROR_IO_PENDING and err:
                                     logger.warning('SSL handshake failed (%s)?', err)
                             elif exc.args[0] == ssl.SSL_ERROR_WANT_WRITE:
-                                err, n = win32file.WSASend(conn._fileno, '',
-                                                           self._read_overlap, 0)
+                                err, n = win32file.WSASend(conn._fileno, '', self._read_overlap, 0)
                                 if err != winerror.ERROR_IO_PENDING and err:
                                     logger.warning('SSL handshake failed (%s)?', err)
                             else:
@@ -1702,9 +1666,7 @@ if platform.system() == 'Windows':
                             if self._timeout and self._notifier:
                                 self._notifier._del_timeout(self)
                             self._read_overlap.object = self._read_result = None
-                            coro, self._read_coro = self._read_coro, None
-                            if coro:
-                                coro._proceed_((conn, raddr))
+                            self._read_coro._proceed_((conn, raddr))
 
                     self._read_result = win32file.AllocateReadBuffer(0)
                     self._read_overlap.object = _ssl_handshake
@@ -1714,17 +1676,17 @@ if platform.system() == 'Windows':
                     self._asyncoro = AsynCoro.scheduler()
                     self._notifier = self._asyncoro._notifier
                     self._register()
+                if self._timeout:
+                    self._notifier._add_timeout(self)
                 self._read_result = win32file.AllocateReadBuffer(
                     win32file.CalculateSocketEndPointSize(conn._rsock))
                 self._read_overlap.object = _accept
                 self._read_coro = AsynCoro.cur_coro(self._asyncoro)
                 self._read_coro._await_()
-                if self._timeout:
-                    self._notifier._add_timeout(self)
                 err = win32file.AcceptEx(self._fileno, conn._fileno, self._read_result,
                                          self._read_overlap)
                 if err != winerror.ERROR_IO_PENDING and err:
-                    self._read_overlap.object(err, n)
+                    self._read_overlap.object(err, 0)
 
 
 if not hasattr(sys.modules[__name__], '_AsyncNotifier'):
@@ -2434,15 +2396,17 @@ class Coro(object):
         self._swap_generator = None
         self._hot_swappable = False
         if not Coro._asyncoro:
-            Coro._asyncoro = self._scheduler = AsynCoro.instance()
+            AsynCoro.instance()
+            if not Coro._asyncoro:
+                Coro._asyncoro = AsynCoro.instance()
         self._scheduler = self.__class__._asyncoro
         self._location = self._scheduler._location
-        self._scheduler._add(self)
         if self._scheduler == Coro._asyncoro:
             self._name = '~' + self._name
         else:
             # assert self._location and self._scheduler == SysCoro._asyncoro
             self._name = '!' + self._name
+        self._scheduler._add(self)
 
     @property
     def location(self):
@@ -2486,15 +2450,15 @@ class Coro(object):
         req = _NetRequest('locate_coro', kwargs={'name': name}, dst=location, timeout=timeout)
         req_id = id(req)
         req.event = Event()
-        Coro._asyncoro._lock.acquire()
-        Coro._asyncoro._pending_reqs[req_id] = req
-        Coro._asyncoro._lock.release()
+        SysCoro._asyncoro._lock.acquire()
+        SysCoro._asyncoro._pending_reqs[req_id] = req
+        SysCoro._asyncoro._lock.release()
         _Peer.send_req_to(req, location)
         if (yield req.event.wait(timeout)) is False:
             req.reply = None
-        Coro._asyncoro._lock.acquire()
-        Coro._asyncoro._pending_reqs.pop(req_id, None)
-        Coro._asyncoro._lock.release()
+        SysCoro._asyncoro._lock.acquire()
+        SysCoro._asyncoro._pending_reqs.pop(req_id, None)
+        SysCoro._asyncoro._lock.release()
         rcoro = req.reply
         raise StopIteration(rcoro)
 
@@ -2642,14 +2606,14 @@ class Coro(object):
         if self._complete is None:
             self._complete = threading.Event()
             self._scheduler._lock.release()
-            if self._complete.wait(timeout=timeout) == True:
+            if self._complete.wait(timeout=timeout) is True:
                 value = self._value
         elif self._complete == 0:
             self._scheduler._lock.release()
             value = self._value
         else:
             self._scheduler._lock.release()
-            if self._complete.wait(timeout=timeout) == True:
+            if self._complete.wait(timeout=timeout) is True:
                 value = self._value
         return value
 
@@ -2664,12 +2628,12 @@ class Coro(object):
         value = None
         if self._complete is None:
             self._complete = Event()
-            if (yield self._complete.wait(timeout=timeout)) == True:
+            if (yield self._complete.wait(timeout=timeout)) is True:
                 value = self._value
         elif self._complete == 0:
             value = self._value
         elif isinstance(self._complete, Event):
-            if (yield self._complete.wait(timeout=timeout)) == True:
+            if (yield self._complete.wait(timeout=timeout)) is True:
                 value = self._value
         else:
             raise RuntimeError('invalid wait on %s/%s: %s' %
@@ -2966,15 +2930,15 @@ class Channel(object):
         req = _NetRequest('locate_channel', kwargs={'name': name}, dst=location, timeout=timeout)
         req.event = Event()
         req_id = id(req)
-        Channel._asyncoro._lock.acquire()
-        Channel._asyncoro._pending_reqs[req_id] = req
-        Channel._asyncoro._lock.release()
+        SysCoro._asyncoro._lock.acquire()
+        SysCoro._asyncoro._pending_reqs[req_id] = req
+        SysCoro._asyncoro._lock.release()
         _Peer.send_req_to(req, location)
         if (yield req.event.wait(timeout)) is False:
             req.reply = None
-        Channel._asyncoro._lock.acquire()
-        Channel._asyncoro._pending_reqs.pop(req_id, None)
-        Channel._asyncoro._lock.release()
+        SysCoro._asyncoro._lock.acquire()
+        SysCoro._asyncoro._pending_reqs.pop(req_id, None)
+        SysCoro._asyncoro._lock.release()
         rchannel = req.reply
         raise StopIteration(rchannel)
 
@@ -3370,7 +3334,6 @@ class AsynCoro(object):
     def __init__(self):
         if not AsynCoro._instance:
             AsynCoro._instance = self
-            Coro._asyncoro = Channel._asyncoro = self
         self._notifier = _AsyncNotifier()
         self._location = None
         self._name = ''
@@ -3386,7 +3349,6 @@ class AsynCoro(object):
         self._rchannels = {}
         self._rcis = {}
         self._stream_peers = {}
-        self._pending_reqs = {}
         self._atexit = []
         self._polling = False
         self._lock = threading.RLock()
@@ -3904,7 +3866,7 @@ class AsynCoro(object):
                     logger.warning('running %s failed:', func.__name__)
                     logger.warning(traceback.format_exc())
             self._complete.wait()
-        if self._location and AsynCoro._instance != self:
+        if self._location and self == SysCoro._asyncoro:
             _Peer.shutdown()
             self._complete.wait()
 
