@@ -2439,12 +2439,21 @@ class Coro(object):
         """
         if not Coro._asyncoro:
             Coro._asyncoro = AsynCoro.instance()
+        yield Coro._locate('~' + name, location=location, timeout=timeout)
+
+    @staticmethod
+    def _locate(name, location, timeout):
+        """Internal use only.
+        """
         if not location or location == Coro._asyncoro._location:
-            rcoro = Coro._asyncoro._rcoros.get('~' + name, None)
-            if not rcoro and Coro._asyncoro._location:
+            if name[0] == '~':
+                rcoro = Coro._asyncoro._rcoros.get(name, None)
+            elif name[0] == '!':
                 SysCoro._asyncoro._lock.acquire()
-                rcoro = SysCoro._asyncoro._rcoros.get('!' + name, None)
+                rcoro = SysCoro._asyncoro._rcoros.get(name, None)
                 SysCoro._asyncoro._lock.release()
+            else:
+                raise StopIteration(None)
             if rcoro or location == Coro._asyncoro._location:
                 raise StopIteration(rcoro)
         req = _NetRequest('locate_coro', kwargs={'name': name}, dst=location, timeout=timeout)
@@ -2935,7 +2944,8 @@ class Channel(object):
             rchannel = Channel._asyncoro._channels.get('~' + name, None)
             if rchannel or location == Channel._asyncoro._location:
                 raise StopIteration(rchannel)
-        req = _NetRequest('locate_channel', kwargs={'name': name}, dst=location, timeout=timeout)
+        req = _NetRequest('locate_channel', kwargs={'name': '~' + name},
+                          dst=location, timeout=timeout)
         req.event = Event()
         req_id = id(req)
         SysCoro._asyncoro._lock.acquire()

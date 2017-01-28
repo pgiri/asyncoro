@@ -265,8 +265,8 @@ class Computation(object):
         if self.status_coro is not None and not isinstance(self.status_coro, Coro):
             raise StopIteration(-1)
 
-        self.scheduler = yield Coro.locate('discoro_scheduler', location=location,
-                                           timeout=self.timeout)
+        self.scheduler = yield SysCoro.locate('discoro_scheduler', location=location,
+                                              timeout=self.timeout)
         if not isinstance(self.scheduler, Coro):
             raise StopIteration(-1)
 

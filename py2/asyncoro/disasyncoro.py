@@ -833,19 +833,23 @@ class AsynCoro(asyncoro.AsynCoro):
                 yield conn.send_msg(serialize(reply))
 
             elif req.name == 'locate_coro':
-                Coro._asyncoro._lock.acquire()
-                coro = Coro._asyncoro._rcoros.get('~' + req.kwargs['name'], None)
-                Coro._asyncoro._lock.release()
-                if not coro:
-                    coro = self._rcoros.get('!' + req.kwargs['name'], None)
+                if req.kwargs['name'][0] == '~':
+                    Coro._asyncoro._lock.acquire()
+                    coro = Coro._asyncoro._rcoros.get(req.kwargs['name'], None)
+                    Coro._asyncoro._lock.release()
+                elif req.kwargs['name'][0] == '!':
+                    coro = self._rcoros.get(req.kwargs['name'], None)
+                else:
+                    coro = None
                 yield conn.send_msg(serialize(coro))
 
             elif req.name == 'locate_channel':
-                Channel._asyncoro._lock.acquire()
-                channel = Channel._asyncoro._rchannels.get('~' + req.kwargs['name'], None)
-                Channel._asyncoro._lock.release()
-                if not channel:
-                    channel = self._rchannels.get('!' + req.kwargs['name'], None)
+                if req.kwargs['name'][0] == '~':
+                    Channel._asyncoro._lock.acquire()
+                    channel = Channel._asyncoro._rchannels.get(req.kwargs['name'], None)
+                    Channel._asyncoro._lock.release()
+                else:
+                    channel = None
                 yield conn.send_msg(serialize(channel))
 
             elif req.name == 'locate_rci':
@@ -1270,6 +1274,13 @@ class SysCoro(asyncoro.Coro):
             AsynCoro.instance()
         self.__class__._asyncoro = self._scheduler = SysCoro._asyncoro
         super(SysCoro, self).__init__(*args, **kwargs)
+
+
+    @staticmethod
+    def locate(name, location=None, timeout=None):
+        if not SysCoro._asyncoro:
+            SysCoro._asyncoro = AsynCoro.instance()
+        yield Coro._locate('!' + name, location, timeout)
 
 
 class _NetRequest(object):
