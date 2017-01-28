@@ -105,6 +105,8 @@ class AsynCoro(asyncoro.AsynCoro):
 
         self.__class__._instance = self
         super(self.__class__, self).__init__()
+        self._rcis = {}
+        self._stream_peers = {}
         self._pending_reqs = {}
 
         if node:
@@ -818,9 +820,7 @@ class AsynCoro(asyncoro.AsynCoro):
                 if req.dst != self._location:
                     reply = Exception('invalid RCI invocation')
                 else:
-                    RCI._asyncoro._lock.acquire()
-                    rci = RCI._asyncoro._rcis.get(req.kwargs['name'], None)
-                    RCI._asyncoro._lock.release()
+                    rci = self._rcis.get(req.kwargs['name'], None)
                     if rci:
                         args = req.kwargs['args']
                         kwargs = req.kwargs['kwargs']
@@ -834,10 +834,10 @@ class AsynCoro(asyncoro.AsynCoro):
 
             elif req.name == 'locate_coro':
                 Coro._asyncoro._lock.acquire()
-                coro = Coro._asyncoro._rcoros.get(req.kwargs['name'], None)
+                coro = Coro._asyncoro._rcoros.get('~' + req.kwargs['name'], None)
                 Coro._asyncoro._lock.release()
                 if not coro:
-                    coro = self._rcoros.get(req.kwargs['name'], None)
+                    coro = self._rcoros.get('!' + req.kwargs['name'], None)
                 yield conn.send_msg(serialize(coro))
 
             elif req.name == 'locate_channel':
@@ -849,9 +849,7 @@ class AsynCoro(asyncoro.AsynCoro):
                 yield conn.send_msg(serialize(channel))
 
             elif req.name == 'locate_rci':
-                RCI._asyncoro._lock.acquire()
-                rci = RCI._asyncoro._rcis.get(req.kwargs['name'], None)
-                RCI._asyncoro._lock.release()
+                rci = self._rcis.get(req.kwargs['name'], None)
                 yield conn.send_msg(serialize(rci))
 
             elif req.name == 'monitor':

@@ -2440,10 +2440,10 @@ class Coro(object):
         if not Coro._asyncoro:
             Coro._asyncoro = AsynCoro.instance()
         if not location or location == Coro._asyncoro._location:
-            rcoro = Coro._asyncoro._rcoros.get(name, None)
+            rcoro = Coro._asyncoro._rcoros.get('~' + name, None)
             if not rcoro and Coro._asyncoro._location:
                 SysCoro._asyncoro._lock.acquire()
-                rcoro = SysCoro._asyncoro._rcoros.get(name, None)
+                rcoro = SysCoro._asyncoro._rcoros.get('!' + name, None)
                 SysCoro._asyncoro._lock.release()
             if rcoro or location == Coro._asyncoro._location:
                 raise StopIteration(rcoro)
@@ -2469,8 +2469,13 @@ class Coro(object):
         """
         if self._location != Coro._asyncoro._location:
             return -1
-        if not name:
-            name = self.name
+        if name:
+            if self._scheduler == Coro._asyncoro:
+                name = '~' + name
+            else:
+                name = '!' + name
+        else:
+            name = self._name
         return self._scheduler._register_coro(self, name)
 
     def unregister(self, name=None):
@@ -2478,8 +2483,13 @@ class Coro(object):
         """
         if self._location != Coro._asyncoro._location:
             return -1
-        if not name:
-            name = self.name
+        if name:
+            if self._scheduler == Coro._asyncoro:
+                name = '~' + name
+            else:
+                name = '!' + name
+        else:
+            name = self._name
         return self._scheduler._unregister_coro(self, name)
 
     def set_daemon(self, flag=True):
@@ -2767,7 +2777,8 @@ class Coro(object):
         self._name = state['name']
         self._location = state['location']
         self._id = state['id']
-        if self._location == Coro._asyncoro._location:
+        if (self._location == Coro._asyncoro._location and
+            isinstance(self._name, str) and len(self._name) > 1):
             if self._name[0] == '~':
                 self._id = int(self._id)
                 self._scheduler = Coro._asyncoro
@@ -2775,7 +2786,7 @@ class Coro(object):
                 self._id = int(self._id)
                 self._scheduler = SysCoro._asyncoro
             else:
-                logger.warning('invalid scheduler: %s', self._scheduler)
+                logger.warning('invalid coroutine from remote peer: %s', self._name)
                 self._scheduler = None
         else:
             self._scheduler = None
@@ -3201,7 +3212,8 @@ class Channel(object):
         self._name = state['name']
         self._location = state['location']
         self._transform = None
-        if self._location == Channel._asyncoro._location:
+        if (self._location == Channel._asyncoro._location and
+            isinstance(self._name, str) and len(self._name) > 1):
             if self._name[0] == '~':
                 self._scheduler = Channel._asyncoro
             elif self._location and self._name[0] == '!':
@@ -3344,8 +3356,6 @@ class AsynCoro(object):
         self._channels = {}
         self._rcoros = {}
         self._rchannels = {}
-        self._rcis = {}
-        self._stream_peers = {}
         self._atexit = []
         self._polling = False
         self._lock = threading.RLock()
