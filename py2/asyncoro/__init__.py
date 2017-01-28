@@ -2816,10 +2816,7 @@ class Location(object):
         if re.match(r'^\d+[\.\d]+$', host) or re.match(r'^[0-9a-fA-F:]+$', host):
             self.addr = host
         else:
-            try:
-                self.addr = socket.getaddrinfo(host, 0, socket.AF_INET, socket.SOCK_STREAM)
-            except:
-                self.addr = socket.getaddrinfo(host, 0, socket.AF_INET6, socket.SOCK_STREAM)
+            self.addr = socket.getaddrinfo(host, 0, 0, socket.SOCK_STREAM)[0][4][0]
         self.port = int(tcp_port)
 
     def __eq__(self, other):
