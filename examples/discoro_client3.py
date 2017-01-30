@@ -46,8 +46,10 @@ def client_proc(computation, njobs, coro=None):
             msg = yield coro.receive()
             print('    result for job %d: %s' % (i, msg))
 
-    results_coro = asyncoro.Coro(recv_results)
     # remote coroutines send replies as messages to this coro
+    results_coro = asyncoro.Coro(recv_results)
+
+    # submit njobs; each job will be executed by one discoro server
     for i in range(njobs):
         cobj = C(i)
         cobj.n = random.uniform(5, 10)

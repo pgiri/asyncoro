@@ -22,9 +22,10 @@ def compute_coro(coro=None):
         if n is None:  # end of requests
             client.send(result)
             break
-        # long-running computation is simulated with 'time.sleep'; during this
-        # time client may send messages to this coroutine, which will be
-        # received and put in this coroutine's message queue (by _ReactAsynCoro_)
+        # long-running computation (without 'yield') is simulated with
+        # 'time.sleep'; during this time client may send messages to this
+        # coroutine (which will be received and put in this coroutine's message
+        # queue) or this coroutine can send messages to client
         time.sleep(n)
         result += n
 
