@@ -32,7 +32,7 @@ __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 
 __version__ = asyncoro.__version__
-__all__ = asyncoro.__all__ + ['RCI']
+__all__ = asyncoro.__all__ + ['PeerStatus', 'RCI']
 
 # if connections to a peer are not successful consecutively
 # MaxConnectionErrors times, peer is assumed dead and removed
@@ -1298,7 +1298,7 @@ class _NetRequest(object):
 
     def __getstate__(self):
         state = {'name': self.name, 'kwargs': self.kwargs, 'dst': self.dst,
-                 'auth': self.auth, 'reply': self.reply, 'timeout': self.timeout}
+                 'auth': self.auth, 'timeout': self.timeout}
         return state
 
     def __setstate__(self, state):
