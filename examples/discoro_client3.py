@@ -8,7 +8,6 @@
 
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *
-from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
 
 # objects of C are exchanged between client and servers
@@ -36,9 +35,12 @@ def compute(obj, client, coro=None):
 
 
 def client_proc(computation, njobs, coro=None):
-    # use RemoteCoroScheduler to schedule/submit coroutines; scheduler must be
-    # created before computation is scheduled (next step below)
-    rcoro_scheduler = RemoteCoroScheduler(computation)
+    # schedule computation with the scheduler; scheduler accepts one computation
+    # at a time, so if scheduler is shared, the computation is queued until it
+    # is done with already scheduled computations
+    if (yield computation.schedule()):
+        raise Exception('Could not schedule computation')
+
     # create a separate coroutine to receive results, so they can be processed
     # as soon as received
     def recv_results(coro=None):
@@ -57,22 +59,23 @@ def client_proc(computation, njobs, coro=None):
         # jobs sequentially; use 'submit' to run multiple jobs on one server
         # concurrently
         print('  request %d: %s' % (i, cobj.n))
-        rcoro = yield rcoro_scheduler.schedule(compute, cobj, results_coro)
+        rcoro = yield computation.submit(compute, cobj, results_coro)
         if not isinstance(rcoro, asyncoro.Coro):
             print('failed to create rcoro %s: %s' % (i, rcoro))
 
     # wait for all results and close computation
-    yield rcoro_scheduler.finish(close=True)
+    # yield results_coro.finish()
+    yield computation.close()
 
 
 if __name__ == '__main__':
-    import random
-    # asyncoro.logger.setLevel(ayncoro.Logger.DEBUG)
+    import random, sys
+    # asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start it (private scheduler):
     Scheduler()
     # send generator function and class C (as the computation uses
     # objects of C)
     computation = Computation([compute, C])
-    # create 10 remote coroutines (jobs)
-    asyncoro.Coro(client_proc, computation, 10)
+    # run 10 (or given number of) jobs
+    asyncoro.Coro(client_proc, computation, 10 if len(sys.argv) < 2 else int(sys.argv[1])).value()

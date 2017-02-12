@@ -3,7 +3,6 @@
 
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *
-from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
 # Unlike in earlier versions of asyncoro, computations can now take time - even
 # if computations don't "yield" to scheduler, asyncoro can still send/receive
@@ -31,9 +30,12 @@ def compute_coro(coro=None):
 
 # client (local) coroutine submits computations
 def client_proc(computation, njobs, coro=None):
-    # use RemoteCoroScheduler to start coroutines at servers (should be done
-    # before scheduling computation)
-    rcoro_scheduler = RemoteCoroScheduler(computation)
+    # schedule computation with the scheduler; scheduler accepts one computation
+    # at a time, so if scheduler is shared, the computation is queued until it
+    # is done with already scheduled computations
+    if (yield computation.schedule()):
+        raise Exception('Could not schedule computation')
+
     # send 5 requests to remote process (compute_coro)
     def send_requests(rcoro, coro=None):
         # first send this local coroutine (to whom rcoro sends result)
@@ -53,12 +55,12 @@ def client_proc(computation, njobs, coro=None):
         print('    %s computed result: %.4f' % (rcoro.location, result))
 
     for i in range(njobs):
-        rcoro = yield rcoro_scheduler.schedule(compute_coro)
+        rcoro = yield computation.submit(compute_coro)
         if isinstance(rcoro, asyncoro.Coro):
             print('  job %d processed by %s' % (i, rcoro.location))
             asyncoro.Coro(send_requests, rcoro)
 
-    yield rcoro_scheduler.finish(close=True)
+    yield computation.close()
 
 
 if __name__ == '__main__':

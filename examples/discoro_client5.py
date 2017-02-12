@@ -9,7 +9,6 @@
 
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *
-import asyncoro.discoro_schedulers
 
 # rcoro_proc is sent to remote server to execute discoro_client5_proc.py
 # program. It uses message passing to get data from client that is sent to the
@@ -62,8 +61,12 @@ def rcoro_proc(client, program, coro=None):
 
 # client (local) coroutine submits computations
 def client_proc(computation, program_path, n, coro=None):
-    # use RemoteCoroScheduler to run jobs
-    rcoro_scheduler = asyncoro.discoro_schedulers.RemoteCoroScheduler(computation)
+    # schedule computation with the scheduler; scheduler accepts one computation
+    # at a time, so if scheduler is shared, the computation is queued until it
+    # is done with already scheduled computations
+    if (yield computation.schedule()):
+        raise Exception('Could not schedule computation')
+
     # send 10 random numbers to remote process (rcoro_proc)
     def send_input(rcoro, coro=None):
         for i in range(10):
@@ -86,7 +89,7 @@ def client_proc(computation, program_path, n, coro=None):
         # create reader and send to rcoro so it can send messages to reader
         client_reader = asyncoro.Coro(get_output, i)
         # schedule rcoro on (available) remote server
-        rcoro = yield rcoro_scheduler.schedule(rcoro_proc, client_reader, program_path)
+        rcoro = yield computation.submit(rcoro_proc, client_reader, program_path)
         if isinstance(rcoro, asyncoro.Coro):
             print('  job %s processed by %s' % (i, rcoro.location))
             # sender sends input data to rcoro
@@ -95,13 +98,18 @@ def client_proc(computation, program_path, n, coro=None):
             yield client_reader.finish()
             print('  job %s done' % i)
         else:  # failed to schedule
+            print('  job %s failed: %s' % (i, rcoro))
             client_reader.terminate()
 
-    # create n jobs
+    # create n jobs (that run concurrently)
+    job_coros = []
     for i in range(1, n+1):
-        asyncoro.Coro(create_job, i)
+        job_coros.append(asyncoro.Coro(create_job, i))
+    # wait for jobs to finish
+    for job_coro in job_coros:
+        yield job_coro.finish()
 
-    yield rcoro_scheduler.finish(close=True)
+    yield computation.close()
 
 
 if __name__ == '__main__':
@@ -116,14 +124,8 @@ if __name__ == '__main__':
     # directory). However, if the file is not under current directory, then file
     # is saved in node's directory itself (without any path).
 
-    # Either (simpler case) require program is executed from the directory where
-    # it is (in this case dependencies are saved in node's directory with the
-    # same paths at the cilent):
-
     if os.path.dirname(sys.argv[0]):
-        print('This program must be executed from "%s" directory' %
-              (os.path.abspath(os.path.dirname(sys.argv[0]))))
-        exit(-1)
+        os.chdir(os.path.dirname(sys.argv[0]))
 
     program = 'discoro_client5_proc.py' # program to distribute and execute
     # if scheduler is not already running (on a node as a program),

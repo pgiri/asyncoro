@@ -307,9 +307,18 @@ class HTTPServer(object):
         self._httpd_thread = threading.Thread(target=self._server.serve_forever)
         self._httpd_thread.daemon = True
         self._httpd_thread.start()
-        self.status_coro = asyncoro.SysCoro(self.status_proc)
         self.computation = computation
-        if not computation.status_coro:
+        self.status_coro = asyncoro.Coro(self.status_proc)
+        if computation.status_coro:
+            client_coro = computation.status_coro
+            def chain_msgs(coro=None):
+                coro.set_daemon()
+                while 1:
+                    msg = yield coro.receive()
+                    self.status_coro.send(msg)
+                    client_coro.send(msg)
+            computation.status_coro = asyncoro.Coro(chain_msgs)
+        else:
             computation.status_coro = self.status_coro
         asyncoro.logger.info('Started HTTP%s server at %s',
                              's' if certfile else '', str(self._server.socket.getsockname()))

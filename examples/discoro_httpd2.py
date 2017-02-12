@@ -23,7 +23,6 @@ class C(object):
 # coroutines there
 def compute(obj, client, coro=None):
     # obj is an instance of C
-    import math
     yield coro.sleep(obj.n)
 
 
@@ -34,7 +33,6 @@ def status_proc(coro=None):
     while True:
         msg = yield coro.receive()
         # (re)send all status messages to http server
-        http_server.status_coro.send(msg)
         if isinstance(msg, asyncoro.MonitorException):
             if msg.args[1][0] == StopIteration:
                 print('    rcoro %s done' % (msg.args[0]))
@@ -53,10 +51,7 @@ def status_proc(coro=None):
 
 
 def client_proc(computation, coro=None):
-    # scheduler sends node / server status messages to status_coro
-    computation.status_coro = asyncoro.Coro(status_proc)
-
-    # since RemoteCoroScheduler is not used, computation must be first scheduled
+    # schedule computation with the scheduler
     if (yield computation.schedule()):
         raise Exception('schedule failed')
 
@@ -68,19 +63,21 @@ def client_proc(computation, coro=None):
         i += 1
         c = C(i)
         c.n = random.uniform(20, 50)
-        if cmd == 'servers':
-            yield computation.run_servers(compute, c, coro)
-        elif cmd == 'nodes':
-            yield computation.run_nodes(compute, c, coro)
+        # unlike in discoro_client*.py, here 'submit_async' is used to run as
+        # many coroutines as given on servers (i.e., possibly more than one
+        # coroutine on a server at any time).
+        rcoro = yield computation.submit_async(compute, c, coro)
+        if isinstance(rcoro, asyncoro.Coro):
+            print('  %s: rcoro %s created' % (i, rcoro))
         else:
-            yield computation.run(compute, c, coro)
+            print('  %s: rcoro failed: %s' % (i, rcoro))
 
     yield computation.close()
 
 
 if __name__ == '__main__':
     import os, asyncoro.discoro, asyncoro.httpd, sys, random
-    # asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
+    asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start it (private scheduler):
     Scheduler()
@@ -88,13 +85,13 @@ if __name__ == '__main__':
     # objects of C)
     # use MinPulseInterval so node status updates are sent more frequently
     # (instead of default 2*MinPulseInterval)
-    computation = Computation([compute, C], pulse_interval=asyncoro.discoro.MinPulseInterval)
+    computation = Computation([compute, C], status_coro=asyncoro.Coro(status_proc),
+                              pulse_interval=asyncoro.discoro.MinPulseInterval)
+
     # create http server to monitor nodes, servers, coroutines
     http_server = asyncoro.httpd.HTTPServer(computation)
     coro = asyncoro.Coro(client_proc, computation)
     print('   Enter "quit" or "exit" to end the program, or ')
-    print('   Enter "servers" to schedule coroutine on each server, or ')
-    print('   Enter "nodes" to schedule coroutine on each node, or ')
     print('   Enter anything else to schedule a coroutine on one of the servers')
     if sys.version_info.major > 2:
         read_input = input

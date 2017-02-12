@@ -14,22 +14,33 @@ def rcoro_proc(n, coro=None):
     raise StopIteration(n)
 
 
-# Instead of using RemoteCoroScheduler (which is easier), in this example status
-# messages from discoro scheduler are used to start remote coroutines and get
-# their exit status
+# Instead of using discoro.Computation's API to get results (which is easier),
+# in this example status messages from discoro scheduler are used to start
+# remote coroutines and get their results
 def status_proc(computation, njobs, coro=None):
+    # set computation's status_coro to receive status messages from discoro
+    # scheduler (this should be done before httpd is created, in case it is
+    # used).
+    computation.status_coro = coro
+    # schedule computation with the scheduler; scheduler accepts one computation
+    # at a time, so if scheduler is shared, the computation is queued until it
+    # is done with already scheduled computations
+    # wait for jobs to be created and finished
+    if (yield computation.schedule()):
+        raise Exception('Failed to schedule computation')
+
     npending = njobs
 
     # in this example at most one coroutine is submitted at a server; depending
     # on computation / needs, many coroutines can be simlutaneously submitted /
-    # running at a server.
+    # running at a server (with 'computation.submit_async').
     while True:
         msg = yield coro.receive()
         if isinstance(msg, DiscoroStatus):
             # print('Status: %s / %s' % (msg.info, msg.status))
             if msg.status == Scheduler.ServerInitialized and njobs > 0: # submit a job
                 n = random.uniform(5, 10)
-                rcoro = yield computation.run_at(msg.info, rcoro_proc, n)
+                rcoro = yield computation.submit_at(msg.info, rcoro_proc, n)
                 if isinstance(rcoro, asyncoro.Coro):
                     print('  rcoro_proc started at %s with %s' % (rcoro.location, n))
                     njobs -= 1
@@ -47,27 +58,20 @@ def status_proc(computation, njobs, coro=None):
                 break
             if njobs > 0: # submit another job
                 n = random.uniform(5, 10)
-                rcoro = yield computation.run_at(rcoro.location, rcoro_proc, n)
+                rcoro = yield computation.submit_at(rcoro.location, rcoro_proc, n)
                 if isinstance(rcoro, asyncoro.Coro):
                     print('  rcoro_proc started at %s with %s' % (rcoro.location, n))
                     njobs -= 1
 
-def client_proc(computation, njobs, coro=None):
-    computation.status_coro = asyncoro.Coro(status_proc, computation, njobs)
-    # since RemoteCoroScheduler is not used, schedule computation
-    if (yield computation.schedule()):
-        raise Exception('Failed to schedule computation')
-    # wait for jobs to be created and finished
-    yield computation.status_coro.finish()
     yield computation.close()
 
 
 if __name__ == '__main__':
-    import random
+    import random, sys
     # asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
     # if scheduler is not already running (on a node as a program),
     # start it (private scheduler):
     Scheduler()
+    njobs = 10 if len(sys.argv) < 2 else int(sys.argv[1])
     computation = Computation([rcoro_proc])
-    # run 10 jobs
-    asyncoro.Coro(client_proc, computation, 10)
+    asyncoro.Coro(status_proc, computation, njobs)

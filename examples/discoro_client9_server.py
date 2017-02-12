@@ -13,60 +13,42 @@
 
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *
-from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
-def proc_available(location, coro=None):
-    # 'proc_available' is executed locally (at client) when a server process is
-    # available. 'location' is Location instance of server. When this coroutine
-    # is executed, 'depends' of computation would've been transferred.
-
-    # In this case, 'setup_server' is executed at remote server process to read
-    # the data in given file (transferred by client) in to memory (global
-    # variable). 'compute' then uses the data in memory instead of reading from
-    # file every time.
-    def setup_server(data_file, coro=None):  # executed on remote server
-        # variables declared as 'global' will be available in coroutines
-        global hashlib, data
-        import os, hashlib
-        with open(data_file, 'rb') as fd:
-            data = fd.read()
-        os.remove(data_file)  # data_file is not needed anymore
-        # generator functions must have at least one 'yield'
-        yield 0 # indicate successful initialization with exit value 0
-
-    # rest is executed locally
+def server_available(location, data_file, coro=None):
     import os
+    # 'server_available' is executed locally (at client) when a server process
+    # is available. 'location' is Location instance of server. When this
+    # coroutine is executed, 'depends' of computation would've been transferred.
     # data_file could've been sent with the computation 'depends'; however, to
-    # illustrate how files can be sent separately, file is transferred during
-    # setup. Different servers can also be sent different files, for example, to
-    # distribute the data among servers.
-    if (yield asyncoro.AsynCoro().send_file(location, data_file, timeout=5)) < 0:
+    # illustrate how files can be sent separately (to distribute data fragments
+    # among servers), files are transferred to servers in this
+    # example
+    print('  Sending %s to %s' % (data_file, location))
+    if (yield asyncoro.AsynCoro().send_file(location, data_file, timeout=5, overwrite=True)) < 0:
         print('Could not send data file "%s" to %s' % (data_file, location))
         raise StopIteration(-1)
 
-    # run 'setup_server' to read file in to memory (on remote server)
-    if (yield rcoro_scheduler.execute_at(location, setup_server, os.path.basename(data_file))) != 0:
-        print('Could not setup %s, %s' % (data_file, location))
-        raise StopIteration(-1)
+    # 'setup_server' is executed on remote server at 'location' with argument
+    # data_file
+    yield computation.enable_server(location, data_file)
     raise StopIteration(0)
 
-def proc_close(status, location, coro=None):
-    # 'proc_close' is executed locally (at client) when either server process is
-    # being closed (when computation is closed), in which case 'status' would be
-    # 'ServerInitialized', or server process is closed as an exception (e.g.,
-    # due to network failures no communication took place for zombie_period
-    # seconds, server was closed/terminated manually etc.), in which case
-    # 'status' would be 'ServerClosed'.
-
-    # 'cleanup_server' is executed at remote server process to cleanup
-    # (delete global variables initialized in 'setup_server' in this case)
-    def cleanup_server(coro=None):  # executed on remote server
-        global hashlib, data
-        del hashlib, data
-        yield 0  # generator functions should have at least one 'yield'
-
-    if status == Scheduler.ServerInitialized:
-        yield rcoro_scheduler.execute_at(location, cleanup_server)
+# 'setup_server' is executed at remote server process to read the data in given
+# file (transferred by client) in to memory (global variable). 'compute' then
+# uses the data in memory instead of reading from file every time.
+def setup_server(data_file, coro=None):  # executed on remote server
+    # variables declared as 'global' will be available in coroutines for
+    # read/write to all computations on a server.
+    global hashlib, data, file_name
+    import os, hashlib
+    # note that files transferred to server are in the directory where
+    # computations are executed (cf 'node_setup' in discoro_client9_node.py)
+    with open(data_file, 'rb') as fd:
+        data = fd.read()
+    os.remove(data_file)  # data_file is not needed anymore
+    file_name = data_file
+    # generator functions must have at least one 'yield'
+    yield 0 # indicate successful initialization with exit value 0
 
 # 'compute' is executed at remote server process repeatedly to compute
 # checksum of data in memory, initialized by 'setup_server'
@@ -75,40 +57,55 @@ def compute(alg, n, coro=None):
     yield coro.sleep(n)
     checksum = getattr(hashlib, alg)()
     checksum.update(data)
-    raise StopIteration((alg, checksum.hexdigest()))
+    raise StopIteration((file_name, alg, checksum.hexdigest()))
 
+
+# local coroutine to process status messages from scheduler
+def status_proc(coro=None):
+    coro.set_daemon()
+    i = 0
+    while 1:
+        msg = yield coro.receive()
+        if not isinstance(msg, DiscoroStatus):
+            continue
+        if msg.status == Scheduler.ServerDiscovered:
+            asyncoro.Coro(server_available, msg.info, data_files[i])
+            i += 1
 
 def client_proc(computation, coro=None):
-    # Use RemoteCoroScheduler to run at most one coroutine at a server process
-    # This should be created before scheduling computation
-    rcoro_scheduler = RemoteCoroScheduler(computation, proc_available=proc_available,
-                                          proc_close=proc_close)
+    if (yield computation.schedule()):
+        raise Exception('Could not schedule computation')
+
     # execute 10 jobs (coroutines) and get their results. Note that
     # number of jobs created can be more than number of server
     # processes available; the scheduler will use as many processes as
     # necessary/available, running one job at a server process
     algorithms = ['md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512']
-    args = [(algorithms[i % len(algorithms)], random.uniform(1, 3)) for i in range(10)]
-    results = yield rcoro_scheduler.map_results(compute, args)
+    args = [(algorithms[i % len(algorithms)], random.uniform(1, 3)) for i in range(15)]
+    results = yield computation.map_results(compute, args)
+    asyncoro.logger.debug('results: %s' % len(results))
     for i, result in enumerate(results):
-        if isinstance(result, tuple) and len(result) == 2:
-            print('    %ssum: %s' % (result[0], result[1]))
+        if isinstance(result, tuple) and len(result) == 3:
+            print('    %ssum for %s: %s' % (result[1], result[0], result[2]))
         else:
             print('  rcoro failed for %s: %s' % (args[i][0], str(result)))
 
-    yield rcoro_scheduler.finish(close=True)
+    yield computation.close()
 
 
 if __name__ == '__main__':
-    import random, functools, sys
+    import random, functools, sys, os, glob
     # asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
+    if os.path.dirname(sys.argv[0]):
+        os.chdir(os.path.dirname(sys.argv[0]))
     # if scheduler is not already running (on a node as a program),
     # start private scheduler:
     Scheduler()
-    data_file = sys.argv[0] if len(sys.argv) == 1 else sys.argv[1]
 
-    # send 'compute' generator function; data_file can also be sent with
-    # 'depends', but in this case, the client sends it separately when server is
-    # initialized (to illustrate how client can transfer files).
-    computation = Computation([compute])
+    data_files = glob.glob('discoro_client*.py')
+
+    # send 'compute' generator function; the client sends data files when server
+    # is discovered (to illustrate how client can distribute data).
+    computation = Computation([compute], status_coro=asyncoro.Coro(status_proc),
+                              disable_servers=True, server_setup=setup_server)
     asyncoro.Coro(client_proc, computation)

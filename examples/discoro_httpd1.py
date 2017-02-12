@@ -7,7 +7,6 @@
 
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *
-from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
 
 # objects of C are exchanged between client and servers
@@ -24,22 +23,10 @@ class C(object):
 # coroutines there
 def compute(obj, client, coro=None):
     # obj is an instance of C
-    import math
     yield coro.sleep(obj.n)
 
 
 def client_proc(computation, coro=None):
-    # use RemoteCoroScheduler to start coroutines at servers (should be done
-    # before scheduling computation)
-    rcoro_scheduler = RemoteCoroScheduler(computation)
-    # Creating httpd sets computation's "status_coro" to process status messages
-    # from discoro scheduler. RemoteCoroScheduler will reset computation's
-    # "status_coro" to itself, but chains messages to existing "status_coro", so
-    # both RemoteCoroScheduler and httpd will process messages. See
-    # discoro_httpd2.py where messages from discoro are chained explicitly and
-    # processed by the client.
-
-    # since RemoteCoroScheduler is not used, computation must be first scheduled
     if (yield computation.schedule()):
         raise Exception('schedule failed')
 
@@ -50,19 +37,16 @@ def client_proc(computation, coro=None):
             break
         i += 1
         c = C(i)
-        if cmd == 'servers':
-            c.n = random.uniform(10, 20)
-            yield computation.run_servers(compute, c, coro)
-        elif cmd == 'nodes':
-            c.n = random.uniform(20, 50)
-            yield computation.run_nodes(compute, c, coro)
+        try:
+            c.n = float(cmd)
+        except:
+            print('  "%s" is ignored')
+            continue
         else:
-            try:
-                c.n = float(cmd)
-            except:
-                print('  "%s" is ignored')
-                continue
-            yield computation.run(compute, c, coro)
+            # unlike in discoro_client*.py, here 'submit_async' is used to run
+            # as many coroutines as given on servers (i.e., possibly more than
+            # one coroutine on a server at any time).
+            yield computation.submit_async(compute, c, coro)
 
     yield computation.close()
 
@@ -82,8 +66,6 @@ if __name__ == '__main__':
     http_server = asyncoro.httpd.HTTPServer(computation)
     coro = asyncoro.Coro(client_proc, computation)
     print('   Enter "quit" or "exit" to end the program, or ')
-    print('   Enter "servers" to schedule coroutine on each server, or ')
-    print('   Enter "nodes" to schedule coroutine on each node, or ')
     print('   Enter a number to schedule a coroutine on one of the servers')
     if sys.version_info.major > 2:
         read_input = input

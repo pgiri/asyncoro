@@ -22,7 +22,6 @@
 
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *
-from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
 
 # this generator function is sent to remote discoro servers to run
@@ -33,45 +32,39 @@ def compute(n, coro=None):
     raise StopIteration(time.asctime()) # result of 'compute' is current time
 
 
-def client_proc(computation, n, coro=None):
+def client_proc(computation, njobs, coro=None):
+    # schedule computation with the scheduler; scheduler accepts one computation
+    # at a time, so if scheduler is shared, the computation is queued until it
+    # is done with already scheduled computations
+    if (yield computation.schedule()):
+        raise Exception('Could not schedule computation')
+
     # pair EC2 node with this client with:
     yield asyncoro.AsynCoro().peer(asyncoro.Location('54.204.242.185', 51347))
     # if multiple nodes are used, 'broadcast' option can be used to pair with
     # all nodes with just one statement as:
     # yield asyncoro.AsynCoro().peer(asyncoro.Location('54.204.242.185', 51347), broadcast=True)
 
-    # coroutine to call RemoteCoroScheduler's "execute" method
-    def exec_proc(gen, *args, **kwargs):
-        # execute computation; result of computation is result of
-        # 'yield' which is also result of this coroutine (obtained
-        # with 'finish' method below)
-        yield job_scheduler.execute(gen, *args, **kwargs)
-        # results can be processed here (as they become available), or
-        # await in sequence as done below
-
-    # Use RemoteCoroScheduler to run at most one coroutine at a server process
-    # This should be created before scheduling computation
-    job_scheduler = RemoteCoroScheduler(computation)
-
     # execute n jobs (coroutines) and get their results. Note that
     # number of jobs created can be more than number of server
     # processes available; the scheduler will use as many processes as
     # necessary/available, running one job at a server process
-    jobs = [asyncoro.Coro(exec_proc, compute, random.uniform(3, 10)) for _ in range(n)]
-    for job in jobs:
-        print('result: %s' % (yield job.finish()))
+    args = [random.uniform(3, 10) for _ in range(njobs)]
+    results = yield computation.map_results(compute, args)
+    for result in results:
+        print('result: %s' % result)
 
-    yield job_scheduler.finish(close=True)
+    yield computation.close()
 
 
 if __name__ == '__main__':
     import sys, random
-    asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
+    # asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
     asyncoro.AsynCoro(node='127.0.0.1', tcp_port=4567)
-    n = 10 if len(sys.argv) == 1 else int(sys.argv[1])
+    njobs = 10 if len(sys.argv) == 1 else int(sys.argv[1])
     # if scheduler is not already running (on a node as a program),
     # start private scheduler:
     Scheduler()
     # send 'compute' generator function
     computation = Computation([compute])
-    asyncoro.Coro(client_proc, computation, n)
+    asyncoro.Coro(client_proc, computation, njobs)

@@ -8,7 +8,6 @@
 
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *
-from asyncoro.discoro_schedulers import RemoteCoroScheduler
 import asyncoro.httpd
 
 
@@ -23,20 +22,22 @@ def compute(n, coro=None):
     yield coro.sleep(n)
 
 def client_proc(computation, njobs, coro=None):
-    # create rcoro scheduler; this replaces computation's current staus_coro (in
-    # this case httpd status_coro) with coro that chains messages
-    rcoro_scheduler = RemoteCoroScheduler(computation)
+    # schedule computation with the scheduler; scheduler accepts one computation
+    # at a time, so if scheduler is shared, the computation is queued until it
+    # is done with already scheduled computations
+    if (yield computation.schedule()):
+        raise Exception('Could not schedule computation')
 
     # submit jobs
     for i in range(njobs):
-        rcoro = yield rcoro_scheduler.schedule(compute, random.uniform(5, 10))
+        rcoro = yield computation.submit(compute, random.uniform(5, 10))
         if isinstance(rcoro, asyncoro.Coro):
             print('  job %s processed by %s' % (i, rcoro.location))
         else:
             print('rcoro %s failed: %s' % (i, rcoro))
 
     # wait for all jobs to be done and close computation
-    yield rcoro_scheduler.finish(close=True)
+    yield computation.close()
 
 
 if __name__ == '__main__':

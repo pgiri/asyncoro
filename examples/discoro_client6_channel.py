@@ -4,7 +4,6 @@
 
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *
-from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
 
 # This generator function is sent to remote discoro to analyze data
@@ -70,9 +69,12 @@ def trend_proc(coro=None):
 # server processes, two local coroutines, one to receive trend signal from one
 # of the remote coroutines, and another to send data to two remote coroutines
 def client_proc(computation, coro=None):
-    # use RemoteCoroScheduler to schedule/submit coroutines; scheduler must be
-    # created before computation is scheduled (next step below)
-    rcoro_scheduler = RemoteCoroScheduler(computation)
+    # schedule computation with the scheduler; scheduler accepts one computation
+    # at a time, so if scheduler is shared, the computation is queued until it
+    # is done with already scheduled computations
+    if (yield computation.schedule()):
+        raise Exception('Could not schedule computation')
+
     # in discoro_client6.py, data is sent to each remote coroutine; here, data
     # is broadcast over channel and remote coroutines subscribe to it
     data_channel = asyncoro.Channel('data_channel')
@@ -82,9 +84,9 @@ def client_proc(computation, coro=None):
 
     trend_coro = asyncoro.Coro(trend_proc)
 
-    rcoro_avg = yield rcoro_scheduler.schedule(rcoro_avg_proc, data_channel, 0.4, trend_coro, 10)
+    rcoro_avg = yield computation.submit(rcoro_avg_proc, data_channel, 0.4, trend_coro, 10)
     assert isinstance(rcoro_avg, asyncoro.Coro)
-    rcoro_save = yield rcoro_scheduler.schedule(rcoro_save_proc, data_channel)
+    rcoro_save = yield computation.submit(rcoro_save_proc, data_channel)
     assert isinstance(rcoro_save, asyncoro.Coro)
 
     # make sure both remote coroutines have subscribed to channel ('deliver'
@@ -112,7 +114,7 @@ def client_proc(computation, coro=None):
     item = (i, None)
     data_channel.send(item)
 
-    yield rcoro_scheduler.finish(close=True)
+    yield computation.close()
     data_channel.close()
 
 

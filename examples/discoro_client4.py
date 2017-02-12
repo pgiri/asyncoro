@@ -15,7 +15,6 @@
 
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *
-from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
 # objects of C are sent by a client to remote coroutine
 class C(object):
@@ -76,29 +75,46 @@ def client_proc(job_id, rcoro, coro=None):
     # rcoro saves results file at this client, which is saved in asyncoro's
     # dest_path, not current working directory!
     output = os.path.join(asyncoro.AsynCoro().dest_path, 'output%s.dat' % obj.i)
-    # if necessary, move file to os.getcwd()
-    # os.rename(output, os.getcwd())
-    print('    job %s processed' % (obj.i))
+    # move file to cwd
+    target = os.path.join(os.getcwd(), os.path.basename(output))
+    os.rename(output, target)
+    print('    job %s output is in %s' % (obj.i, target))
 
 
 def submit_jobs_proc(computation, njobs, coro=None):
-    # use RemoteCoroScheduler to schedule/submit coroutines; scheduler must be
-    # created before computation is scheduled (next step below)
-    rcoro_scheduler = RemoteCoroScheduler(computation)
+    # schedule computation with the scheduler; scheduler accepts one computation
+    # at a time, so if scheduler is shared, the computation is queued until it
+    # is done with already scheduled computations
+    if (yield computation.schedule()):
+        raise Exception('Could not schedule computation')
 
     for i in range(njobs):
         # create remote coroutine
-        rcoro = yield rcoro_scheduler.schedule(rcoro_proc)
+        rcoro = yield computation.submit(rcoro_proc)
         if isinstance(rcoro, asyncoro.Coro):
             # create local coroutine to send input file and data to rcoro
             asyncoro.Coro(client_proc, i, rcoro)
+        else:
+            print('  job %s failed: %s' % (i, rcoro))
 
-    yield rcoro_scheduler.finish(close=True)
+    yield computation.close()
 
 
 if __name__ == '__main__':
-    import random, os
+    import random, os, sys
     # asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
+    if os.path.dirname(sys.argv[0]):
+        os.chdir(os.path.dirname(sys.argv[0]))
+    # run 10 (or given number of) jobs
+    njobs = 0
+    for i in range(10 if len(sys.argv) < 2 else int(sys.argv[1])):
+        if os.path.isfile('input%s.dat' % i):
+            njobs += 1
+        else:
+            break
+    if not njobs:
+        raise Exception('No input data files to process')
+
     # if scheduler is not already running (on a node as a program),
     # start it (private scheduler):
     Scheduler()
@@ -108,5 +124,4 @@ if __name__ == '__main__':
     # which is a bit inefficient
     computation = Computation([C])
 
-    # run 10 jobs
-    asyncoro.Coro(submit_jobs_proc, computation, 10)
+    asyncoro.Coro(submit_jobs_proc, computation, njobs)

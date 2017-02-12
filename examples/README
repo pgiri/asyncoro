@@ -71,6 +71,13 @@ framework for distributed and parallel computing.
   processes by reading data in files in to global variables (memory) for
   processing that data in comptations efficiently (i.e., in-memory processing).
 
+* discoro_httpd1.py uses RemoteCoroScheduler and httpd module so the cluster
+  status can be monitored with a web browser.
+
+* discoro_httpd2.py chains messages from discoro scheduler to httpd module and
+  to process them in the client itself (to show when a job is done in this
+  case).
+
 * discoro_ssh_ec2.py shows how to use ssh port forwarding to work with Amazon
   EC2 cloud computing, where the client runs locally and discoronode runs on
   remote Amazon EC2 cloud infrastructure.

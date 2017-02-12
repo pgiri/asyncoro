@@ -3,7 +3,6 @@
 
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *
-from asyncoro.discoro_schedulers import RemoteCoroScheduler
 
 # this generator function is sent to remote discoro servers to run
 # coroutines there
@@ -14,23 +13,23 @@ def compute(i, n, coro=None):
 
 # client (local) coroutine submits computations
 def client_proc(computation, njobs, coro=None):
-    # use RemoteCoroScheduler to start coroutines at servers (should be done
-    # before scheduling computation)
-    rcoro_scheduler = RemoteCoroScheduler(computation)
-    # execute n jobs (coroutines) and get their results. Number of jobs created
-    # can be more than number of server processes available; the scheduler will
-    # use as many processes as necessary/available, running one job at a server
-    # process
+    # schedule computation with the scheduler; scheduler accepts one computation
+    # at a time, so if scheduler is shared, the computation is queued until it
+    # is done with already scheduled computations
+    if (yield computation.schedule()):
+        raise Exception('Could not schedule computation')
 
     # arguments must correspond to arguments for computaiton; multiple arguments
     # (as in this case) can be given as tuples
     args = [(i, random.uniform(2, 5)) for i in range(njobs)]
-    results = yield rcoro_scheduler.map_results(compute, args)
+    results = yield computation.map_results(compute, args)
     # Coroutines may not be executed in the order of given list of args, but
     # results would be in the same order of given list of args
     for result in results:
         print('    result for %d from %s: %s' % result)
-    # yield rcoro_scheduler.finish(close=True)
+
+    # wait for all jobs to be done and close computation
+    yield computation.close()
 
 
 if __name__ == '__main__':
