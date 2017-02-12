@@ -417,7 +417,8 @@ class Computation(object):
         (remote) coroutine; check result with 'isinstance(rcoro,
         asyncoro.Coro)'. The generator is supposed to be (mostly) I/O bound and
         not consume CPU time. Unlike other 'submit' variants, coroutines created
-        with 'async' are not"tracked" by scheduler (see online documentation for more details).
+        with 'async' are not "tracked" by scheduler (see online documentation for
+        more details).
 
         If 'where' is a string, it is assumed to be IP address of a node, in
         which case the coroutine is scheduled at that node on a server at that
@@ -452,7 +453,9 @@ class Computation(object):
                 else:
                     params = (params,)
             append_coro(Coro(self.submit_result, gen, *params))
-        results = [(yield coro.finish()) for coro in coros]
+        results = [None] * len(coros)
+        for i, coro in enumerate(coros):
+            results[i] = yield coro.finish()
         raise StopIteration(results)
 
     def enable_node(self, ip_addr, *setup_args):
