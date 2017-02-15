@@ -4,8 +4,8 @@
 # This example illustrates in-memory processing with 'node_setup' to read date
 # in to memory. Remote coroutines ('compute' in this case) then process data in
 # memory. This example works with POSIX (Linux, OS X etc.), but not Windows. See
-# 'discoro_client9_server.py' which uses 'proc_available' to read data in to
-# memory by each remote server process.
+# 'discoro_client9_server.py' which initializes each server to read data in to
+# memory for processing in computations.
 
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *
@@ -23,7 +23,6 @@ def node_available(avail_info, data_file, coro=None):
     # 'node_available'.
     sent = yield asyncoro.AsynCoro().send_file(avail_info.location, data_file,
                                                overwrite=True, timeout=5)
-    asyncoro.logger.debug('send_file result: %s', sent)
     if (sent < 0):
         print('Could not send data file "%s" to %s' % (data_file, avail_info.location))
         raise StopIteration(-1)
@@ -66,7 +65,6 @@ def status_proc(coro=None):
     i = 0
     while 1:
         msg = yield coro.receive()
-        asyncoro.logger.debug('  MSG: %s', str(msg))
         if not isinstance(msg, DiscoroStatus):
             continue
         if msg.status == Scheduler.NodeDiscovered:

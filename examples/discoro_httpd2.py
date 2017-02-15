@@ -1,9 +1,10 @@
-# Run 'discoronode.py' program to start servers to execute
-# computations sent by this client, along with this program.
+# Run 'discoronode.py' program to start servers to execute computations sent by
+# this client, along with this program.
 
-# Example where this client sends computation to remote discoro
-# server to run as remote coroutines. Remote coroutines and client
-# can use message passing to exchange data.
+# This example is similar to 'discoro_httpd1.py'. It sets up 'status_coro' of
+# computation to get status messages from discoro scheduler (which are actally
+# relayed by httpd's status_coro) to show when remote coroutine is created and
+# finished.
 
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *

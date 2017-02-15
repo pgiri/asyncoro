@@ -1,9 +1,9 @@
-# Run 'discoronode.py' program to start servers to execute
-# computations sent by this client, along with this program.
+# Run 'discoronode.py' program to start servers to execute computations sent by
+# this client, along with this program.
 
-# Example where this client sends computation to remote discoro
-# server to run as remote coroutines. Remote coroutines and client
-# can use message passing to exchange data.
+# This example shows how to use 'httpd' module to start HTTP server so cluster /
+# node / server / remote coroutine status can be monitored in a web browser at
+# http://127.0.0.1:8181
 
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *

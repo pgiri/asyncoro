@@ -1,10 +1,11 @@
-# Run 'discoronode.py' program to start processes to execute
-# computations sent by this client, along with this program.
+# Run 'discoronode.py' program to start processes to execute computations sent
+# by this client, along with this program.
 
 # Example where this client sends computation to remote discoro process to run
-# as remote coroutines. Computations are scheduled with custom scheduler
-# (without using RemoteCoroScheduler). Remote coroutines and client can use
-# message passing to exchange data.
+# as remote coroutines. Remote coroutines and client use message passing to
+# exchange objects (instance of class 'C'). Instead of using 'map_results' as
+# done in 'discoro_client1.py', remote coroutine sends the result back to client
+# with message passing.
 
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *
@@ -20,13 +21,12 @@ class C(object):
         return '%d: %s' % (self.i, self.n)
 
 
-# this generator function is sent to remote discoro servers to run
-# coroutines there
+# this generator function is sent to remote discoro servers to run coroutines
+# there
 def compute(obj, client, coro=None):
     # obj is an instance of C
     import math
-    # this coroutine and client can use message passing; client sends
-    # data to this coro as a message
+    # this coroutine and client can use message passing
     print('process at %s received: %s' % (coro.location, obj.n))
     yield coro.sleep(obj.n)
     obj.n = math.sqrt(obj.n)
@@ -55,8 +55,8 @@ def client_proc(computation, njobs, coro=None):
     for i in range(njobs):
         cobj = C(i)
         cobj.n = random.uniform(5, 10)
-        # as noted in 'discoro_client1.py', 'schedule' method is used to run
-        # jobs sequentially; use 'submit' to run multiple jobs on one server
+        # as noted in 'discoro_client2.py', 'submit' method is used to run jobs
+        # sequentially; use 'submit_async' to run multiple jobs on one server
         # concurrently
         print('  request %d: %s' % (i, cobj.n))
         rcoro = yield computation.submit(compute, cobj, results_coro)
@@ -64,7 +64,6 @@ def client_proc(computation, njobs, coro=None):
             print('failed to create rcoro %s: %s' % (i, rcoro))
 
     # wait for all results and close computation
-    # yield results_coro.finish()
     yield computation.close()
 
 

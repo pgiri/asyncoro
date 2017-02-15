@@ -1,11 +1,17 @@
-# This example uses status messages and message passing to run 'setup' coroutine
-# at remote process to prepare it for processing jobs.
+# Run 'discoronode.py' program to start processes to execute computations sent
+# by this client, along with this program.
+
+# Distributed computing example where this client sends computation ('compute'
+# function)to remote discoro servers to run as remote coroutines and obtain
+# results. At any time at most one computation coroutine is scheduled at a
+# process, as the computation is supposed to be CPU heavy (although in this
+# example they are not).
 
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *
 
-# this generator function is sent to remote discoro servers to run
-# coroutines there
+# this generator function is sent to remote discoro servers to run coroutines
+# there
 def compute(i, n, coro=None):
     import time
     yield coro.sleep(n)

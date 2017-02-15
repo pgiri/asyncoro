@@ -1,11 +1,11 @@
 # Run 'discoronode.py' program to start processes to execute computations sent
 # by this client, along with this program.
 
-# This example runs a program (discomp7_proc.py) on a remote server. The program
-# reads from standard input and writes to standard output. Subprocess and
-# asynchronous pipes are used to write / read data from the program, and message
-# passing is used to get data from client (which is sent to the program) and to
-# send output from the program back to the client.
+# This example runs a program (discoro_client5_proc.py) on a remote server. The
+# program reads from standard input and writes to standard output. Subprocess
+# and asynchronous pipes are used to write / read data from the program, and
+# message passing is used to send data from client to the program and to send
+# output from the program back to the client.
 
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *

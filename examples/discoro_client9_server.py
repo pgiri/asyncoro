@@ -1,15 +1,19 @@
 # Run 'discoronode.py' program to start processes to execute computations sent
 # by this client, along with this program.
 
-# This example illustrates in-memory processing with 'proc_available' to read
+# This example illustrates in-memory processing with 'server_available' to read
 # date in to memory by each (remote) server process. Remote coroutines
 # ('compute' in this case) then process data in memory. This example works with
 # POSIX (Linux, OS X etc.) and Windows. Note that, as data is read in to each
-# server process, a node may have multiple copies of data in memory of each
+# server process, a node may have multiple copies of same data in memory of each
 # process on that node, so this approach is not practical / efficient when data
 # is large. See 'discoro_client9_node.py' which uses 'node_available' and
 # 'node_setup' to read data in to memory at node (and thus only one copy is in
 # memory).
+
+# In this example different files are sent to remote servers to compute checksum
+# of their data (thus there is no duplicate data in servers at a node in this
+# case).
 
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *
@@ -23,7 +27,7 @@ def server_available(location, data_file, coro=None):
     # illustrate how files can be sent separately (to distribute data fragments
     # among servers), files are transferred to servers in this
     # example
-    print('  Sending %s to %s' % (data_file, location))
+    print('sending %s to %s' % (data_file, location))
     if (yield asyncoro.AsynCoro().send_file(location, data_file, timeout=5, overwrite=True)) < 0:
         print('Could not send data file "%s" to %s' % (data_file, location))
         raise StopIteration(-1)
@@ -41,19 +45,20 @@ def setup_server(data_file, coro=None):  # executed on remote server
     # read/write to all computations on a server.
     global hashlib, data, file_name
     import os, hashlib
+    file_name = data_file
+    print('%s processing %s' % (coro.location, data_file))
     # note that files transferred to server are in the directory where
     # computations are executed (cf 'node_setup' in discoro_client9_node.py)
     with open(data_file, 'rb') as fd:
         data = fd.read()
     os.remove(data_file)  # data_file is not needed anymore
-    file_name = data_file
     # generator functions must have at least one 'yield'
     yield 0 # indicate successful initialization with exit value 0
 
 # 'compute' is executed at remote server process repeatedly to compute
 # checksum of data in memory, initialized by 'setup_server'
 def compute(alg, n, coro=None):
-    global data, hashlib
+    global data, hashlib, file_name
     yield coro.sleep(n)
     checksum = getattr(hashlib, alg)()
     checksum.update(data)
@@ -81,9 +86,8 @@ def client_proc(computation, coro=None):
     # processes available; the scheduler will use as many processes as
     # necessary/available, running one job at a server process
     algorithms = ['md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512']
-    args = [(algorithms[i % len(algorithms)], random.uniform(1, 3)) for i in range(15)]
+    args = [(algorithms[i % len(algorithms)], random.uniform(5, 10)) for i in range(15)]
     results = yield computation.map_results(compute, args)
-    asyncoro.logger.debug('results: %s' % len(results))
     for i, result in enumerate(results):
         if isinstance(result, tuple) and len(result) == 3:
             print('    %ssum for %s: %s' % (result[1], result[0], result[2]))
@@ -95,7 +99,7 @@ def client_proc(computation, coro=None):
 
 if __name__ == '__main__':
     import random, functools, sys, os, glob
-    # asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
+    asyncoro.logger.setLevel(asyncoro.Logger.DEBUG)
     if os.path.dirname(sys.argv[0]):
         os.chdir(os.path.dirname(sys.argv[0]))
     # if scheduler is not already running (on a node as a program),

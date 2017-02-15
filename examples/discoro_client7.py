@@ -1,9 +1,11 @@
-# Run 'discoronode.py' program to start processes to execute
-# computations sent by this client, along with this program.
+# Run 'discoronode.py' program to start processes to execute computations sent
+# by this client, along with this program.
 
 # This program is similar to 'discoro_client1.py', but instead of using
-# RemoteCoroScheduler, it uses status message notifications from discoro
-# scheduler to submit jobs at remote discoronode processes.
+# 'submit_result' / 'map_results' (which is simpler), it uses status message
+# notifications from discoro scheduler to submit jobs at specific remote discoro
+# servers. This template can be used to implement cusomized scheduler to run
+# remote coroutines.
 
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *
@@ -14,9 +16,9 @@ def rcoro_proc(n, coro=None):
     raise StopIteration(n)
 
 
-# Instead of using discoro.Computation's API to get results (which is easier),
-# in this example status messages from discoro scheduler are used to start
-# remote coroutines and get their results
+# Instead of using computation's 'submit_result' method to get results (which is
+# easier), in this example status messages from discoro scheduler are used to
+# start remote coroutines and get their results
 def status_proc(computation, njobs, coro=None):
     # set computation's status_coro to receive status messages from discoro
     # scheduler (this should be done before httpd is created, in case it is

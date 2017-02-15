@@ -1,5 +1,8 @@
-# This example uses status messages and message passing to run remote coroutines
-# to process streaming data for live/real-time analysis. This example uses
+# Run 'discoronode.py' program to start processes to execute computations sent
+# by this client, along with this program.
+
+# This example is similar to 'discoro_client6.py', except it uses broadcasting
+# over Channel to send messages to remote coroutines to process, and uses
 # 'deque' module to implement circular buffer.
 
 import asyncoro.disasyncoro as asyncoro

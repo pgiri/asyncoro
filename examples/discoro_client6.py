@@ -1,7 +1,11 @@
-# This example uses status messages and message passing to run remote coroutines
-# to process streaming data for live/real-time analysis. This example requires
-# numpy module available on servers. See discoro_client6_channel.py that uses
-# channels for communication and 'deque' for circular buffers (instead of numpy).
+# Run 'discoronode.py' program to start processes to execute computations sent
+# by this client, along with this program.
+
+# This example uses status messages and message passing to run two remote
+# coroutines at two different servers to process streaming data for
+# live/real-time analysis. This example requires numpy module available on
+# servers. See discoro_client6_channel.py that uses channels for communication
+# and 'deque' for circular buffers (instead of numpy).
 
 import asyncoro.disasyncoro as asyncoro
 from asyncoro.discoro import *
@@ -67,6 +71,7 @@ def client_proc(computation, coro=None):
 
     trend_coro = asyncoro.Coro(trend_proc)
 
+    # submit average and save coroutines at two different servers
     rcoro_avg = yield computation.submit(rcoro_avg_proc, 0.4, trend_coro, 10)
     assert isinstance(rcoro_avg, asyncoro.Coro)
     rcoro_save = yield computation.submit(rcoro_save_proc)

@@ -1,7 +1,6 @@
-# Program to demonstrate discomp7.py example. This program reads stdin
-# one line at at time; each line is expected to be a number (as
-# string). It sleeps for that time, then writes current time on
-# stdout.
+# Program to demonstrate discoro_client5.py example. This program reads stdin
+# one line at at time; each line is expected to be a number (as string). It
+# sleeps for that time, then writes current time on stdout.
 
 import sys
 import time

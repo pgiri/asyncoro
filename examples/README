@@ -20,26 +20,20 @@ framework for distributed and parallel computing.
   programming, coroutines and message passing to implement a chat (message)
   server that is used by clients to broadcast messages.
 
-* discoro_client1.py illustrates how to use discoro and RemoteCoroScheduler for
-  distributed computing.
+* discoro_client1.py illustrates how to use discoro for distributed computing.
 
 * discoro_client2.py is a variation of discoro_client1.py. In this example,
-  computations are assumed to CPU intensive, similar to using 'dispy'
-  (http://dispy.sourceforge.net) project. It also shows how to use status
-  messages from discoro scheduler to relay those messages to both
-  RemoteCoroScheduler and httpd server. Cluster status can be monitored with a
-  web browser.
+  http server is used to monitor cluster, nodes, remote coroutines.
 
-* discoro_client3.py uses RemoteCoroScheduler to distribute coroutine function
-  and a class. The local coroutine (running at client) and remote coroutines
-  exchange objects of that class using message passing.
+* discoro_client3.py shows how to exchange messages with objects (instances of
+  class) between client and remote coroutines.
 
 * discoro_client4.py sends files at the client to remote process to execute
   computations that process those files and the remote process in turn sends the
   results in files back to the client.
 
-* discoro_client5.py runs an external program (discoro_client5_proc.py) at
-  remote servers. The program reads from standard input and writes to standard
+* discoro_client5.py runs an external program (discoro_client5_proc.py at remote
+  servers. The program reads from standard input and writes to standard
   output. Asynchronous pipes and message passing are used to send input from
   client to this program executing on remote servers, and get the output back to
   client.
@@ -51,32 +45,39 @@ framework for distributed and parallel computing.
 * discoro_client6_channel.py is same as discoro_client6.py, except it uses
   channel to broadcast data to remote coroutines.
 
-* discoro_client7.py is an alternate implementation of discoro_client1.py;
-  instead of using RemoteCoroScheduler (which is easier), messages from discoro
-  scheduler are used to schedule remote coroutines.
+* discoro_client7.py is an alternate implementation of discoro_client1.py; it
+  uses messages from discoro scheduler to schedule remote coroutines and get
+  results.
 
-* discoro_client8.py executes computations in thread functions on remote servers
-  (instead of executing in coroutine itself). When a thread is executing
-  computation, asyncoro framework can accept/send messages so it is possible for
-  server to send and receive messages; however, when a coroutine is executing
-  computation, asyncoro scheduler cannot respond to network data (or anything
-  else).
+* discoro_client8.py demonstrates that long-runnning computations without
+  *yield* often can be executed. In this cast, *time.sleep* is used to simulate
+  computation. Note that *time.sleep* blocks entire asyncoro framework, so no
+  other coroutines can execute until next *yield*. With version 4.1 (and above),
+  I/O processing, message passing, sending heartbeat messages to scheduler
+  etc. are handled by a separate (called "reactive") asyncoro scheduler that is
+  not affected by user's coroutines. So messages sent by client are received and
+  queued by reactive scheduler.
 
-* discoro_client9_posix.py uses RemoteCoroScheduler to setup nodes by reading
-  data in files in to global variables (memory) for processing that data in
-  comptations efficiently (i.e., in-memory processing). This example works only
-  with POSIX (Linux, OS X etc.), but not Windows.
+* discoro_client9_node.py uses status messages from discoro scheduler to
+  distribute data files to nodes and run node specific setup coroutine to load
+  the data in memory. This data is then processed in computations to illustrate
+  in-memory processing. This example doesn't work with Windows (due to lack of
+  'fork' in Windows), so nodes running Windows are filtered out using
+  :ref:`DiscoroNodeAllocate`.
 
-* discoro_client9_all.py uses RemoteCoroScheduler to setup remote server
-  processes by reading data in files in to global variables (memory) for
-  processing that data in comptations efficiently (i.e., in-memory processing).
+* discoro_client9_server.py is similar to discoro_client9_node.py above, except
+  that instead of initializing (memory in) nodes, each server in each node is
+  initialized by distributing one file per server (note that one node may run as
+  many servers as there are processors on that node), which is then read in
+  memory on that server for in-memory processing at server level.
 
-* discoro_httpd1.py uses RemoteCoroScheduler and httpd module so the cluster
-  status can be monitored with a web browser.
+* discoro_httpd1.py shows how to use httpd module to provide HTTP interface to
+  monitor discoro cluster.
 
-* discoro_httpd2.py chains messages from discoro scheduler to httpd module and
-  to process them in the client itself (to show when a job is done in this
-  case).
+* discoro_httpd2.py is a variant of discoro_httpd1.py to use 'status_coro' to
+  process messages from discoro scheduler (in this case just to print when a
+  remote coroutine is finished) while also using httpd module (which chains
+  messages from discoro scheduler to client's 'status_proc').
 
 * discoro_ssh_ec2.py shows how to use ssh port forwarding to work with Amazon
   EC2 cloud computing, where the client runs locally and discoronode runs on

@@ -1,3 +1,6 @@
+# Run 'discoronode.py' program to start processes to execute computations sent
+# by this client, along with this program.
+
 # This example uses status messages and message passing to run 'setup' coroutine
 # at remote process to prepare it for processing jobs.
 
