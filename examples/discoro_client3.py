@@ -51,15 +51,15 @@ def client_proc(computation, njobs, coro=None):
     # remote coroutines send replies as messages to this coro
     results_coro = asyncoro.Coro(recv_results)
 
-    # submit njobs; each job will be executed by one discoro server
+    # run njobs; each job will be executed by one discoro server
     for i in range(njobs):
         cobj = C(i)
         cobj.n = random.uniform(5, 10)
-        # as noted in 'discoro_client2.py', 'submit' method is used to run jobs
-        # sequentially; use 'submit_async' to run multiple jobs on one server
+        # as noted in 'discoro_client2.py', 'run' method is used to run jobs
+        # sequentially; use 'run_async' to run multiple jobs on one server
         # concurrently
         print('  request %d: %s' % (i, cobj.n))
-        rcoro = yield computation.submit(compute, cobj, results_coro)
+        rcoro = yield computation.run(compute, cobj, results_coro)
         if not isinstance(rcoro, asyncoro.Coro):
             print('failed to create rcoro %s: %s' % (i, rcoro))
 

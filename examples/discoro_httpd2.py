@@ -64,10 +64,10 @@ def client_proc(computation, coro=None):
         i += 1
         c = C(i)
         c.n = random.uniform(20, 50)
-        # unlike in discoro_client*.py, here 'submit_async' is used to run as
+        # unlike in discoro_client*.py, here 'run_async' is used to run as
         # many coroutines as given on servers (i.e., possibly more than one
         # coroutine on a server at any time).
-        rcoro = yield computation.submit_async(compute, c, coro)
+        rcoro = yield computation.run_async(compute, c, coro)
         if isinstance(rcoro, asyncoro.Coro):
             print('  %s: rcoro %s created' % (i, rcoro))
         else:

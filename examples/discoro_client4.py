@@ -4,7 +4,7 @@
 # This example shows how to use message passing, transferring files.
 # The input files are assumed to be in current working directory as
 # 'input0.dat', 'input1.dat', ..., 'input9.dat' (10 input files).
-# 'submit_jobs_proc' creates jobs as and when a discoro process is found,
+# 'run_jobs_proc' creates jobs as and when a discoro process is found,
 # or a process finishes a job. Each job is processed by a remote coroutine
 # (rcoro) and a corresponding local coroutine (with 'client_proc')
 # interacts with that rcoro to send the input data to where rcoro is,
@@ -87,7 +87,7 @@ def client_proc(job_id, data_file, rcoro, coro=None):
     print('    job %s output is in %s' % (obj.i, target))
 
 
-def submit_jobs_proc(computation, data_files, coro=None):
+def run_jobs_proc(computation, data_files, coro=None):
     # schedule computation with the scheduler; scheduler accepts one computation
     # at a time, so if scheduler is shared, the computation is queued until it
     # is done with already scheduled computations
@@ -97,7 +97,7 @@ def submit_jobs_proc(computation, data_files, coro=None):
     for i in range(len(data_files)):
         data_file = data_files[i]
         # create remote coroutine
-        rcoro = yield computation.submit(rcoro_proc)
+        rcoro = yield computation.run(rcoro_proc)
         if isinstance(rcoro, asyncoro.Coro):
             # create local coroutine to send input file and data to rcoro
             asyncoro.Coro(client_proc, i, data_file, rcoro)
@@ -127,4 +127,4 @@ if __name__ == '__main__':
     # which is a bit inefficient
     computation = Computation([C])
 
-    asyncoro.Coro(submit_jobs_proc, computation, data_files)
+    asyncoro.Coro(run_jobs_proc, computation, data_files)

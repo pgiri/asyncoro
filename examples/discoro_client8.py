@@ -31,7 +31,7 @@ def compute_coro(coro=None):
         time.sleep(n)
         result += n
 
-# client (local) coroutine submits computations
+# client (local) coroutine runs computations
 def client_proc(computation, njobs, coro=None):
     # schedule computation with the scheduler; scheduler accepts one computation
     # at a time, so if scheduler is shared, the computation is queued until it
@@ -58,7 +58,7 @@ def client_proc(computation, njobs, coro=None):
         print('    %s computed result: %.4f' % (rcoro.location, result))
 
     for i in range(njobs):
-        rcoro = yield computation.submit(compute_coro)
+        rcoro = yield computation.run(compute_coro)
         if isinstance(rcoro, asyncoro.Coro):
             print('  job %d processed by %s' % (i, rcoro.location))
             asyncoro.Coro(send_requests, rcoro)

@@ -28,7 +28,7 @@ def client_proc(computation, njobs, coro=None):
     # arguments must correspond to arguments for computaiton; multiple arguments
     # (as in this case) can be given as tuples
     args = [(i, random.uniform(2, 5)) for i in range(njobs)]
-    results = yield computation.map_results(compute, args)
+    results = yield computation.run_results(compute, args)
     # Coroutines may not be executed in the order of given list of args, but
     # results would be in the same order of given list of args
     for result in results:

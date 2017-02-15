@@ -59,7 +59,7 @@ def rcoro_proc(client, program, coro=None):
     yield reader.finish()
     raise StopIteration(pipe.poll())
 
-# client (local) coroutine submits computations
+# client (local) coroutine runs computations
 def client_proc(computation, program_path, n, coro=None):
     # schedule computation with the scheduler; scheduler accepts one computation
     # at a time, so if scheduler is shared, the computation is queued until it
@@ -89,7 +89,7 @@ def client_proc(computation, program_path, n, coro=None):
         # create reader and send to rcoro so it can send messages to reader
         client_reader = asyncoro.Coro(get_output, i)
         # schedule rcoro on (available) remote server
-        rcoro = yield computation.submit(rcoro_proc, client_reader, program_path)
+        rcoro = yield computation.run(rcoro_proc, client_reader, program_path)
         if isinstance(rcoro, asyncoro.Coro):
             print('  job %s processed by %s' % (i, rcoro.location))
             # sender sends input data to rcoro

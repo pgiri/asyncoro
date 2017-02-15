@@ -2,8 +2,8 @@
 # by this client, along with this program.
 
 # This program is similar to 'discoro_client1.py', but instead of using
-# 'submit_result' / 'map_results' (which is simpler), it uses status message
-# notifications from discoro scheduler to submit jobs at specific remote discoro
+# 'run_result' (which is simpler), it uses status message
+# notifications from discoro scheduler to run jobs at specific remote discoro
 # servers. This template can be used to implement cusomized scheduler to run
 # remote coroutines.
 
@@ -16,7 +16,7 @@ def rcoro_proc(n, coro=None):
     raise StopIteration(n)
 
 
-# Instead of using computation's 'submit_result' method to get results (which is
+# Instead of using computation's 'run_result' method to get results (which is
 # easier), in this example status messages from discoro scheduler are used to
 # start remote coroutines and get their results
 def status_proc(computation, njobs, coro=None):
@@ -35,14 +35,14 @@ def status_proc(computation, njobs, coro=None):
 
     # in this example at most one coroutine is submitted at a server; depending
     # on computation / needs, many coroutines can be simlutaneously submitted /
-    # running at a server (with 'computation.submit_async').
+    # running at a server (with 'computation.run_async').
     while True:
         msg = yield coro.receive()
         if isinstance(msg, DiscoroStatus):
             # print('Status: %s / %s' % (msg.info, msg.status))
-            if msg.status == Scheduler.ServerInitialized and njobs > 0: # submit a job
+            if msg.status == Scheduler.ServerInitialized and njobs > 0: # run a job
                 n = random.uniform(5, 10)
-                rcoro = yield computation.submit_at(msg.info, rcoro_proc, n)
+                rcoro = yield computation.run_at(msg.info, rcoro_proc, n)
                 if isinstance(rcoro, asyncoro.Coro):
                     print('  rcoro_proc started at %s with %s' % (rcoro.location, n))
                     njobs -= 1
@@ -58,9 +58,9 @@ def status_proc(computation, njobs, coro=None):
             npending -= 1
             if npending == 0:
                 break
-            if njobs > 0: # submit another job
+            if njobs > 0: # run another job
                 n = random.uniform(5, 10)
-                rcoro = yield computation.submit_at(rcoro.location, rcoro_proc, n)
+                rcoro = yield computation.run_at(rcoro.location, rcoro_proc, n)
                 if isinstance(rcoro, asyncoro.Coro):
                     print('  rcoro_proc started at %s with %s' % (rcoro.location, n))
                     njobs -= 1

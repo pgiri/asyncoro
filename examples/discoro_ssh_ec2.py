@@ -13,7 +13,7 @@
 # discoro process to run as remote coroutines. At any time at most one
 # computation coroutine is scheduled at a process (due to
 # RemoteCoroScheduler). This example shows how to use 'execute' method of
-# RemoteCoroScheduler to submit comutations and get their results easily.
+# RemoteCoroScheduler to run comutations and get their results easily.
 
 # This example can be combined with in-memory processing (see
 # 'discoro_client9_node.py') and streaming (see 'discoro_client6.py') for
@@ -49,7 +49,7 @@ def client_proc(computation, njobs, coro=None):
     # scheduler will use as many processes as necessary/available, running one
     # job at a server process
     args = [random.uniform(3, 10) for _ in range(njobs)]
-    results = yield computation.map_results(compute, args)
+    results = yield computation.run_results(compute, args)
     for result in results:
         print('result: %s' % result)
 

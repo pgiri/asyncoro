@@ -43,10 +43,10 @@ def client_proc(computation, coro=None):
             print('  "%s" is ignored')
             continue
         else:
-            # unlike in discoro_client*.py, here 'submit_async' is used to run
+            # unlike in discoro_client*.py, here 'run_async' is used to run
             # as many coroutines as given on servers (i.e., possibly more than
             # one coroutine on a server at any time).
-            yield computation.submit_async(compute, c, coro)
+            yield computation.run_async(compute, c, coro)
 
     yield computation.close()
 

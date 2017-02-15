@@ -23,13 +23,13 @@ def client_proc(computation, njobs, coro=None):
     if (yield computation.schedule()):
         raise Exception('Could not schedule computation')
 
-    # submit jobs
+    # run jobs
     for i in range(njobs):
-        # computation is supposed to be CPU bound so 'submit' is used so at most
+        # computation is supposed to be CPU bound so 'run' is used so at most
         # one computations runs at a server at any time; for mostly idle
-        # computations, use 'submit_async' to run more than one computation at a
+        # computations, use 'run_async' to run more than one computation at a
         # server at the same time.
-        rcoro = yield computation.submit(compute, random.uniform(5, 10))
+        rcoro = yield computation.run(compute, random.uniform(5, 10))
         if isinstance(rcoro, asyncoro.Coro):
             print('  job %s processed by %s' % (i, rcoro.location))
         else:

@@ -87,7 +87,7 @@ def client_proc(computation, coro=None):
     # necessary/available, running one job at a server process
     algorithms = ['md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512']
     args = [(algorithms[i % len(algorithms)], random.uniform(5, 10)) for i in range(15)]
-    results = yield computation.map_results(compute, args)
+    results = yield computation.run_results(compute, args)
     for i, result in enumerate(results):
         if isinstance(result, tuple) and len(result) == 3:
             print('    %ssum for %s: %s' % (result[1], result[0], result[2]))

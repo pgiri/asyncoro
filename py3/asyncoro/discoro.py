@@ -351,7 +351,7 @@ class Computation(object):
         def _close(self, done, coro=None):
             msg = {'req': 'close_computation', 'auth': self._auth, 'client': coro}
             yield self.scheduler.deliver(msg, timeout=self.timeout)
-            msg = yield coro.receive(timeout=self.timeout)
+            msg = yield coro.receive()
             if msg != 'closed':
                 logger.warning('%s: closing computation failed?', self._auth)
             self._auth = None
@@ -365,10 +365,10 @@ class Computation(object):
             SysCoro(_close, self, done)
             yield done.wait()
 
-    def submit_at(self, where, gen, *args, **kwargs):
+    def run_at(self, where, gen, *args, **kwargs):
         """Must be used with 'yield' as
 
-        'rcoro = yield computation.submit_at(where, gen, ...)'
+        'rcoro = yield computation.run_at(where, gen, ...)'
 
         Run given generator function 'gen' with arguments 'args' and 'kwargs' at
         remote server 'where'.  If the request is successful, 'rcoro' will be a
@@ -387,42 +387,42 @@ class Computation(object):
         """
         yield self._run_request('run_async', where, 1, gen, *args, **kwargs)
 
-    def submit(self, gen, *args, **kwargs):
-        """Submit CPU bound coroutine at any remote server; see 'submit_at'
+    def run(self, gen, *args, **kwargs):
+        """Run CPU bound coroutine at any remote server; see 'run_at'
         above.
         """
         yield self._run_request('run_async', None, 1, gen, *args, **kwargs)
 
-    def submit_result_at(self, where, gen, *args, **kwargs):
+    def run_result_at(self, where, gen, *args, **kwargs):
         """Must be used with 'yield' as
 
-        'rcoro = yield computation.submit_result_at(where, gen, ...)'
+        'rcoro = yield computation.run_result_at(where, gen, ...)'
 
-        Whereas 'submit_at' and 'submit' return remote coroutine instance,
-        'submit_result_at' and 'submit_result' wait until remote coroutine is
+        Whereas 'run_at' and 'run' return remote coroutine instance,
+        'run_result_at' and 'run_result' wait until remote coroutine is
         finished and return the result of that remote coroutine (i.e., either
         the value of 'StopIteration' or the last value 'yield'ed).
 
-        'where', 'gen', 'args', 'kwargs' are as explained in 'submit_at'.
+        'where', 'gen', 'args', 'kwargs' are as explained in 'run_at'.
         """
         yield self._run_request('run_result', where, 1, gen, *args, **kwargs)
 
-    def submit_result(self, gen, *args, **kwargs):
-        """Submit CPU bound coroutine at any remote server and return result of
-        that coroutine; see 'submit_result_at' above.
+    def run_result(self, gen, *args, **kwargs):
+        """Run CPU bound coroutine at any remote server and return result of
+        that coroutine; see 'run_result_at' above.
         """
         yield self._run_request('run_result', None, 1, gen, *args, **kwargs)
 
-    def submit_async_at(self, where, gen, *args, **kwargs):
+    def run_async_at(self, where, gen, *args, **kwargs):
         """Must be used with 'yield' as
 
-        'rcoro = yield computation.submit_async_at(where, gen, ...)'
+        'rcoro = yield computation.run_async_at(where, gen, ...)'
 
         Run given generator function 'gen' with arguments 'args' and 'kwargs' at
         remote server 'where'.  If the request is successful, 'rcoro' will be a
         (remote) coroutine; check result with 'isinstance(rcoro,
         asyncoro.Coro)'. The generator is supposed to be (mostly) I/O bound and
-        not consume CPU time. Unlike other 'submit' variants, coroutines created
+        not consume CPU time. Unlike other 'run' variants, coroutines created
         with 'async' are not "tracked" by scheduler (see online documentation for
         more details).
 
@@ -436,13 +436,13 @@ class Computation(object):
         """
         yield self._run_request('run_async', where, 0, gen, *args, **kwargs)
 
-    def submit_async(self, gen, *args, **kwargs):
-        """Submit I/O bound coroutine at any server; see 'submit_async_at'
+    def run_async(self, gen, *args, **kwargs):
+        """Run I/O bound coroutine at any server; see 'run_async_at'
         above.
         """
         yield self._run_request('run_async', None, 0, gen, *args, **kwargs)
 
-    def map_results(self, gen, iter):
+    def run_results(self, gen, iter):
         """Must be used with 'yield', as for example,
         'results = yield scheduler.map_results(generator, list_of_tuples)'.
 
@@ -458,7 +458,7 @@ class Computation(object):
                     params = tuple(params)
                 else:
                     params = (params,)
-            append_coro(Coro(self.submit_result, gen, *params))
+            append_coro(Coro(self.run_result, gen, *params))
         results = [None] * len(coros)
         for i, coro in enumerate(coros):
             results[i] = yield coro.finish()
@@ -1110,6 +1110,113 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
         self.__scheduler_coro = None
 
     def __client_proc(self, coro=None):
+        def _run(msg, req, client, auth, coro=None):
+            if not isinstance(client, Coro):
+                logger.warning('Ignoring invalid client request "%s"', req)
+                raise StopIteration
+            func = msg.get('func', None)
+            if not func or self.__cur_client_auth != auth:
+                logger.warning('Ignoring invalid request to run computation')
+                client.send(None)
+                raise StopIteration
+            cpu = msg.get('cpu', 1)
+            where = msg.get('where', None)
+            if not where:
+                if cpu:
+                    while not self._avail_nodes:
+                        # self._nodes_avail.clear()
+                        yield self._nodes_avail.wait()
+                    node = None
+                    load = None
+                    for host in self._avail_nodes:
+                        if host.avail.is_set() and (load is None or host.load < load):
+                            node = host
+                            load = host.load
+                else:
+                    while not self._nodes:
+                        self._nodes_avail.clear()
+                        yield self._nodes_avail.wait()
+                    node = None
+                    load = None
+                    for host in self._nodes.values():
+                        if host.avail.is_set() and (load is None or host.load < load):
+                            node = host
+                            load = host.load
+                server = None
+                load = None
+                for proc in node.servers.values():
+                    if cpu:
+                        if proc.avail.is_set() and (load is None or len(proc.rcoros) < load):
+                            server = proc
+                            load = len(proc.rcoros)
+                    elif (load is None or len(proc.rcoros) < load):
+                        server = proc
+                        load = len(proc.rcoros)
+                if not server:
+                    client.send(None)
+                    raise StopIteration
+                if cpu:
+                    server.avail.clear()
+                    node.ncoros += 1
+                    node.load = float(node.ncoros) / len(node.servers)
+                    if node.ncoros == len(node.servers):
+                        node.avail.clear()
+                        self._avail_nodes.discard(node)
+                        if not self._avail_nodes:
+                            self._nodes_avail.clear()
+                yield server.run(req, func, cpu, self._cur_computation, node, client)
+            elif isinstance(where, str):
+                node = self._nodes.get(where, None)
+                if not node:
+                    client.send(None)
+                    raise StopIteration
+                server = None
+                load = None
+                for proc in node.servers.values():
+                    if cpu:
+                        if proc.avail.is_set() and (load is None or len(proc.rcoros) < load):
+                            server = proc
+                            load = len(proc.rcoros)
+                    elif (load is None or len(proc.rcoros) < load):
+                        server = proc
+                        load = len(proc.rcoros)
+                if not server:
+                    client.send(None)
+                    raise StopIteration
+                if cpu:
+                    server.avail.clear()
+                    node.ncoros += 1
+                    node.load = float(node.ncoros) / len(node.servers)
+                    if node.ncoros == len(node.servers):
+                        node.avail.clear()
+                        self._avail_nodes.discard(node)
+                        if not self._avail_nodes:
+                            self._nodes_avail.clear()
+                yield server.run(req, func, cpu, self._cur_computation, node, client)
+            elif isinstance(where, asyncoro.Location):
+                node = self._nodes.get(where.addr)
+                if not node:
+                    client.send(None)
+                    raise StopIteration
+                server = node.servers.get(where)
+                if not server:
+                    client.send(None)
+                    raise StopIteration
+                if cpu:
+                    if server.rcoros:
+                        yield server.avail.wait()
+                    server.avail.clear()
+                    node.ncoros += 1
+                    node.load = float(node.ncoros) / len(node.servers)
+                    if node.ncoros == len(node.servers):
+                        node.avail.clear()
+                        self._avail_nodes.discard(node)
+                        if not self._avail_nodes:
+                            self._nodes_avail.clear()
+                yield server.run(req, func, cpu, self._cur_computation, node, client)
+            else:
+                client.send(None)
+
         coro.set_daemon()
         computations = {}
         while not self.__terminate:
@@ -1119,113 +1226,6 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
             req = msg.get('req', None)
             client = msg.get('client', None)
             auth = msg.get('auth', None)
-
-            def _run(msg, req, client, auth, coro=None):
-                if not isinstance(client, Coro):
-                    logger.warning('Ignoring invalid client request "%s"', req)
-                    raise StopIteration
-                func = msg.get('func', None)
-                if not func or self.__cur_client_auth != auth:
-                    logger.warning('Ignoring invalid request to run computation')
-                    client.send(None)
-                    raise StopIteration
-                cpu = msg.get('cpu', 1)
-                where = msg.get('where', None)
-                if not where:
-                    if cpu:
-                        while not self._avail_nodes:
-                            # self._nodes_avail.clear()
-                            yield self._nodes_avail.wait()
-                        node = None
-                        load = None
-                        for host in self._avail_nodes:
-                            if host.avail.is_set() and (load is None or host.load < load):
-                                node = host
-                                load = host.load
-                    else:
-                        while not self._nodes:
-                            self._nodes_avail.clear()
-                            yield self._nodes_avail.wait()
-                        node = None
-                        load = None
-                        for host in self._nodes.values():
-                            if host.avail.is_set() and (load is None or host.load < load):
-                                node = host
-                                load = host.load
-                    server = None
-                    load = None
-                    for proc in node.servers.values():
-                        if cpu:
-                            if proc.avail.is_set() and (load is None or len(proc.rcoros) < load):
-                                server = proc
-                                load = len(proc.rcoros)
-                        elif (load is None or len(proc.rcoros) < load):
-                            server = proc
-                            load = len(proc.rcoros)
-                    if not server:
-                        client.send(None)
-                        raise StopIteration
-                    if cpu:
-                        server.avail.clear()
-                        node.ncoros += 1
-                        node.load = float(node.ncoros) / len(node.servers)
-                        if node.ncoros == len(node.servers):
-                            node.avail.clear()
-                            self._avail_nodes.discard(node)
-                            if not self._avail_nodes:
-                                self._nodes_avail.clear()
-                    yield server.run(req, func, cpu, self._cur_computation, node, client)
-                elif isinstance(where, str):
-                    node = self._nodes.get(where, None)
-                    if not node:
-                        client.send(None)
-                        raise StopIteration
-                    server = None
-                    load = None
-                    for proc in node.servers.values():
-                        if cpu:
-                            if proc.avail.is_set() and (load is None or len(proc.rcoros) < load):
-                                server = proc
-                                load = len(proc.rcoros)
-                        elif (load is None or len(proc.rcoros) < load):
-                            server = proc
-                            load = len(proc.rcoros)
-                    if not server:
-                        client.send(None)
-                        raise StopIteration
-                    if cpu:
-                        server.avail.clear()
-                        node.ncoros += 1
-                        node.load = float(node.ncoros) / len(node.servers)
-                        if node.ncoros == len(node.servers):
-                            node.avail.clear()
-                            self._avail_nodes.discard(node)
-                            if not self._avail_nodes:
-                                self._nodes_avail.clear()
-                    yield server.run(req, func, cpu, self._cur_computation, node, client)
-                elif isinstance(where, asyncoro.Location):
-                    node = self._nodes.get(where.addr)
-                    if not node:
-                        client.send(None)
-                        raise StopIteration
-                    server = node.servers.get(where)
-                    if not server:
-                        client.send(None)
-                        raise StopIteration
-                    if cpu:
-                        if server.rcoros:
-                            yield server.avail.wait()
-                        server.avail.clear()
-                        node.ncoros += 1
-                        node.load = float(node.ncoros) / len(node.servers)
-                        if node.ncoros == len(node.servers):
-                            node.avail.clear()
-                            self._avail_nodes.discard(node)
-                            if not self._avail_nodes:
-                                self._nodes_avail.clear()
-                    yield server.run(req, func, cpu, self._cur_computation, node, client)
-                else:
-                    client.send(None)
 
             if req.startswith('run_'):
                 SysCoro(_run, msg, req, client, auth)

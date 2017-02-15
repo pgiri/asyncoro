@@ -71,10 +71,10 @@ def client_proc(computation, coro=None):
 
     trend_coro = asyncoro.Coro(trend_proc)
 
-    # submit average and save coroutines at two different servers
-    rcoro_avg = yield computation.submit(rcoro_avg_proc, 0.4, trend_coro, 10)
+    # run average and save coroutines at two different servers
+    rcoro_avg = yield computation.run(rcoro_avg_proc, 0.4, trend_coro, 10)
     assert isinstance(rcoro_avg, asyncoro.Coro)
-    rcoro_save = yield computation.submit(rcoro_save_proc)
+    rcoro_save = yield computation.run(rcoro_save_proc)
     assert isinstance(rcoro_save, asyncoro.Coro)
 
     # if data is sent frequently (say, many times a second), enable

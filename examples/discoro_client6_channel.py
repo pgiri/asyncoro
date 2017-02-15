@@ -87,9 +87,9 @@ def client_proc(computation, coro=None):
 
     trend_coro = asyncoro.Coro(trend_proc)
 
-    rcoro_avg = yield computation.submit(rcoro_avg_proc, data_channel, 0.4, trend_coro, 10)
+    rcoro_avg = yield computation.run(rcoro_avg_proc, data_channel, 0.4, trend_coro, 10)
     assert isinstance(rcoro_avg, asyncoro.Coro)
-    rcoro_save = yield computation.submit(rcoro_save_proc, data_channel)
+    rcoro_save = yield computation.run(rcoro_save_proc, data_channel)
     assert isinstance(rcoro_save, asyncoro.Coro)
 
     # make sure both remote coroutines have subscribed to channel ('deliver'
