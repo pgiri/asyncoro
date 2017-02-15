@@ -829,29 +829,16 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                     if server:
                         if server.status != Scheduler.ServerDiscovered:
                             continue
-                        server.status = Scheduler.ServerInitialized
-                        node.servers[rcoro.location] = server
-                        server.avail.set()
-                        node.avail.set()
-                        self._avail_nodes.add(node)
-                        self._nodes_avail.set()
                     else:
                         server = Scheduler._Server(msg.get('name', None), rcoro.location)
                         server.coro = rcoro
-                        if self._cur_computation._disable_servers:
-                            server.status = Scheduler.ServerDiscovered
-                            node.disabled_servers[rcoro.location] = server
-                            if self._cur_computation.status_coro:
-                                info = DiscoroStatus(server.status, server.location)
-                                self._cur_computation.status_coro.send(info)
-                            continue
-                        else:
-                            server.status = Scheduler.ServerInitialized
-                            node.servers[rcoro.location] = server
-                            server.avail.set()
-                            node.avail.set()
-                            self._avail_nodes.add(node)
-                            self._nodes_avail.set()
+
+                    server.status = Scheduler.ServerInitialized
+                    node.servers[rcoro.location] = server
+                    server.avail.set()
+                    node.avail.set()
+                    self._avail_nodes.add(node)
+                    self._nodes_avail.set()
                     node.last_pulse = now
                     if node.status != Scheduler.NodeInitialized:
                         node.status = Scheduler.NodeInitialized
@@ -1152,7 +1139,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                         node = None
                         load = None
                         for host in self._avail_nodes:
-                            if (load is None or host.load < load) and host.avail.is_set():
+                            if host.avail.is_set() and (load is None or host.load < load):
                                 node = host
                                 load = host.load
                     else:
@@ -1162,30 +1149,32 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                         node = None
                         load = None
                         for host in self._nodes.values():
-                            if (load is None or host.load < load) and host.avail.is_set():
+                            if host.avail.is_set() and (load is None or host.load < load):
                                 node = host
                                 load = host.load
                     server = None
                     load = None
                     for proc in node.servers.values():
-                        # if proc.status != Scheduler.ServerInitialized:
-                        #     continue
-                        if load is None or len(proc.rcoros) < load:
+                        if cpu:
+                            if proc.avail.is_set() and (load is None or len(proc.rcoros) < load):
+                                server = proc
+                                load = len(proc.rcoros)
+                        elif (load is None or len(proc.rcoros) < load):
                             server = proc
                             load = len(proc.rcoros)
-                    if server:
-                        if cpu:
-                            server.avail.clear()
-                            node.ncoros += 1
-                            node.load = float(node.ncoros) / len(node.servers)
-                            if node.ncoros == len(node.servers):
-                                node.avail.clear()
-                                self._avail_nodes.discard(node)
-                                if not self._avail_nodes:
-                                    self._nodes_avail.clear()
-                        yield server.run(req, func, cpu, self._cur_computation, node, client)
-                    else:
+                    if not server:
                         client.send(None)
+                        raise StopIteration
+                    if cpu:
+                        server.avail.clear()
+                        node.ncoros += 1
+                        node.load = float(node.ncoros) / len(node.servers)
+                        if node.ncoros == len(node.servers):
+                            node.avail.clear()
+                            self._avail_nodes.discard(node)
+                            if not self._avail_nodes:
+                                self._nodes_avail.clear()
+                    yield server.run(req, func, cpu, self._cur_computation, node, client)
                 elif isinstance(where, str):
                     node = self._nodes.get(where, None)
                     if not node:
@@ -1194,24 +1183,26 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                     server = None
                     load = None
                     for proc in node.servers.values():
-                        # if proc.status != Scheduler.ServerInitialized:
-                        #     continue
-                        if load is None or len(proc.rcoros) < load:
+                        if cpu:
+                            if proc.avail.is_set() and (load is None or len(proc.rcoros) < load):
+                                server = proc
+                                load = len(proc.rcoros)
+                        elif (load is None or len(proc.rcoros) < load):
                             server = proc
                             load = len(proc.rcoros)
-                    if server:
-                        if cpu:
-                            server.avail.clear()
-                            node.ncoros += 1
-                            node.load = float(node.ncoros) / len(node.servers)
-                            if node.ncoros == len(node.servers):
-                                node.avail.clear()
-                                self._avail_nodes.discard(node)
-                                if not self._avail_nodes:
-                                    self._nodes_avail.clear()
-                        yield server.run(req, func, cpu, self._cur_computation, node, client)
-                    else:
+                    if not server:
                         client.send(None)
+                        raise StopIteration
+                    if cpu:
+                        server.avail.clear()
+                        node.ncoros += 1
+                        node.load = float(node.ncoros) / len(node.servers)
+                        if node.ncoros == len(node.servers):
+                            node.avail.clear()
+                            self._avail_nodes.discard(node)
+                            if not self._avail_nodes:
+                                self._nodes_avail.clear()
+                    yield server.run(req, func, cpu, self._cur_computation, node, client)
                 elif isinstance(where, asyncoro.Location):
                     node = self._nodes.get(where.addr)
                     if not node:
@@ -1251,11 +1242,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                 node = self._nodes.get(loc.addr, None)
                 if not node:
                     continue
-                server = node.servers.get(loc, None)
-                if not server:
-                    server = node.disabled_servers.pop(loc, None)
-                    if server:
-                        node.servers[loc] = server
+                server = node.disabled_servers.get(loc, None)
                 if not server or not server.coro or server.status != Scheduler.ServerDiscovered:
                     continue
                 args = msg.get('setup_args', ())
@@ -1351,7 +1338,6 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                     continue
                 if self.__cur_client_auth == auth:
                     SysCoro(self.__close_computation, client=client)
-                    client.send('closed')
                 else:
                     computation = computations.pop(auth, None)
                     if computation:
@@ -1484,6 +1470,8 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
         if self._cur_computation and self._cur_computation.status_coro:
             self._cur_computation.status_coro.send(DiscoroStatus(Scheduler.ComputationClosed,
                                                                  id(self._cur_computation)))
+        if client:
+            client.send('closed')
         self.__cur_client_auth = self._cur_computation = None
         self.__sched_event.set()
         if client:
