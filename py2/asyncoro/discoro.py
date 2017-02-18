@@ -299,7 +299,7 @@ class Computation(object):
                         raise StopIteration(-1)
             msg = {'req': 'await', 'auth': self._auth, 'client': coro}
             self.scheduler.send(msg)
-            resp = yield coro.receive(timeout=timeout)
+            resp = yield coro.receive()
             if (isinstance(resp, dict) and resp.get('auth') == self._auth and
                resp.get('resp') == 'scheduled'):
                 raise StopIteration(0)
