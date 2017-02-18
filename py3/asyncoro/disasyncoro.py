@@ -442,36 +442,39 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
             sock.close()
         raise StopIteration(0)
 
-    def discover_peers(self, port=None, coro=None):
+    def discover_peers(self, port=None):
         """This method can be invoked (periodically?) to broadcast message to
         discover peers, if there is a chance initial broadcast message may be
         lost (as these messages are sent over UDP).
         """
-        ping_sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_DGRAM))
-        ping_sock.settimeout(2)
         if not port:
             port = self._udp_sock.getsockname()[1]
-        if self.sock_family == socket.AF_INET:
-            ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            addr = (self._broadcast, port)
-        else:  # self.sock_family == socket.AF_INET6
-            ping_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS,
-                                 struct.pack('@i', 1))
-            addr = list(self.nodeaddrinfo[4])
-            addr[1] = 0
-            ping_sock.bind(tuple(addr))
-            addr[0] = self._broadcast
-            addr[1] = port
-            addr = tuple(addr)
-
         ping_msg = {'location': self._location, 'signature': self._signature,
                     'name': self._name, 'version': __version__}
         ping_msg = 'ping:'.encode() + serialize(ping_msg)
-        try:
-            yield ping_sock.sendto(ping_msg, addr)
-        except:
-            pass
-        ping_sock.close()
+
+        def _discover(coro=None):
+            ping_sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_DGRAM))
+            ping_sock.settimeout(2)
+            if self.sock_family == socket.AF_INET:
+                ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                addr = (self._broadcast, port)
+            else:  # self.sock_family == socket.AF_INET6
+                ping_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS,
+                                     struct.pack('@i', 1))
+                addr = list(self.nodeaddrinfo[4])
+                addr[1] = 0
+                ping_sock.bind(tuple(addr))
+                addr[0] = self._broadcast
+                addr[1] = port
+                addr = tuple(addr)
+            try:
+                yield ping_sock.sendto(ping_msg, addr)
+            except:
+                pass
+            ping_sock.close()
+
+        SysCoro(_discover)
 
     def ignore_peers(self, ignore):
         """Don't respond to 'ping' from peers if 'ignore=True'. This can be used
@@ -644,7 +647,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
         """
         coro.set_daemon()
         if discover_peers:
-            SysCoro(self.discover_peers)
+            self.discover_peers()
 
         while 1:
             msg, addr = yield self._udp_sock.recvfrom(1024)

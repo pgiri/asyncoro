@@ -664,7 +664,6 @@ class Scheduler(object):
         self.__pulse_interval = MinPulseInterval
         self.__ping_interval = None
         self.__sched_event = asyncoro.Event()
-        self.__terminate = False
         self._node_port = kwargs.pop('discoronode_port', 51351)
         self.__server_locations = set()
 
@@ -683,7 +682,7 @@ class Scheduler(object):
         self.__timer_coro = SysCoro(self.__timer_proc)
         Scheduler.__status_coro = self.__status_coro = SysCoro(self.__status_proc)
         self.__client_coro.register('discoro_scheduler')
-        SysCoro(self.asyncoro.discover_peers, port=self._node_port)
+        self.asyncoro.discover_peers(port=self._node_port)
 
     def status(self):
         pending = sum(node.ncoros for node in self._nodes.itervalues())
@@ -827,6 +826,7 @@ class Scheduler(object):
                     else:
                         server = Scheduler._Server(msg.get('name', None), rcoro.location)
                         server.coro = rcoro
+
                     server.status = Scheduler.ServerInitialized
                     node.servers[rcoro.location] = server
                     server.avail.set()
@@ -1043,7 +1043,7 @@ class Scheduler(object):
 
             if self.__ping_interval and ((now - last_ping) > self.__ping_interval):
                 last_ping = now
-                SysCoro(async_scheduler.discover_peers, port=self._node_port)
+                async_scheduler.discover_peers(port=self._node_port)
 
     @staticmethod
     def auth_code():
@@ -1054,7 +1054,7 @@ class Scheduler(object):
         coro.set_daemon()
         for node in nodes:
             yield asyncoro.AsynCoro.instance().peer(node, broadcast=True)
-        while not self.__terminate:
+        while 1:
             if self._cur_computation:
                 self.__sched_event.clear()
                 yield self.__sched_event.wait()
@@ -1213,7 +1213,7 @@ class Scheduler(object):
 
         coro.set_daemon()
         computations = {}
-        while not self.__terminate:
+        while 1:
             msg = yield coro.receive()
             if not isinstance(msg, dict):
                 continue
@@ -1464,8 +1464,6 @@ class Scheduler(object):
         if self._cur_computation and self._cur_computation.status_coro:
             self._cur_computation.status_coro.send(DiscoroStatus(Scheduler.ComputationClosed,
                                                                  id(self._cur_computation)))
-        if client:
-            client.send('closed')
         self.__cur_client_auth = self._cur_computation = None
         self.__sched_event.set()
         if client:
@@ -1478,10 +1476,6 @@ class Scheduler(object):
         Must be called with 'yield' as 'yield scheduler.close()' or as
         coroutine.
         """
-        if self.__terminate:
-            raise StopIteration(-1)
-        self.__terminate = True
-        self.__sched_event.set()
         yield self.__close_computation(coro=coro)
         raise StopIteration(0)
 
@@ -1565,7 +1559,7 @@ if __name__ == '__main__':
     del config
 
     def sighandler(signum, frame):
-        Coro(_discoro_scheduler.close).value()
+        # Coro(_discoro_scheduler.close).value()
         raise KeyboardInterrupt
 
     try:
@@ -1604,9 +1598,9 @@ if __name__ == '__main__':
                 break
             _discoro_cmd = _discoro_cmd.strip().lower()
             if _discoro_cmd in ('quit', 'exit'):
-                Coro(_discoro_scheduler.close).value()
                 break
             if _discoro_cmd == 'status':
                 _discoro_scheduler.print_status()
 
     logger.info('terminating discoro scheduler')
+    Coro(_discoro_scheduler.close).value()

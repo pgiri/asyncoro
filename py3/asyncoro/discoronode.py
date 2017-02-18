@@ -963,7 +963,6 @@ if __name__ == '__main__':
                         _discoro_spawn_proc = multiprocessing.Process(target=_discoro_spawn,
                                                                       args=args)
                         _discoro_spawn_proc.start()
-
                         if _discoro_send_pipe.poll(10):
                             cpus = _discoro_send_pipe.recv()
                         else:

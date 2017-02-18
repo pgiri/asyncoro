@@ -460,6 +460,7 @@ def _discoro_spawn(_discoro_config, _discoro_id_ports, _discoro_mp_queue,
 
     terminate(0)
 
+
 if __name__ == '__main__':
 
     """
