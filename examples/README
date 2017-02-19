@@ -20,7 +20,9 @@ framework for distributed and parallel computing.
   programming, coroutines and message passing to implement a chat (message)
   server that is used by clients to broadcast messages.
 
-* discoro_client1.py illustrates how to use discoro for distributed computing.
+* discoro_client1.py illustrates how to use discoro to distribute computations
+  to remote servers to run them as coroutines on those servers and get results
+  back to client.
 
 * discoro_client2.py is a variation of discoro_client1.py. In this example,
   http server is used to monitor cluster, nodes, remote coroutines.
@@ -32,8 +34,8 @@ framework for distributed and parallel computing.
   computations that process those files and the remote process in turn sends the
   results in files back to the client.
 
-* discoro_client5.py runs an external program (discoro_client5_proc.py at remote
-  servers. The program reads from standard input and writes to standard
+* discoro_client5.py runs an external program (discoro_client5_proc.py) at
+  remote servers. The program reads from standard input and writes to standard
   output. Asynchronous pipes and message passing are used to send input from
   client to this program executing on remote servers, and get the output back to
   client.
@@ -50,9 +52,9 @@ framework for distributed and parallel computing.
   results.
 
 * discoro_client8.py demonstrates that long-runnning computations without
-  *yield* often can be executed. In this cast, *time.sleep* is used to simulate
-  computation. Note that *time.sleep* blocks entire asyncoro framework, so no
-  other coroutines can execute until next *yield*. With version 4.1 (and above),
+  'yield' often can be executed. In this case, 'time.sleep' is used to simulate
+  computation. Note that 'time.sleep' blocks entire asyncoro framework, so no
+  other coroutines can execute until next 'yield'. With version 4.1 (and above),
   I/O processing, message passing, sending heartbeat messages to scheduler
   etc. are handled by a separate (called "reactive") asyncoro scheduler that is
   not affected by user's coroutines. So messages sent by client are received and
@@ -63,7 +65,7 @@ framework for distributed and parallel computing.
   the data in memory. This data is then processed in computations to illustrate
   in-memory processing. This example doesn't work with Windows (due to lack of
   'fork' in Windows), so nodes running Windows are filtered out using
-  :ref:`DiscoroNodeAllocate`.
+  DiscoroNodeAllocate.
 
 * discoro_client9_server.py is similar to discoro_client9_node.py above, except
   that instead of initializing (memory in) nodes, each server in each node is
@@ -80,8 +82,8 @@ framework for distributed and parallel computing.
   messages from discoro scheduler to client's 'status_proc').
 
 * discoro_ssh_ec2.py shows how to use ssh port forwarding to work with Amazon
-  EC2 cloud computing, where the client runs locally and discoronode runs on
-  remote Amazon EC2 cloud infrastructure.
+  EC2 cloud computing. In this example client runs locally and discoronode runs
+  on remote Amazon EC2 cloud infrastructure.
 
 * hotswap.py and hotswap_funcs.py illustrate how a running coroutine function
   can be swapped with a new function. The currently running function
