@@ -70,7 +70,7 @@ def _discoro_server_coro_proc():
                          'computation files will be saved in "%s"',
                          _discoro_config['id'], _discoro_coro.location, _discoro_dest_path)
     _discoro_req = _discoro_client = _discoro_auth = _discoro_msg = None
-    _discoro_peer_status = _discoro_monitor_coro = _discoro_monitor_proc = _discoro_func = None
+    _discoro_peer_status = _discoro_monitor_coro = _discoro_monitor_proc = _discoro_job = None
     _discoro_job_coros = set()
     _discoro_jobs_done = asyncoro.Event()
 
@@ -158,30 +158,29 @@ def _discoro_server_coro_proc():
         if _discoro_req == 'run':
             _discoro_client = _discoro_msg.get('client', None)
             _discoro_auth = _discoro_msg.get('auth', None)
-            _discoro_func = _discoro_msg.get('func', None)
+            _discoro_job = _discoro_msg.get('job', None)
             if (not isinstance(_discoro_client, Coro) or
                 _discoro_auth != _discoro_computation_auth):
-                asyncoro.logger.warning('invalid run: %s', type(_discoro_func))
+                asyncoro.logger.warning('invalid run: %s', type(_discoro_job))
                 if isinstance(_discoro_client, Coro):
                     _discoro_client.send(None)
                 continue
             try:
-                _discoro_func = asyncoro.deserialize(_discoro_func)
-                if _discoro_func.code:
-                    exec(_discoro_func.code) in globals()
+                if _discoro_job.code:
+                    exec(_discoro_job.code) in globals()
+                _discoro_job.args = asyncoro.deserialize(_discoro_job.args)
+                _discoro_job.kwargs = asyncoro.deserialize(_discoro_job.kwargs)
             except:
                 asyncoro.logger.debug('invalid computation to run')
-                _discoro_var = (sys.exc_info()[0], getattr(_discoro_func, 'name', _discoro_func),
-                                traceback.format_exc())
+                _discoro_var = (sys.exc_info()[0], _discoro_job.name, traceback.format_exc())
                 _discoro_client.send(_discoro_var)
             else:
                 Coro._asyncoro._lock.acquire()
                 try:
-                    _discoro_var = Coro(globals()[_discoro_func.name],
-                                        *(_discoro_func.args), **(_discoro_func.kwargs))
+                    _discoro_var = Coro(globals()[_discoro_job.name],
+                                        *(_discoro_job.args), **(_discoro_job.kwargs))
                 except:
-                    _discoro_var = (sys.exc_info()[0], getattr(_discoro_func, 'name', _discoro_func),
-                                    traceback.format_exc())
+                    _discoro_var = (sys.exc_info()[0], _discoro_job.name, traceback.format_exc())
                 else:
                     _discoro_job_coros.add(_discoro_var)
                     _discoro_busy_time.value = int(time.time())

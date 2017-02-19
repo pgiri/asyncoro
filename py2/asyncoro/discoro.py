@@ -44,8 +44,6 @@ DiscoroStatus = collections.namedtuple('DiscoroStatus', ['status', 'info'])
 DiscoroCoroInfo = collections.namedtuple('DiscoroCoroInfo', ['coro', 'args', 'kwargs', 'start_time'])
 DiscoroNodeInfo = collections.namedtuple('DiscoroNodeInfo', ['name', 'addr', 'cpus', 'platform',
                                                              'avail_info'])
-# for internal use only
-_DiscoroFunction = collections.namedtuple('_DiscoroFunction', ['name', 'code', 'args', 'kwargs'])
 
 
 class DiscoroNodeAvailInfo(object):
@@ -253,7 +251,6 @@ class Computation(object):
                 raise Exception('Invalid computation: %s' % dep)
         # check code can be compiled
         compile(self._code, '<string>', 'exec')
-
 
     def schedule(self, location=None, timeout=None):
         """Schedule computation for execution. Must be used with 'yield' as
@@ -508,9 +505,8 @@ class Computation(object):
             code = inspect.getsource(gen).lstrip()
 
         def _run(self, coro=None):
-            msg = {'req': request, 'auth': self._auth, 'where': where, 'client': coro,
-                   'func': asyncoro.serialize(_DiscoroFunction(name, code, args, kwargs)),
-                   'cpu': cpu}
+            msg = {'req': 'job', 'auth': self._auth,
+                   'job': _DiscoroJob_(request, coro, name, where, cpu, code, args, kwargs)}
             if (yield self.scheduler.deliver(msg, timeout=self.timeout)) == 1:
                 reply = yield coro.receive()
                 if self.status_coro and isinstance(reply, Coro):
@@ -555,6 +551,22 @@ class Computation(object):
     def __setstate__(self, state):
         for attr, value in state.iteritems():
             setattr(self, attr, value)
+
+
+class _DiscoroJob_(object):
+    """Internal use only.
+    """
+    __slots__ = ['request', 'client', 'name', 'where', 'cpu', 'code', 'args', 'kwargs']
+
+    def __init__(self, request, client, name, where, cpu, code, args=None, kwargs=None):
+        self.request = request
+        self.client = client
+        self.name = name
+        self.where = where
+        self.cpu = cpu
+        self.code = code
+        self.args = asyncoro.serialize(args)
+        self.kwargs = asyncoro.serialize(kwargs)
 
 
 class Scheduler(object):
@@ -619,17 +631,19 @@ class Scheduler(object):
             self.avail.clear()
             self.scheduler = Scheduler._instance
 
-        def run(self, req, func, cpu, computation, node, client):
-            def _run(self, func, coro=None):
-                self.coro.send({'req': 'run', 'auth': computation._auth, 'func': func,
-                                'client': coro})
+        def run(self, job, computation, node):
+            def _run(self, coro=None):
+                self.coro.send({'req': 'run', 'auth': computation._auth, 'job': job, 'client': coro})
                 rcoro = yield coro.receive(timeout=computation.timeout)
+                # currently fault-tolerancy is not supported, so clear job's
+                # args to save space
+                job.args = job.kwargs = None
                 if isinstance(rcoro, Coro):
                     # TODO: keep func too for fault-tolerance
-                    if req.endswith('_async'):
-                        self.rcoros[rcoro] = (rcoro, cpu, None)
+                    if job.request.endswith('_async'):
+                        self.rcoros[rcoro] = (rcoro, job)
                     else:
-                        self.rcoros[rcoro] = (rcoro, cpu, client)
+                        self.rcoros[rcoro] = (rcoro, job)
                     if self.askew_results:
                         msg = self.askew_results.pop(rcoro, None)
                         if msg:
@@ -646,8 +660,8 @@ class Scheduler(object):
                         node.avail.set()
                 raise StopIteration(rcoro)
 
-            rcoro = yield SysCoro(_run, self, func).finish()
-            if req.endswith('_async'):
+            rcoro = yield SysCoro(_run, self).finish()
+            if job.request.endswith('_async'):
                 yield client.deliver(rcoro)
 
     def __init__(self, **kwargs):
@@ -731,15 +745,16 @@ class Scheduler(object):
                     server.askew_results[rcoro] = msg
                     continue
                 assert info[0] == rcoro
-                if info[1]:
+                assert isinstance(info[1], _DiscoroJob_)
+                if info[1].cpu:
                     node.ncoros -= 1
                     node.load = float(node.ncoros) / len(node.servers)
                     self._avail_nodes.add(node)
                     self._nodes_avail.set()
                     node.avail.set()
                     server.avail.set()
-                if info[2]:
-                    info[2].send(msg.args[1][1])
+                if info[1].client:
+                    info[1].client.send(msg.args[1][1])
                 if self._cur_computation and self._cur_computation.status_coro:
                     if len(msg.args) > 2:
                         msg.args = (msg.args[0], msg.args[1])
@@ -1104,17 +1119,13 @@ class Scheduler(object):
         self.__scheduler_coro = None
 
     def __client_proc(self, coro=None):
-        def _run(msg, req, client, auth, coro=None):
-            if not isinstance(client, Coro):
+        def _run(msg, auth, coro=None):
+            job = msg.get('job', None)
+            if not isinstance(job, _DiscoroJob_) or not isinstance(job.client, Coro):
                 logger.warning('Ignoring invalid client request "%s"', req)
                 raise StopIteration
-            func = msg.get('func', None)
-            if not func or self.__cur_client_auth != auth:
-                logger.warning('Ignoring invalid request to run computation')
-                client.send(None)
-                raise StopIteration
-            cpu = msg.get('cpu', 1)
-            where = msg.get('where', None)
+            cpu = job.cpu
+            where = job.where
             if not where:
                 if cpu:
                     while not self._avail_nodes:
@@ -1147,7 +1158,7 @@ class Scheduler(object):
                         server = proc
                         load = len(proc.rcoros)
                 if not server:
-                    client.send(None)
+                    job.client.send(None)
                     raise StopIteration
                 if cpu:
                     server.avail.clear()
@@ -1158,11 +1169,11 @@ class Scheduler(object):
                         self._avail_nodes.discard(node)
                         if not self._avail_nodes:
                             self._nodes_avail.clear()
-                yield server.run(req, func, cpu, self._cur_computation, node, client)
+                yield server.run(job, self._cur_computation, node)
             elif isinstance(where, str):
                 node = self._nodes.get(where, None)
                 if not node:
-                    client.send(None)
+                    job.client.send(None)
                     raise StopIteration
                 server = None
                 load = None
@@ -1175,7 +1186,7 @@ class Scheduler(object):
                         server = proc
                         load = len(proc.rcoros)
                 if not server:
-                    client.send(None)
+                    job.client.send(None)
                     raise StopIteration
                 if cpu:
                     server.avail.clear()
@@ -1186,15 +1197,15 @@ class Scheduler(object):
                         self._avail_nodes.discard(node)
                         if not self._avail_nodes:
                             self._nodes_avail.clear()
-                yield server.run(req, func, cpu, self._cur_computation, node, client)
+                yield server.run(job, self._cur_computation, node)
             elif isinstance(where, asyncoro.Location):
                 node = self._nodes.get(where.addr)
                 if not node:
-                    client.send(None)
+                    job.client.send(None)
                     raise StopIteration
                 server = node.servers.get(where)
                 if not server:
-                    client.send(None)
+                    job.client.send(None)
                     raise StopIteration
                 if cpu:
                     if server.rcoros:
@@ -1207,9 +1218,9 @@ class Scheduler(object):
                         self._avail_nodes.discard(node)
                         if not self._avail_nodes:
                             self._nodes_avail.clear()
-                yield server.run(req, func, cpu, self._cur_computation, node, client)
+                yield server.run(job, self._cur_computation, node)
             else:
-                client.send(None)
+                job.client.send(None)
 
         coro.set_daemon()
         computations = {}
@@ -1218,13 +1229,15 @@ class Scheduler(object):
             if not isinstance(msg, dict):
                 continue
             req = msg.get('req', None)
-            client = msg.get('client', None)
             auth = msg.get('auth', None)
 
-            if req.startswith('run_'):
-                SysCoro(_run, msg, req, client, auth)
+            if req == 'job':
+                SysCoro(_run, msg, auth)
+                continue
 
-            elif req == 'enable_server':
+            client = msg.get('client', None)
+
+            if req == 'enable_server':
                 req = msg.get('req', None)
                 client = msg.get('client', None)
                 auth = msg.get('auth', None)
