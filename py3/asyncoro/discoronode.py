@@ -70,7 +70,7 @@ def _discoro_server_coro_proc():
                          'computation files will be saved in "%s"',
                          _discoro_config['id'], _discoro_coro.location, _discoro_dest_path)
     _discoro_req = _discoro_client = _discoro_auth = _discoro_msg = None
-    _discoro_peer_status = _discoro_monitor_coro = _discoro_monitor_proc = _discoro_func = None
+    _discoro_peer_status = _discoro_monitor_coro = _discoro_monitor_proc = _discoro_job = None
     _discoro_job_coros = set()
     _discoro_jobs_done = asyncoro.Event()
 

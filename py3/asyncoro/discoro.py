@@ -668,7 +668,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
 
             rcoro = yield SysCoro(_run, self).finish()
             if job.request.endswith('_async'):
-                yield client.deliver(rcoro)
+                yield job.client.deliver(rcoro)
 
     def __init__(self, **kwargs):
         self.__class__._instance = self
@@ -742,7 +742,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                     continue
                 node.last_pulse = now
                 info = server.rcoros.pop(rcoro, None)
-                if info is None:
+                if not info:
                     # Due to 'yield' used to create rcoro, scheduler may not
                     # have updated self._rcoros before the coroutine's
                     # MonitorException is received, so put it in
@@ -750,8 +750,7 @@ class Scheduler(object, metaclass=asyncoro.Singleton):
                     # when it receives rcoro
                     server.askew_results[rcoro] = msg
                     continue
-                assert info[0] == rcoro
-                assert isinstance(info[1], _DiscoroJob_)
+                # assert isinstance(info[1], _DiscoroJob_)
                 if info[1].cpu:
                     node.ncoros -= 1
                     node.load = float(node.ncoros) / len(node.servers)
