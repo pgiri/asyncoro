@@ -103,6 +103,10 @@ def _discoro_server_coro_proc():
             else:
                 asyncoro.logger.warning('invalid message to monitor ignored: %s', type(msg))
 
+    _discoro_var = _discoro_config['computation_location']
+    _discoro_var = asyncoro.Location(_discoro_var.addr, _discoro_var.port)
+    if (yield asyncoro.AsynCoro.instance().peer(_discoro_var)):
+        raise StopIteration(-1)
     asyncoro.AsynCoro.instance().peer_status(SysCoro(_discoro_peer_status))
     yield asyncoro.AsynCoro.instance().peer(_discoro_node_coro.location)
     yield asyncoro.AsynCoro.instance().peer(_discoro_scheduler_coro.location)
@@ -335,6 +339,7 @@ def _discoro_server_process(_discoro_config, _discoro_mp_queue, _discoro_computa
 
     _discoro_config['_disable_servers'] = _discoro_computation._disable_servers
     _discoro_config['_server_setup'] = _discoro_computation._server_setup
+    _discoro_config['computation_location'] = _discoro_computation._pulse_coro.location
     _discoro_coro = asyncoro.SysCoro(_discoro_server_coro_proc)
     assert isinstance(_discoro_coro, asyncoro.Coro)
     mp_queue.put((server_id, asyncoro.serialize(_discoro_coro)))
@@ -493,7 +498,7 @@ if __name__ == '__main__':
         psutil = None
     else:
         psutil.cpu_percent(0.1)
-    from asyncoro.discoro import MinPulseInterval, MaxPulseInterval, Scheduler
+    from asyncoro.discoro import MinPulseInterval, MaxPulseInterval, Scheduler, Computation
     import asyncoro.disasyncoro as asyncoro
 
     parser = argparse.ArgumentParser()
@@ -544,8 +549,8 @@ if __name__ == '__main__':
     parser.add_argument('--max_pulse_interval', dest='max_pulse_interval',
                         default=MaxPulseInterval, type=int,
                         help='maximum pulse interval clients can use in number of seconds')
-    parser.add_argument('--zombie_period', dest='zombie_period', default=0, type=int,
-                        help='maximum number of seconds for client to not run computation')
+    parser.add_argument('--zombie_period', dest='zombie_period', default=(10 * MaxPulseInterval),
+                        type=int, help='maximum number of seconds for client to not run computation')
     parser.add_argument('--ping_interval', dest='ping_interval', default=0, type=int,
                         help='interval in number of seconds for node to broadcast its address')
     parser.add_argument('--daemon', action='store_true', dest='daemon', default=False,
@@ -851,6 +856,7 @@ if __name__ == '__main__':
 
         def close_computation():
             global _discoro_spawn_proc
+
             for server in _discoro_servers:
                 if server.coro:
                     server.coro.send({'req': 'quit', 'node_auth': _discoro_node_auth})
@@ -876,6 +882,7 @@ if __name__ == '__main__':
                         os.remove(name)
                     except:
                         pass
+            coro_scheduler.discover_peers(port=_discoro_config['scheduler_port'])
 
         if _discoro_service_start:
             asyncoro.Coro(service_times_proc)
@@ -926,33 +933,47 @@ if __name__ == '__main__':
                                                len(_discoro_servers), platform.platform(), info)
                         client.send(info)
 
-                elif req == 'computation':
+                elif req == 'reserve':
                     # request from scheduler
                     client = msg.get('client', None)
                     cpus = msg.get('cpus', -1)
-                    computation = msg.get('computation', None)
+                    auth = msg.get('auth', None)
                     if (isinstance(client, asyncoro.Coro) and isinstance(cpus, int) and
-                        cpus >= 0 and isinstance(msg.get('status_coro', None), asyncoro.Coro) and
-                        not scheduler_coro and service_available(now) and
-                        (len(_discoro_servers) >= cpus) and computation):
-                        if _discoro_spawn_proc:
-                            if _discoro_send_pipe.poll(5) and _discoro_send_pipe.recv() == 'closed':
-                                _discoro_spawn_proc = None
-                            else:
-                                try:
-                                    _discoro_spawn_proc.terminate()
-                                except:
-                                    pass
-                        for server in _discoro_servers:
-                            if server.coro:
-                                yield coro.sleep(0.1)
-                        while _discoro_send_pipe.poll():  # clear pipe
-                            _discoro_send_pipe.recv()
-                        while _discoro_recv_pipe.poll():  # clear pipe
-                            _discoro_recv_pipe.recv()
-                        if not cpus:
-                            cpus = len(_discoro_servers)
-                        _discoro_config['scheduler_coro'] = asyncoro.serialize(msg['status_coro'])
+                        cpus >= 0 and not cur_computation_auth and not scheduler_coro and
+                        service_available(now) and (len(_discoro_servers) >= cpus) and auth and
+                        isinstance(msg.get('status_coro', None), asyncoro.Coro) and
+                        isinstance(msg.get('computation_location', None), asyncoro.Location)):
+                        if (yield coro_scheduler.peer(msg['computation_location'])):
+                            cpus = 0
+                        else:
+                            close_computation()
+                            for server in _discoro_servers:
+                                if server.coro:
+                                    yield coro.sleep(0.1)
+                            if not cpus:
+                                cpus = len(_discoro_servers)
+                        if ((yield client.deliver(cpus, timeout=min(msg_timeout, interval))) == 1 and
+                            cpus):
+                            cur_computation_auth = auth
+                            last_pulse = now
+                            _discoro_busy_time.value = int(time.time())
+                            scheduler_coro = msg['status_coro']
+                    elif isinstance(client, asyncoro.Coro):
+                        client.send(0)
+
+                elif req == 'computation':
+                    client = msg.get('client', None)
+                    computation = msg.get('computation', None)
+                    if (cur_computation_auth == msg.get('auth', None) and
+                        isinstance(client, asyncoro.Coro) and isinstance(computation, Computation)):
+                        interval = computation._pulse_interval
+                        last_pulse = now
+                        if interval:
+                            interval = min(interval, _discoro_config['max_pulse_interval'])
+                        else:
+                            interval = _discoro_config['max_pulse_interval']
+                        _discoro_busy_time.value = int(time.time())
+                        _discoro_config['scheduler_coro'] = asyncoro.serialize(scheduler_coro)
                         _discoro_config['computation_auth'] = computation._auth
                         id_ports = [(server.id, _discoro_tcp_ports[server.id - 1])
                                     for server in _discoro_servers if not server.coro]
@@ -966,29 +987,14 @@ if __name__ == '__main__':
                             cpus = _discoro_send_pipe.recv()
                         else:
                             cpus = 0
-
-                        if ((yield client.deliver(cpus, timeout=min(msg_timeout, interval))) == 1 and
-                            cpus):
-                            scheduler_coro = msg['status_coro']
-                            cur_computation_auth = computation._auth
-                            interval = computation._pulse_interval
-                            if interval:
-                                interval = min(interval, _discoro_config['max_pulse_interval'])
-                            else:
-                                interval = _discoro_config['max_pulse_interval']
-                            if computation.zombie_period:
-                                interval = min(interval, computation.zombie_period / 3)
-                            _discoro_busy_time.value = int(time.time())
-                            last_pulse = now
+                        if ((yield client.deliver(cpus)) == 1) and cpus:
+                            pass
                         else:
                             close_computation()
 
-                    elif isinstance(client, asyncoro.Coro):
-                        client.send(0)
-
                 elif req == 'release':
                     auth = msg.get('auth', None)
-                    if auth == cur_computation_auth:
+                    if cur_computation_auth and auth == cur_computation_auth:
                         close_computation()
                         cur_computation_auth = None
                         scheduler_coro = None
@@ -1023,7 +1029,7 @@ if __name__ == '__main__':
                     asyncoro.logger.warning('Invalid message %s ignored',
                                             str(msg) if isinstance(msg, dict) else '')
 
-            if scheduler_coro and any(server.coro for server in _discoro_servers):
+            if scheduler_coro:
                 scoro = scheduler_coro  # copy in case scheduler closes meanwhile
                 msg = {'status': 'pulse', 'location': coro.location}
                 if psutil:
