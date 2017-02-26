@@ -40,7 +40,7 @@ def client_proc(computation, coro=None):
         try:
             c.n = float(cmd)
         except:
-            print('  "%s" is ignored')
+            print('  "%s" is not a number' % cmd)
             continue
         else:
             # unlike in discoro_client*.py, here 'run_async' is used to run
@@ -48,7 +48,9 @@ def client_proc(computation, coro=None):
             # one coroutine on a server at any time).
             yield computation.run_async(compute, c, coro)
 
-    yield computation.close()
+    # close computation with 'await_async=True' to wait until all running async
+    # coroutines to finish before closing computation
+    yield computation.close(await_async=True)
 
 
 if __name__ == '__main__':

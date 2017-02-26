@@ -73,6 +73,8 @@ def client_proc(computation, coro=None):
         else:
             print('  %s: rcoro failed: %s' % (i, rcoro))
 
+    # unlike in discoro_httpd1.py, here 'await_async' is not used, so any
+    # running async coroutines are just terminated.
     yield computation.close()
 
 

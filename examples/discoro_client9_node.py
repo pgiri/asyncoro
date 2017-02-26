@@ -12,7 +12,6 @@ from asyncoro.discoro import *
 
 def node_available(avail_info, data_file, coro=None):
     import os
-    asyncoro.logger.debug('  Sending %s to %s', data_file, avail_info.location.addr)
     # 'node_available' is executed locally (at client) when a node is
     # available. 'location' is Location instance of node. When this coroutine
     # is executed, 'depends' of computation would've been transferred.
@@ -21,6 +20,8 @@ def node_available(avail_info, data_file, coro=None):
     # illustrate how files can be sent separately (e.g., to transfer different
     # files to different nodes), file is transferred with
     # 'node_available'.
+
+    print('  Sending %s to %s' % (data_file, avail_info.location.addr))
     sent = yield asyncoro.AsynCoro().send_file(avail_info.location, data_file,
                                                overwrite=True, timeout=5)
     if (sent < 0):

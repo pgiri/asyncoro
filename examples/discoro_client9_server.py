@@ -27,7 +27,8 @@ def server_available(location, data_file, coro=None):
     # illustrate how files can be sent separately (to distribute data fragments
     # among servers), files are transferred to servers in this
     # example
-    print('sending %s to %s' % (data_file, location))
+
+    print('  Sending %s to %s' % (data_file, location))
     if (yield asyncoro.AsynCoro().send_file(location, data_file, timeout=5, overwrite=True)) < 0:
         print('Could not send data file "%s" to %s' % (data_file, location))
         raise StopIteration(-1)
