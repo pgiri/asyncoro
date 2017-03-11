@@ -592,6 +592,8 @@ class _AsyncSocket(object):
 
         if not self._asyncoro:
             self._asyncoro = AsynCoro.scheduler()
+            self._notifier = self._asyncoro._notifier
+            self._register()
         self._write_coro = AsynCoro.cur_coro(self._asyncoro)
         self._write_coro._await_()
         self._write_task = _sendto
