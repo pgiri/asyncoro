@@ -1094,7 +1094,7 @@ class Scheduler(object):
             job = yield coro.receive()
             if (not isinstance(job, asyncoro.discoro._DiscoroJob_) or
                 not isinstance(job.client, Coro)):
-                logger.warning('Ignoring invalid client request "%s"', req)
+                logger.warning('Ignoring invalid client job request')
                 continue
             cpu = job.cpu
             where = job.where
@@ -1358,24 +1358,25 @@ class Scheduler(object):
         node = self._nodes.get(server.coro.location.addr, None)
         if not node:
             raise StopIteration(-1)
+        server_coro, server.coro = server.coro, None
         if self.__server_locations:
-            self.__server_locations.discard(server.coro.location)
+            self.__server_locations.discard(server_coro.location)
             # TODO: inform other servers
-        disconnected = server.coro.location not in node.servers
+        disconnected = node.servers.pop(server_coro.location, None) is None
         if disconnected:
             if computation and computation.status_coro:
                 computation.status_coro.send(DiscoroStatus(Scheduler.ServerDisconnected,
-                                                           server.coro.location))
+                                                           server_coro.location))
         else:
             if not server.avail.is_set():
-                logger.debug('Waiting for remote coroutines at %s to finish', server.coro.location)
+                logger.debug('Waiting for remote coroutines at %s to finish', server_coro.location)
                 yield server.avail.wait()
             if await_async:
                 while server.rcoros:
                     rcoro, job = server.rcoros[next(iter(server.rcoros))]
                     logger.debug('Waiting for %s to finish', rcoro)
                     yield job.done.wait()
-            server.coro.send({'req': 'close', 'auth': computation._auth, 'client': coro})
+            server_coro.send({'req': 'close', 'auth': computation._auth, 'client': coro})
             yield coro.receive(timeout=MsgTimeout)
         if server.rcoros:  # wait a bit for server to terminate coros
             for _ in range(5):
@@ -1383,7 +1384,7 @@ class Scheduler(object):
                 if not server.rcoros:
                     break
         if server.rcoros:
-            logger.warning('%s coros running at %s', len(server.rcoros), server.coro.location)
+            logger.warning('%s coros running at %s', len(server.rcoros), server_coro.location)
             if computation and computation.status_coro:
                 for (rcoro, cpu) in server.rcoros.itervalues():
                     status = asyncoro.MonitorException(rcoro, (Scheduler.ServerClosed, None))
@@ -1391,10 +1392,12 @@ class Scheduler(object):
                 node.cpus_used -= len(server.rcoros)
                 server.rcoros.clear()
 
+        server.status = Scheduler.ServerClosed
+        server.xfer_files = []
+        server.askew_results.clear()
         if computation and computation.status_coro:
-            computation.status_coro.send(DiscoroStatus(server.status, server.coro.location))
+            computation.status_coro.send(DiscoroStatus(server.status, server_coro.location))
 
-        node.servers.pop(server.coro.location, None)
         if node.cpus_used == len(node.servers):
             self._avail_nodes.discard(node)
             if not self._avail_nodes:
@@ -1410,10 +1413,6 @@ class Scheduler(object):
                                        node.platform, node.avail_info)
                 computation.status_coro.send(DiscoroStatus(node.status, info))
 
-        server.status = Scheduler.ServerClosed
-        server.xfer_files = []
-        server.askew_results.clear()
-        server.coro = None
         raise StopIteration(0)
 
     def __close_computation(self, client=None, await_async=False, coro=None):
