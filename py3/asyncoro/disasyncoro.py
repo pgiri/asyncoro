@@ -118,7 +118,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
             if not socket_family:
                 socket_family = socket.AF_INET
         if not socket_family:
-            socket_family = socket.getaddrinfo(socket.gethostbyname(socket.gethostname()), None)[0][0]
+            socket_family = socket.getaddrinfo(socket.gethostname(), None)[0][0]
         assert socket_family in (socket.AF_INET, socket.AF_INET6)
 
         ifn, self.nodeaddrinfo = 0, None
@@ -158,7 +158,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
             if not socket_family:
                 socket_family = self.nodeaddrinfo[0]
         if not node:
-            node = socket.gethostbyname(socket.gethostname())
+            node = socket.gethostname()
 
         node = socket.getaddrinfo(node, None, socket_family, socket.SOCK_STREAM)[0]
         if socket_family == socket.AF_INET6:
@@ -223,7 +223,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
             self._name = str(self._location)
         if ext_ip_addr:
             try:
-                ext_ip_addr = socket.gethostbyname(ext_ip_addr)
+                ext_ip_addr = socket.getaddrinfo(ext_ip_addr)[0][-1][0]
             except:
                 logger.warning('invalid ext_ip_addr ignored')
             else:
@@ -365,7 +365,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
             coro = AsynCoro.cur_coro(self)
         if not isinstance(loc, Location):
             try:
-                loc = socket.gethostbyname(loc)
+                loc = socket.getaddrinfo(loc)[0][-1][0]
             except:
                 logger.warning('invalid node: "%s"', str(loc))
                 raise StopIteration(-1)
