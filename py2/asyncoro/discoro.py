@@ -181,7 +181,7 @@ class Computation(object):
         depends = set()
         cwd = os.getcwd()
         for dep in components:
-            if isinstance(dep, str) or inspect.ismodule(dep):
+            if isinstance(dep, basestring) or inspect.ismodule(dep):
                 if inspect.ismodule(dep):
                     name = dep.__file__
                     if name.endswith('.pyc'):

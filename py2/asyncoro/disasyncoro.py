@@ -544,7 +544,7 @@ class AsynCoro(asyncoro.AsynCoro):
             logger.warning('send_file: File "%s" is not valid', file)
             raise StopIteration(-1)
         if dir:
-            if not isinstance(dir, str):
+            if not isinstance(dir, basestring):
                 logger.warning('send_file: path for dir "%s" is not allowed', dir)
                 raise StopIteration(-1)
             dir = dir.strip()
@@ -606,7 +606,7 @@ class AsynCoro(asyncoro.AsynCoro):
         Delete 'file' from peer at 'location'. 'dir' must be
         same as that used for 'send_file'.
         """
-        if isinstance(dir, str) and dir:
+        if isinstance(dir, basestring) and dir:
             dir = dir.strip()
             # reject absolute path for dir
             if os.path.join(os.sep, dir) == dir:
@@ -1018,7 +1018,7 @@ class AsynCoro(asyncoro.AsynCoro):
                 assert req.dst == self._location
                 tgt = os.path.basename(req.kwargs['file'])
                 dir = req.kwargs['dir']
-                if isinstance(dir, str) and dir:
+                if isinstance(dir, basestring) and dir:
                     tgt = os.path.join(dir, tgt)
                 tgt = os.path.join(self.__dest_path, tgt)
                 if tgt.startswith(self.__dest_path) and os.path.isfile(tgt):
