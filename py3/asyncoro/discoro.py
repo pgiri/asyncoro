@@ -78,7 +78,7 @@ class DiscoroNodeAllocate(object):
     def __init__(self, node, platform='', cpus=0, memory=0, disk=0):
         if node.find('*') < 0:
             try:
-                node = socket.gethostbyname(node)
+                node = socket.getaddrinfo(node, None)[0][-1][0]
             except:
                 node = ''
 
@@ -510,8 +510,9 @@ class Computation(object):
         """
         coro.set_daemon()
         last_pulse = time.time()
+        timeout = 2 * self._pulse_interval
         while 1:
-            msg = yield coro.receive(timeout=(2 * self._pulse_interval))
+            msg = yield coro.receive(timeout=timeout)
             if msg == 'pulse':
                 last_pulse = time.time()
             elif msg == 'quit':

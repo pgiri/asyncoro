@@ -130,7 +130,7 @@
             if (timeout != (1000 * inp)) {
               changed = true;
               $.ajax({
-                url: '/set_poll_sec',
+                url: '/update',
                 method: 'POST',
                 data: {timeout: inp},
                 timeout: 1000
@@ -248,7 +248,7 @@
 
       <table id="inputs" style="margin:10px auto;text-align:left;">
         <tr>
-          <td><strong>Update Interval Seconds:</strong></td>
+          <td><strong>Update Interval Seconds :</strong></td>
           <td><input style="width:3em;padding-right:3px;" maxlength="6" type="text" id="timeout" value="%(TIMEOUT)s" /></td>
         </tr>
         <tr>

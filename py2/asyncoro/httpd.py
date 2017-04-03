@@ -127,7 +127,9 @@ class HTTPServer(object):
                         data = fd.read()
                     if path.endswith('.html'):
                         if path.endswith('.html'):
-                            data = data % {'TIMEOUT': str(self._ctx._poll_sec)}
+                            data = data % {'TIMEOUT': str(self._ctx._poll_sec),
+                                           'SHOW_CORO_ARGS': 'true' if self._ctx._show_args \
+                                                              else 'false'}
                         content_type = 'text/html'
                     elif path.endswith('.js'):
                         content_type = 'text/javascript'
@@ -180,10 +182,13 @@ class HTTPServer(object):
                             rcoros.append(rcoro)
                     else:
                         rcoros = server.coros.values()
+                    show_args = self._ctx._show_args
                     rcoros = [{'coro': str(rcoro.coro), 'name': rcoro.coro.name,
-                               'args': ', '.join(str(arg) for arg in rcoro.args),
+                               'args': ', '.join(str(arg) for arg in rcoro.args) \
+                                       if show_args else '',
                                'kwargs': ', '.join('%s=%s' % (key, val)
-                                                   for key, val in rcoro.kwargs.items()),
+                                                   for key, val in rcoro.kwargs.items()) \
+                                         if show_args else '',
                                'start_time': rcoro.start_time
                                } for rcoro in rcoros]
                     info = {'location': str(server.location),
@@ -205,7 +210,7 @@ class HTTPServer(object):
                             addr = item.value
                         else:
                             try:
-                                addr = socket.gethostbyname(item.value)
+                                addr = socket.getaddrinfo(item.value, None)[0][-1][0]
                             except:
                                 addr = item.value
                         break
@@ -266,30 +271,34 @@ class HTTPServer(object):
                 self.wfile.write(json.dumps(terminated).encode())
                 return
 
-            elif self.path == '/set_poll_sec':
+            elif self.path == '/update':
                 for item in form.list:
-                    if item.name != 'timeout':
-                        continue
-                    try:
-                        timeout = int(item.value)
-                        if timeout < 1:
-                            timeout = 0
-                    except:
-                        asyncoro.logger.warning('HTTP client %s: invalid timeout "%s" ignored',
-                                                self.client_address[0], item.value)
-                        timeout = 0
-                    self._ctx._poll_sec = timeout
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'text/html')
-                    self.end_headers()
-                    return
+                    if item.name == 'timeout':
+                        try:
+                            timeout = int(item.value)
+                            if timeout < 1:
+                                timeout = 0
+                            self._ctx._poll_sec = timeout
+                        except:
+                            asyncoro.logger.warning('HTTP client %s: invalid timeout "%s" ignored',
+                                                    self.client_address[0], item.value)
+                    elif item.name == 'show_coro_args':
+                        if item.value == 'true':
+                            self._ctx._show_args = True
+                        else:
+                            self._ctx._show_args = False
+
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html')
+                self.end_headers()
+                return
             asyncoro.logger.debug('Bad POST request from %s: %s',
                                   self.client_address[0], self.path)
             self.send_error(400)
             return
 
     def __init__(self, computation, host='', port=8181, poll_sec=10, DocumentRoot=None,
-                 keyfile=None, certfile=None):
+                 keyfile=None, certfile=None, show_coro_args=True):
         self._lock = threading.Lock()
         if not DocumentRoot:
             DocumentRoot = os.path.join(os.path.dirname(__file__), 'data')
@@ -299,6 +308,7 @@ class HTTPServer(object):
             asyncoro.logger.warning('invalid poll_sec value %s; it must be at least 1', poll_sec)
             poll_sec = 1
         self._poll_sec = poll_sec
+        self._show_args = bool(show_coro_args)
         self._server = BaseHTTPServer.HTTPServer((host, port), lambda *args:
                                   HTTPServer._HTTPRequestHandler(self, DocumentRoot, *args))
         if certfile:
