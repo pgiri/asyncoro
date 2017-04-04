@@ -84,12 +84,13 @@
               }
 
               var now = new Date();
-              $('#messages').append('<li>Status updated at ' + now.toLocaleTimeString() + '</li>');
+              $('#messages').append('<li>Status updated at ' + now.toLocaleTimeString() + '.</li>');
               if (timeout >= 1000) {
                 timer = setTimeout(function() { show_node(node.addr) }, timeout);
               }
             } else {
-              $('#messages').append('<li>Failed to get information about "' + host + '"</li>');
+              $('#messages').append('<li style="color:red">' +
+                                    'Failed to get information about "' + host + '".</li>');
               $('#node').hide();
               $('#servers').hide();
               node_hidden = true;
@@ -99,8 +100,8 @@
           })
 
           .fail(function(jqXHR, textStatus, errorThrown) {
-            $('#messages').append('<li>Node update failed at ' +
-              (new Date()).toLocaleTimeString() + '</li>');
+            $('#messages').append('<li style="color:red">Node update failed at ' +
+              (new Date()).toLocaleTimeString() + '.</li>');
           });
       }
 
@@ -139,13 +140,13 @@
               timeout = 1000 * inp;
             }
           } else {
-            $('#messages').append('<li>Invalid timeout value ignored.</li>');
+            $('#messages').append('<li style="color:red">Invalid timeout value ignored.</li>');
             $('#timeout').val(timeout / 1000);
           }
 
           inp = $('#host').val().trim();
           if (inp.length == 0) {
-            $('#messages').append('<li>Invalid host ignored.</li>');
+            $('#messages').append('<li style="color:red">Invalid host ignored.</li>');
             $('#host').val(host);
           } else if (inp != host) {
             changed = true;

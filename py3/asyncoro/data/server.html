@@ -88,7 +88,8 @@
                 timer = setTimeout(function() { show_server() }, timeout);
               }
             } else {
-              $('#messages').append('<li>Failed to get information about "' + server_location + '"</li>');
+              $('#messages').append('<li style="color:red">Failed to get information about ' +
+                                    '"' + server_location + '".</li>');
               $('#server').hide();
               $('#coros').hide();
               server_hidden = true;
@@ -98,8 +99,8 @@
           })
 
           .fail(function(jqXHR, textStatus, errorThrown) {
-            $('#messages').append('<li>Server update failed at ' +
-              (new Date()).toLocaleTimeString() + '</li>');
+            $('#messages').append('<li style="color:red">Server update failed at ' +
+              (new Date()).toLocaleTimeString() + '.</li>');
             $('#coros').hide();
             coros_hidden = true;
           });
@@ -138,7 +139,8 @@
               max_coros = inp;
             }
           } else {
-            $('#messages').append('<li>Invalid Max Coroutines value ignored.</li>');
+            $('#messages').append('<li style="color:red">Invalid Max Coroutines value ' +
+                                  'ignored.</li>');
             $('#max_coros').val(max_coros);
           }
 
@@ -161,7 +163,7 @@
               timeout = 1000 * inp;
             }
           } else {
-            $('#messages').append('<li>Invalid timeout value ignored.</li>');
+            $('#messages').append('<li style="color:red">Invalid timeout value ignored.</li>');
             $('#timeout').val(timeout / 1000);
           }
 
@@ -176,7 +178,7 @@
 
         $('#terminate-coros').click(function() {
           if ($('select[name="terminate-confirm"]').val() != 'Yes') {
-            $('#messages').append('<li>Terminating coros not confirmed</li>');
+            $('#messages').append('<li style="color:red">Terminating coros not confirmed.</li>');
             return false;
           }
           var terminate_coros = [];
@@ -220,7 +222,7 @@
 
             .fail(function() {
               $('#terminate-coros').prop('disabled', false);
-              $('#messages').append('<li>Terminating coros failed</li>');
+              $('#messages').append('<li style="color:red">Terminating coros failed.</li>');
             });
 
         });
