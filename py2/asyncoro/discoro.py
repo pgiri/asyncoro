@@ -1359,25 +1359,21 @@ class Scheduler(object):
         node = self._nodes.get(server.coro.location.addr, None)
         if not node:
             raise StopIteration(-1)
-        server_coro, server.coro = server.coro, None
-        if self.__server_locations:
-            self.__server_locations.discard(server_coro.location)
-            # TODO: inform other servers
-        disconnected = node.servers.pop(server_coro.location, None) is None
+        disconnected = server.coro.location not in node.servers
         if disconnected:
             if computation and computation.status_coro:
                 computation.status_coro.send(DiscoroStatus(Scheduler.ServerDisconnected,
-                                                           server_coro.location))
+                                                           server.coro.location))
         else:
             if not server.avail.is_set():
-                logger.debug('Waiting for remote coroutines at %s to finish', server_coro.location)
+                logger.debug('Waiting for remote coroutines at %s to finish', server.coro.location)
                 yield server.avail.wait()
             if await_async:
                 while server.rcoros:
                     rcoro, job = server.rcoros[next(iter(server.rcoros))]
                     logger.debug('Waiting for %s to finish', rcoro)
                     yield job.done.wait()
-            server_coro.send({'req': 'close', 'auth': computation._auth, 'client': coro})
+            server.coro.send({'req': 'close', 'auth': computation._auth, 'client': coro})
             yield coro.receive(timeout=MsgTimeout)
         if server.rcoros:  # wait a bit for server to terminate coros
             for _ in range(5):
@@ -1385,13 +1381,19 @@ class Scheduler(object):
                 if not server.rcoros:
                     break
         if server.rcoros:
-            logger.warning('%s coros running at %s', len(server.rcoros), server_coro.location)
+            logger.warning('%s coros running at %s', len(server.rcoros), server.coro.location)
             if computation and computation.status_coro:
                 for (rcoro, cpu) in server.rcoros.itervalues():
                     status = asyncoro.MonitorException(rcoro, (Scheduler.ServerClosed, None))
                     computation.status_coro.send(status)
                 node.cpus_used -= len(server.rcoros)
                 server.rcoros.clear()
+
+        server_coro, server.coro = server.coro, None
+        if self.__server_locations:
+            self.__server_locations.discard(server_coro.location)
+            # TODO: inform other servers
+        node.servers.pop(server_coro.location, None)
 
         server.status = Scheduler.ServerClosed
         server.xfer_files = []
