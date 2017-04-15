@@ -55,7 +55,7 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "4.5.3"
+__version__ = "4.5.4"
 
 __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
@@ -1244,7 +1244,7 @@ if platform.system() == 'Windows':
             def _add_timeout(self, fd):
                 if fd._timeout:
                     self._lock.acquire()
-                    fd._timeout_id = _time() + fd._timeout
+                    fd._timeout_id = _time() + fd._timeout + 0.0001
                     i = bisect_left(self._timeouts, (fd._timeout_id, fd))
                     self._timeouts.insert(i, (fd._timeout_id, fd))
                     if self._polling:
@@ -1872,7 +1872,7 @@ if not hasattr(sys.modules[__name__], '_AsyncNotifier'):
 
         def _add_timeout(self, fd):
             if fd._timeout:
-                fd._timeout_id = _time() + fd._timeout
+                fd._timeout_id = _time() + fd._timeout + 0.0001
                 i = bisect_left(self._timeouts, (fd._timeout_id, fd))
                 self._timeouts.insert(i, (fd._timeout_id, fd))
             else:
@@ -3342,7 +3342,7 @@ class CategorizeMessages(object):
             categorize = None
 
         if categorize:
-            self._categorize.append(categorize)
+            self._categorize.insert(0, categorize)
         else:
             logger.warning('invalid categorize function ignored')
 
@@ -3369,7 +3369,7 @@ class CategorizeMessages(object):
             msg = yield self._coro.receive(timeout=timeout, alarm_value=alarm_value)
             if msg == alarm_value:
                 raise StopIteration(msg)
-            for categorize in reversed(self._categorize):
+            for categorize in self._categorize:
                 c = categorize(msg)
                 if c == category:
                     raise StopIteration(msg)
@@ -3561,7 +3561,7 @@ class AsynCoro(object, metaclass=Singleton):
                 self._lock.release()
                 return alarm_value
             else:
-                coro._timeout = _time() + timeout
+                coro._timeout = _time() + timeout + 0.0001
                 heappush(self._timeouts, (coro._timeout, cid, alarm_value))
         self._scheduled.discard(cid)
         self._suspended.add(cid)
@@ -3693,7 +3693,9 @@ class AsynCoro(object, metaclass=Singleton):
             if not self._scheduled:
                 if self._timeouts:
                     timeout = self._timeouts[0][0] - _time()
-                    if timeout < 0.0001:
+                    # pollers may timeout slightly earlier, so give a bit of
+                    # slack
+                    if timeout <= 0.0001:
                         timeout = 0
                 else:
                     timeout = None
@@ -3703,20 +3705,18 @@ class AsynCoro(object, metaclass=Singleton):
                 self._lock.acquire()
                 self._polling = False
             if self._timeouts:
-                # wake up timed suspends; pollers may timeout slightly
-                # earlier, so give a bit of slack
                 now = _time() + 0.0001
                 while self._timeouts and self._timeouts[0][0] <= now:
                     timeout, cid, alarm_value = heappop(self._timeouts)
-                    assert timeout <= now
+                    # assert timeout <= now
                     coro = self._coros.get(cid, None)
                     if not coro or coro._timeout != timeout:
                         continue
-                    if coro._state not in (AsynCoro._AwaitIO_, AsynCoro._Suspended,
-                                           AsynCoro._AwaitMsg_):
-                        logger.warning('coro %s/%s is in state %s for resume; ignored',
-                                       coro._name, coro._id, coro._state)
-                        continue
+                    # if coro._state not in (AsynCoro._AwaitIO_, AsynCoro._Suspended,
+                    #                        AsynCoro._AwaitMsg_):
+                    #     logger.warning('coro %s/%s is in state %s for resume; ignored',
+                    #                    coro._name, coro._id, coro._state)
+                    #     continue
                     coro._timeout = None
                     self._suspended.discard(cid)
                     self._scheduled.add(cid)
@@ -3726,10 +3726,8 @@ class AsynCoro(object, metaclass=Singleton):
             self._lock.release()
 
             for coro in scheduled:
-                self._lock.acquire()
                 coro._state = AsynCoro._Running
                 self.__cur_coro = coro
-                self._lock.release()
 
                 try:
                     if coro._exceptions:
@@ -3900,11 +3898,11 @@ class AsynCoro(object, metaclass=Singleton):
                 coro._complete.set()
             else:
                 coro._complete = 0
-        self._scheduled = set()
-        self._suspended = set()
+        self._scheduled.clear()
+        self._suspended.clear()
+        self._coros.clear()
+        self._channels.clear()
         self._timeouts = []
-        self._coros = {}
-        self._channels = {}
         self.__class__._instance = None
         self._quit = True
         self._lock.release()
