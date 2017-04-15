@@ -1015,12 +1015,11 @@ class Scheduler(object):
                 break
             now = time.time()
             if self.__cur_client_auth:
-                if (now - client_pulse) > self.__pulse_interval:
-                    if self._cur_computation._pulse_coro.send('pulse') == 0:
-                        client_pulse = now
-                    elif ((now - client_pulse) > self.__zombie_period):
-                        logger.warning('Closing zombie computation %s', self.__cur_client_auth)
-                        SysCoro(self.__close_computation)
+                if self._cur_computation._pulse_coro.send('pulse') == 0:
+                    client_pulse = now
+                elif ((now - client_pulse) > self.__zombie_period):
+                    logger.warning('Closing zombie computation %s', self.__cur_client_auth)
+                    SysCoro(self.__close_computation)
 
                 if (now - node_check) > self.__zombie_period:
                     node_check = now
