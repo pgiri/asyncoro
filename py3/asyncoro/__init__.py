@@ -37,6 +37,8 @@ if platform.system() == 'Windows':
     from errno import WSAEINVAL as EINVAL
     from time import clock as _time
     _time()
+    if not hasattr(socket, 'IPPROTO_IPV6'):
+        socket.IPPROTO_IPV6 = 41
 else:
     from errno import EINPROGRESS
     from errno import EWOULDBLOCK
@@ -1591,7 +1593,14 @@ if platform.system() == 'Windows':
                     self._read_overlap.object(None, 0)
 
                 try:
-                    self._rsock.bind(('0.0.0.0', 0))
+                    if self._rsock.family == socket.AF_INET6:
+                        try:
+                            self._rsock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+                        except:
+                            pass
+                        self._rsock.bind(('::', 0))
+                    else:
+                        self._rsock.bind(('0.0.0.0', 0))
                 except socket.error as exc:
                     if exc[0] != EINVAL:
                         raise
@@ -1632,11 +1641,12 @@ if platform.system() == 'Windows':
                     # it seems getpeername returns IP address as
                     # string, but GetAcceptExSockaddrs returns
                     # bytes, so decode address
-                    raddr = (raddr[0].decode('ascii'), raddr[1])
+                    if family == socket.AF_INET:
+                        raddr = (raddr[0].decode('ascii'), raddr[1])
                     # TODO: unpack raddr if family != AF_INET
 
                     conn._rsock.setsockopt(socket.SOL_SOCKET, win32file.SO_UPDATE_ACCEPT_CONTEXT,
-                                              struct.pack('P', self._fileno))
+                                           struct.pack('P', self._fileno))
 
                     if not self._certfile:
                         if self._timeout and self._notifier:

@@ -37,6 +37,12 @@ if platform.system() == 'Windows':
     from errno import WSAEINVAL as EINVAL
     from time import clock as _time
     _time()
+    try:
+        import win_inet_pton
+    except:
+        pass
+    if not hasattr(socket, 'IPPROTO_IPV6'):
+        socket.IPPROTO_IPV6 = 41
 else:
     from errno import EINPROGRESS
     from errno import EWOULDBLOCK
@@ -1571,7 +1577,15 @@ if platform.system() == 'Windows':
                     self._read_overlap.object(None, 0)
 
                 try:
-                    self._rsock.bind(('0.0.0.0', 0))
+                    if self._rsock.family == socket.AF_INET6:
+                        # TODO: is it required to bind to '::'?
+                        try:
+                            self._rsock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+                        except:
+                            logger.debug(traceback.format_exc())
+                        self._rsock.bind(('::', 0))
+                    else:
+                        self._rsock.bind(('0.0.0.0', 0))
                 except socket.error as exc:
                     if exc[0] != EINVAL:
                         raise
@@ -1611,7 +1625,7 @@ if platform.system() == 'Windows':
                                                                           self._read_result)
                     # TODO: unpack raddr if family != AF_INET
                     conn._rsock.setsockopt(socket.SOL_SOCKET, win32file.SO_UPDATE_ACCEPT_CONTEXT,
-                                              struct.pack('P', self._fileno))
+                                           struct.pack('P', self._fileno))
 
                     if not self._certfile:
                         if self._timeout and self._notifier:

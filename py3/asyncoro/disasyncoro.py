@@ -151,6 +151,8 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
                                 if addrinfo[2] == socket.IPPROTO_TCP:
                                     self.nodeaddrinfo = addrinfo
                                     break
+        elif socket_family == socket.AF_INET6:
+            logger.warning('IPv6 may not work without "netifaces" package!')
 
         if self.nodeaddrinfo:
             if not node:
@@ -252,7 +254,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
                         continue
                     break
         else:  # self.sock_family == socket.AF_INET6
-            self._broadcast = 'ff02::1'
+            self._broadcast = 'ff05::1'
             addrinfo = socket.getaddrinfo(self._broadcast, None)[0]
             mreq = socket.inet_pton(addrinfo[0], addrinfo[4][0])
             mreq += struct.pack('@I', self.nodeaddrinfo[4][-1])
@@ -422,24 +424,27 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
             ping_msg = {'location': self._location, 'signature': self._signature,
                         'name': self._name, 'version': __version__, 'broadcast': broadcast}
             ping_msg = 'ping:'.encode() + serialize(ping_msg)
-            sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_DGRAM))
-            sock.settimeout(2)
+            ping_sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_DGRAM))
+            ping_sock.settimeout(2)
             if self.sock_family == socket.AF_INET:
                 addr = (loc.addr, udp_port)
             else:  # self.sock_family == socket.AF_INET6
-                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS,
-                                struct.pack('@i', 1))
+                ping_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS,
+                                     struct.pack('@i', 1))
                 addr = list(self.nodeaddrinfo[4])
-                addr[1] = 0
+                addr[1] = udp_port
+                ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                if hasattr(socket, 'SO_REUSEPORT'):
+                    ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                ping_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_IF,
+                                     self.nodeaddrinfo[4][-1])
                 ping_sock.bind(tuple(addr))
                 addr[0] = loc.addr
-                addr[1] = udp_port
-                addr = tuple(addr)
             try:
-                yield sock.sendto(ping_msg, addr)
+                yield ping_sock.sendto(ping_msg, tuple(addr))
             except:
                 pass
-            sock.close()
+            ping_sock.close()
         raise StopIteration(0)
 
     def discover_peers(self, port=None):
@@ -463,13 +468,16 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
                 ping_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS,
                                      struct.pack('@i', 1))
                 addr = list(self.nodeaddrinfo[4])
-                addr[1] = 0
+                addr[1] = port
+                ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                if hasattr(socket, 'SO_REUSEPORT'):
+                    ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                ping_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_IF,
+                                     self.nodeaddrinfo[4][-1])
                 ping_sock.bind(tuple(addr))
                 addr[0] = self._broadcast
-                addr[1] = port
-                addr = tuple(addr)
             try:
-                yield ping_sock.sendto(ping_msg, addr)
+                yield ping_sock.sendto(ping_msg, tuple(addr))
             except:
                 pass
             ping_sock.close()
@@ -1084,11 +1092,10 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
 
             elif req.name == 'relay_ping':
                 yield conn.send_msg(serialize(0))
-                ping_sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_DGRAM))
-                ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-                ping_sock.settimeout(2)
                 ping_msg = 'ping:'.encode() + serialize(req.kwargs)
                 port = self._udp_sock.getsockname()[1]
+                ping_sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_DGRAM))
+                ping_sock.settimeout(2)
                 if self.sock_family == socket.AF_INET:
                     ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
                     addr = (self._broadcast, port)
@@ -1096,13 +1103,16 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
                     ping_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS,
                                          struct.pack('@i', 1))
                     addr = list(self.nodeaddrinfo[4])
-                    addr[1] = 0
+                    addr[1] = port
+                    ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    if hasattr(socket, 'SO_REUSEPORT'):
+                        ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                    ping_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_IF,
+                                         self.nodeaddrinfo[4][-1])
                     ping_sock.bind(tuple(addr))
                     addr[0] = self._broadcast
-                    addr[1] = port
-                    addr = tuple(addr)
                 try:
-                    yield ping_sock.sendto(ping_msg, addr)
+                    yield ping_sock.sendto(ping_msg, tuple(addr))
                 except:
                     pass
                 finally:
