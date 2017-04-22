@@ -58,6 +58,9 @@ class HTTPServer(object):
                     discoro.Scheduler.ServerIgnore: 'Ignore',
                     discoro.Scheduler.ServerDisconnected: 'Disconnected'}
 
+    ip_re = re.compile(r'^((\d+\.\d+\.\d+\.\d+)|([0-9a-f:]+))$')
+    loc_re = re.compile(r'^((\d+\.\d+\.\d+\.\d+)|([0-9a-f:]+)):(\d+)$')
+
     class _Node(object):
         def __init__(self, name, addr):
             self.name = name
@@ -163,11 +166,11 @@ class HTTPServer(object):
                 max_coros = 0
                 for item in form.list:
                     if item.name == 'location':
-                        m = re.match('^(\d+[\.\d]+):(\d+)$', item.value)
+                        m = re.match(HTTPServer.loc_re, item.value)
                         if m:
                             node = self._ctx._nodes.get(m.group(1))
                             if node:
-                                server = node.servers.get(m.group(0))
+                                server = node.servers.get(item.value)
                     elif item.name == 'limit':
                         try:
                             max_coros = int(item.value)
@@ -206,11 +209,17 @@ class HTTPServer(object):
                 addr = None
                 for item in form.list:
                     if item.name == 'host':
-                        if re.match('^(\d+[\.\d]+)$', item.value):
+                        if re.match(HTTPServer.ip_re, item.value):
                             addr = item.value
                         else:
                             try:
-                                addr = socket.getaddrinfo(item.value, None)[0][-1][0]
+                                info = socket.getaddrinfo(item.value, None)[0]
+                                ip_addr = info[4][0]
+                                if info[0] == socket.AF_INET6:
+                                    ip_addr = re.sub(r'^0+', '', ip_addr)
+                                    ip_addr = re.sub(r':0+', ':', ip_addr)
+                                    ip_addr = re.sub(r'::+', '::', ip_addr)
+                                addr = ip_addr
                             except:
                                 addr = item.value
                         break

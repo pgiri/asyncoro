@@ -77,7 +77,13 @@ class DiscoroNodeAllocate(object):
     def __init__(self, node, platform='', cpus=0, memory=0, disk=0):
         if node.find('*') < 0:
             try:
-                node = socket.getaddrinfo(node, None)[0][-1][0]
+                info = socket.getaddrinfo(node, None)[0]
+                ip_addr = info[4][0]
+                if info[0] == socket.AF_INET6:
+                    ip_addr = re.sub(r'^0*', '', ip_addr)
+                    ip_addr = re.sub(r':0*', ':', ip_addr)
+                    ip_addr = re.sub(r'::+', '::', ip_addr)
+                node = ip_addr
             except:
                 node = ''
 

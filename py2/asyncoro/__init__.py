@@ -58,7 +58,7 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "4.5.4"
+__version__ = "4.5.5"
 
 __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
@@ -1582,7 +1582,7 @@ if platform.system() == 'Windows':
                         try:
                             self._rsock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
                         except:
-                            logger.debug(traceback.format_exc())
+                            pass
                         self._rsock.bind(('::', 0))
                     else:
                         self._rsock.bind(('0.0.0.0', 0))

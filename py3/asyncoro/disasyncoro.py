@@ -18,6 +18,7 @@ import errno
 import atexit
 import ssl
 import struct
+import re
 try:
     import netifaces
 except ImportError:
@@ -121,21 +122,21 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
             socket_family = socket.getaddrinfo(socket.gethostname(), None)[0][0]
         assert socket_family in (socket.AF_INET, socket.AF_INET6)
 
-        ifn, self.nodeaddrinfo = 0, None
+        ifn, self.addrinfo = 0, None
         if netifaces:
             for iface in netifaces.interfaces():
                 if socket_family == socket.AF_INET:
-                    if self.nodeaddrinfo:
+                    if self.addrinfo:
                         break
                 else:  # socket_family == socket.AF_INET6
-                    if ifn and self.nodeaddrinfo:
+                    if ifn and self.addrinfo:
                         break
-                    ifn, self.nodeaddrinfo = 0, None
+                    ifn, self.addrinfo = 0, None
                 for link in netifaces.ifaddresses(iface).get(socket_family, []):
                     if socket_family == socket.AF_INET:
                         if link.get('broadcast', '').startswith(link['addr'].split('.')[0]):
                             if (not node) or (link['addr'] == node):
-                                self.nodeaddrinfo = socket.getaddrinfo(link['addr'], None)[0]
+                                self.addrinfo = socket.getaddrinfo(link['addr'], None)[0]
                                 break
                     else:  # socket_family == socket.AF_INET6
                         if link['addr'].startswith('fe80:'):
@@ -149,25 +150,29 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
                         elif link['addr'].startswith('fd'):
                             for addrinfo in socket.getaddrinfo(link['addr'], None):
                                 if addrinfo[2] == socket.IPPROTO_TCP:
-                                    self.nodeaddrinfo = addrinfo
+                                    self.addrinfo = addrinfo
                                     break
         elif socket_family == socket.AF_INET6:
             logger.warning('IPv6 may not work without "netifaces" package!')
 
-        if self.nodeaddrinfo:
+        if self.addrinfo:
             if not node:
-                node = self.nodeaddrinfo[4][0]
+                node = self.addrinfo[4][0]
             if not socket_family:
-                socket_family = self.nodeaddrinfo[0]
+                socket_family = self.addrinfo[0]
         if not node:
             node = socket.gethostname()
 
         node = socket.getaddrinfo(node, None, socket_family, socket.SOCK_STREAM)[0]
-        if socket_family == socket.AF_INET6:
-            self.nodeaddrinfo = list(node)
-            self.nodeaddrinfo[4] = self.nodeaddrinfo[4][:-1] + (ifn,)
-            self.nodeaddrinfo = tuple(self.nodeaddrinfo)
-        self.sock_family, node = node[0], node[4][0]
+        ip_addr = node[4][0]
+        if node[0] == socket.AF_INET6:
+            # canonicalize so different platforms resolve to same string
+            ip_addr = re.sub(r'^0+', '', ip_addr)
+            ip_addr = re.sub(r':0+', ':', ip_addr)
+            ip_addr = re.sub(r'::+', '::', ip_addr)
+
+        info = collections.namedtuple('AddrInfo', ['family', 'ip', 'ifn'])
+        self.addrinfo = info(node[0], ip_addr, ifn)
 
         if not udp_port:
             udp_port = 51350
@@ -187,36 +192,22 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
         self.max_file_size = max_file_size
         self._certfile = certfile
         self._keyfile = keyfile
-        self._udp_sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_DGRAM))
+        self._udp_sock = AsyncSocket(socket.socket(self.addrinfo.family, socket.SOCK_DGRAM))
         if hasattr(socket, 'SO_REUSEADDR'):
             self._udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         if hasattr(socket, 'SO_REUSEPORT'):
             self._udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        if self.sock_family == socket.AF_INET:
-            addr = ('', udp_port)
-        else:  # self.sock_family == socket.AF_INET6
-            addr = list(self.nodeaddrinfo[4])
-            addr[0] = ''
-            addr[1] = udp_port
-            addr = tuple(addr)
-        self._udp_sock.bind(addr)
+        self._udp_sock.bind(('', udp_port))
 
-        self._tcp_sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_STREAM),
+        self._tcp_sock = AsyncSocket(socket.socket(self.addrinfo.family, socket.SOCK_STREAM),
                                      keyfile=self._keyfile, certfile=self._certfile)
         if tcp_port:
             if hasattr(socket, 'SO_REUSEADDR'):
                 self._tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             if hasattr(socket, 'SO_REUSEPORT'):
                 self._tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        if self.sock_family == socket.AF_INET:
-            addr = (node, tcp_port)
-        else:  # self.sock_family == socket.AF_INET6
-            addr = list(self.nodeaddrinfo[4])
-            addr[0] = node
-            addr[1] = tcp_port
-            addr = tuple(addr)
-        self._tcp_sock.bind(addr)
-        self._location = Location(*(self._tcp_sock.getsockname()[:2]))
+        self._tcp_sock.bind((self.addrinfo.ip, tcp_port))
+        self._location = Location(self.addrinfo.ip, self._tcp_sock.getsockname()[1])
         if not self._location.port:
             raise Exception('could not start network server at %s' % (self._location))
         if name:
@@ -225,11 +216,16 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
             self._name = str(self._location)
         if ext_ip_addr:
             try:
-                ext_ip_addr = socket.getaddrinfo(ext_ip_addr)[0][-1][0]
+                info = socket.getaddrinfo(ext_ip_addr)[0]
+                ip_addr = info[4][0]
+                if info[0] == socket.AF_INET6:
+                    # canonicalize so different platforms resolve to same string
+                    ip_addr = re.sub(r'^0+', '', ip_addr)
+                    ip_addr = re.sub(r':0+', ':', ip_addr)
+                    ip_addr = re.sub(r'::+', '::', ip_addr)
+                self._location.addr = ip_addr
             except:
                 logger.warning('invalid ext_ip_addr ignored')
-            else:
-                self._location.addr = ext_ip_addr
 
         self._secret = secret
         if secret is None:
@@ -242,7 +238,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
         logger.info('network server %s@ %s, udp_port=%s', '"%s" ' % name if name else '',
                     self._location, self._udp_sock.getsockname()[1])
 
-        if self.sock_family == socket.AF_INET:
+        if self.addrinfo.family == socket.AF_INET:
             self._broadcast = '<broadcast>'
             if netifaces:
                 for iface in netifaces.interfaces():
@@ -253,11 +249,10 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
                     else:
                         continue
                     break
-        else:  # self.sock_family == socket.AF_INET6
+        else:  # self.addrinfo.family == socket.AF_INET6
             self._broadcast = 'ff05::1'
-            addrinfo = socket.getaddrinfo(self._broadcast, None)[0]
-            mreq = socket.inet_pton(addrinfo[0], addrinfo[4][0])
-            mreq += struct.pack('@I', self.nodeaddrinfo[4][-1])
+            mreq = socket.inet_pton(self.addrinfo.family, self._broadcast)
+            mreq += struct.pack('@I', self.addrinfo.ifn)
             self._udp_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
 
         atexit.register(self.finish)
@@ -367,11 +362,17 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
             coro = AsynCoro.cur_coro(self)
         if not isinstance(loc, Location):
             try:
-                loc = socket.getaddrinfo(loc)[0][-1][0]
+                info = socket.getaddrinfo(loc)[0]
+                ip_addr = info[4][0]
+                if info[0] == socket.AF_INET6:
+                    # canonicalize so different platforms resolve to same string
+                    ip_addr = re.sub(r'^0+', '', ip_addr)
+                    ip_addr = re.sub(r':0+', ':', ip_addr)
+                    ip_addr = re.sub(r'::+', '::', ip_addr)
+                loc = Location(ip_addr, 0)
             except:
                 logger.warning('invalid node: "%s"', str(loc))
                 raise StopIteration(-1)
-            loc = Location(loc, 0)
 
         self._lock.acquire()
         if stream_send:
@@ -400,7 +401,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
 
         if loc.port:
             req = _NetRequest('signature', kwargs={'version': __version__}, dst=loc)
-            sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_STREAM),
+            sock = AsyncSocket(socket.socket(self.addrinfo.family, socket.SOCK_STREAM),
                                keyfile=self._keyfile, certfile=self._certfile)
             sock.settimeout(2)
             try:
@@ -424,24 +425,18 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
             ping_msg = {'location': self._location, 'signature': self._signature,
                         'name': self._name, 'version': __version__, 'broadcast': broadcast}
             ping_msg = 'ping:'.encode() + serialize(ping_msg)
-            ping_sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_DGRAM))
+            ping_sock = AsyncSocket(socket.socket(self.addrinfo.family, socket.SOCK_DGRAM))
             ping_sock.settimeout(2)
-            if self.sock_family == socket.AF_INET:
-                addr = (loc.addr, udp_port)
-            else:  # self.sock_family == socket.AF_INET6
+            if self.addrinfo.family == socket.AF_INET:
+                ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            else:  # self.addrinfo.family == socket.AF_INET6
                 ping_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS,
                                      struct.pack('@i', 1))
-                addr = list(self.nodeaddrinfo[4])
-                addr[1] = udp_port
-                ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                if hasattr(socket, 'SO_REUSEPORT'):
-                    ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
                 ping_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_IF,
-                                     self.nodeaddrinfo[4][-1])
-                ping_sock.bind(tuple(addr))
-                addr[0] = loc.addr
+                                     self.addrinfo.ifn)
+            ping_sock.bind((self.addrinfo.ip, 0))
             try:
-                yield ping_sock.sendto(ping_msg, tuple(addr))
+                yield ping_sock.sendto(ping_msg, (loc.addr, udp_port))
             except:
                 pass
             ping_sock.close()
@@ -459,25 +454,18 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
         ping_msg = 'ping:'.encode() + serialize(ping_msg)
 
         def _discover(coro=None):
-            ping_sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_DGRAM))
+            ping_sock = AsyncSocket(socket.socket(self.addrinfo.family, socket.SOCK_DGRAM))
             ping_sock.settimeout(2)
-            if self.sock_family == socket.AF_INET:
+            if self.addrinfo.family == socket.AF_INET:
                 ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-                addr = (self._broadcast, port)
-            else:  # self.sock_family == socket.AF_INET6
+            else:  # self.addrinfo.family == socket.AF_INET6
                 ping_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS,
                                      struct.pack('@i', 1))
-                addr = list(self.nodeaddrinfo[4])
-                addr[1] = port
-                ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                if hasattr(socket, 'SO_REUSEPORT'):
-                    ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
                 ping_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_IF,
-                                     self.nodeaddrinfo[4][-1])
-                ping_sock.bind(tuple(addr))
-                addr[0] = self._broadcast
+                                     self.addrinfo.ifn)
+            ping_sock.bind((self.addrinfo.ip, 0))
             try:
-                yield ping_sock.sendto(ping_msg, tuple(addr))
+                yield ping_sock.sendto(ping_msg, (self._broadcast, port))
             except:
                 pass
             ping_sock.close()
@@ -567,7 +555,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
         kwargs = {'file': os.path.basename(file), 'stat_buf': stat_buf,
                   'overwrite': overwrite is True, 'dir': dir, 'sep': os.sep}
         req = _NetRequest('send_file', kwargs=kwargs, dst=location, timeout=timeout)
-        sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_STREAM),
+        sock = AsyncSocket(socket.socket(self.addrinfo.family, socket.SOCK_STREAM),
                            keyfile=self._keyfile, certfile=self._certfile)
         if timeout:
             sock.settimeout(timeout)
@@ -628,7 +616,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
         """
         Internal use only.
         """
-        sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_STREAM),
+        sock = AsyncSocket(socket.socket(self.addrinfo.family, socket.SOCK_STREAM),
                            keyfile=self._keyfile, certfile=self._certfile)
         sock.settimeout(MsgTimeout)
         req = _NetRequest('peer', kwargs={'signature': self._signature, 'name': self._name,
@@ -1094,25 +1082,18 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
                 yield conn.send_msg(serialize(0))
                 ping_msg = 'ping:'.encode() + serialize(req.kwargs)
                 port = self._udp_sock.getsockname()[1]
-                ping_sock = AsyncSocket(socket.socket(self.sock_family, socket.SOCK_DGRAM))
+                ping_sock = AsyncSocket(socket.socket(self.addrinfo.family, socket.SOCK_DGRAM))
                 ping_sock.settimeout(2)
-                if self.sock_family == socket.AF_INET:
+                if self.addrinfo.family == socket.AF_INET:
                     ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-                    addr = (self._broadcast, port)
-                else:  # self.sock_family == socket.AF_INET6
+                else:  # self.addrinfo.family == socket.AF_INET6
                     ping_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS,
                                          struct.pack('@i', 1))
-                    addr = list(self.nodeaddrinfo[4])
-                    addr[1] = port
-                    ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                    if hasattr(socket, 'SO_REUSEPORT'):
-                        ping_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
                     ping_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_IF,
-                                         self.nodeaddrinfo[4][-1])
-                    ping_sock.bind(tuple(addr))
-                    addr[0] = self._broadcast
+                                         self.addrinfo.ifn)
+                ping_sock.bind((self.addrinfo.ip, 0))
                 try:
-                    yield ping_sock.sendto(ping_msg, tuple(addr))
+                    yield ping_sock.sendto(ping_msg, (self._broadcast, port))
                 except:
                     pass
                 finally:
@@ -1454,7 +1435,7 @@ class _Peer(object):
         coro.set_daemon()
         conn_errors = 0
         req = None
-        sock_family = _Peer._asyncoro.sock_family
+        sock_family = _Peer._asyncoro.addrinfo.family
         while 1:
             _Peer._lock.acquire()
             if self.reqs:
