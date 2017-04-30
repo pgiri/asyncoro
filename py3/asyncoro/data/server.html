@@ -112,6 +112,7 @@
         $('#max_coros').val(max_coros);
 
         if (server_location) {
+          $('#location').attr('size', Math.max($('#location').attr('size'), server_location.length));
           show_server();
         } else {
           $('#server').hide();
@@ -312,7 +313,7 @@
         </tr>
         <tr>
           <td><strong>Server Location : </strong></td>
-          <td><input style="width:10em;padding-right:3px;" maxlength="32" type="text" id="location" value="" /></td>
+          <td><input style="min-width:10em;padding-right:3px;" size="15" type="text" id="location" value="" /></td>
         </tr>
       </table>
       <div style="text-align:center;">
