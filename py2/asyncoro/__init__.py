@@ -58,7 +58,7 @@ __maintainer__ = "Giridhar Pemmasani (pgiri@yahoo.com)"
 __license__ = "MIT"
 __url__ = "http://asyncoro.sourceforge.net"
 __status__ = "Production"
-__version__ = "4.5.5"
+__version__ = "4.5.6"
 
 __all__ = ['AsyncSocket', 'AsynCoroSocket', 'Coro', 'AsynCoro',
            'Lock', 'RLock', 'Event', 'Condition', 'Semaphore',
@@ -3214,7 +3214,7 @@ class Channel(object):
                                                      'n': n},
                                   dst=self._location, timeout=timeout)
             request.reply = -1
-            reply = yield _Peer._sync_reply(request, alarm_value=0)
+            reply = yield _Peer._async_reply(request, alarm_value=0)
             if reply is None:
                 reply = -1
             # if reply < 0:

@@ -107,6 +107,7 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
         self._rcis = {}
         self._stream_peers = {}
         self._pending_reqs = {}
+        self._pending_replies = {}
 
         if node:
             node = socket.getaddrinfo(node, None)[0]
@@ -724,7 +725,6 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
             #     break
 
             if req.name == 'send':
-                # synchronous message
                 reply = -1
                 if req.dst != self._location:
                     logger.warning('ignoring invalid "send" (%s != %s)', req.dst, self._location)
@@ -769,7 +769,6 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
                 yield conn.send_msg(serialize(reply))
 
             elif req.name == 'deliver':
-                # synchronous message
                 reply = -1
                 if req.dst != self._location:
                     logger.warning('ignoring invalid "deliver" (%s != %s)', req.dst, self._location)
@@ -792,28 +791,43 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
                     else:
                         channel = req.kwargs.get('channel')
                         if channel:
+                            def async_reply(req, coro=None):
+                                reply = yield channel.deliver(
+                                    req.kwargs['message'], timeout=req.timeout, n=req.kwargs['n'])
+                                req.event = None
+                                req.name += '-reply'
+                                reply_location = req.kwargs['reply_location']
+                                req.kwargs = {'reply_id': req.kwargs['reply_id'], 'reply': reply}
+                                _Peer.send_req_to(req, reply_location)
+
                             if channel[0] == '~':
                                 Channel._asyncoro._lock.acquire()
                                 channel = Channel._asyncoro._channels.get(channel)
                                 Channel._asyncoro._lock.release()
                                 if channel:
-                                    reply = yield channel.deliver(
-                                        req.kwargs['message'], timeout=req.timeout,
-                                        n=req.kwargs['n'])
+                                    SysCoro(async_reply, req)
                             elif channel[0] == '!':
                                 channel = self._channels.get(channel)
                                 if isinstance(channel, Channel):
-                                    reply = yield channel.deliver(
-                                        req.kwargs['message'], timeout=req.timeout,
-                                        n=req.kwargs['n'])
+                                    SysCoro(async_reply, req)
                             else:
                                 logger.warning('invalid "deliver" message ignored')
                         else:
                             logger.warning('invalid "deliver" message ignored')
+                        reply = None
                 yield conn.send_msg(serialize(reply))
 
+            elif req.name.endswith('deliver-reply'):
+                reply = req
+                self._lock.acquire()
+                req = self._pending_replies.pop(reply.kwargs.get('reply_id', None), None)
+                self._lock.release()
+                if req and req.event:
+                    req.reply = reply.kwargs['reply']
+                    req.event.set()
+                yield conn.send_msg(serialize(None))
+
             elif req.name == 'run_rci':
-                # synchronous message
                 if req.dst != self._location:
                     reply = Exception('invalid RCI invocation')
                 else:
@@ -854,7 +868,6 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
                 yield conn.send_msg(serialize(rci))
 
             elif req.name == 'monitor':
-                # synchronous message
                 assert req.dst == self._location
                 reply = -1
                 monitor = req.kwargs.get('monitor', None)
@@ -889,7 +902,6 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
                 yield conn.send_msg(serialize(reply))
 
             elif req.name == 'subscribe':
-                # synchronous message
                 assert req.dst == self._location
                 reply = -1
                 channel = req.kwargs.get('channel', ' ')
@@ -916,7 +928,6 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
                 yield conn.send_msg(serialize(reply))
 
             elif req.name == 'unsubscribe':
-                # synchronous message
                 assert req.dst == self._location
                 reply = -1
                 channel = req.kwargs.get('channel', ' ')
@@ -950,7 +961,6 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
                 yield conn.send_msg(serialize(loc))
 
             elif req.name == 'send_file':
-                # synchronous message
                 assert req.dst == self._location
                 sep = req.kwargs['sep']
                 tgt = req.kwargs['file'].split(sep)[-1]
@@ -1008,7 +1018,6 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
                 yield conn.send_msg(serialize(resp))
 
             elif req.name == 'del_file':
-                # synchronous message
                 assert req.dst == self._location
                 tgt = os.path.basename(req.kwargs['file'])
                 dir = req.kwargs['dir']
@@ -1031,7 +1040,6 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
                 yield conn.send_msg(serialize(reply))
 
             elif req.name == 'peer':
-                # synchronous message
                 if req.kwargs.get('version', None) != __version__:
                     logger.debug('Ignoring peer due to version mismatch: %s != %s',
                                  req.kwargs.get('version', None), __version__)
@@ -1044,7 +1052,6 @@ class AsynCoro(asyncoro.AsynCoro, metaclass=Singleton):
                 _Peer(req.kwargs['name'], peer_loc, auth, self._keyfile, self._certfile)
 
             elif req.name == 'close_peer':
-                # synchronous message
                 peer_loc = req.kwargs.get('location', None)
                 if peer_loc:
                     # TODO: remove from _stream_peers?
@@ -1415,6 +1422,20 @@ class _Peer(object):
         raise StopIteration(req.reply)
 
     @staticmethod
+    def _async_reply(req, alarm_value=None):
+        req.event = Event()
+        req.kwargs['reply_id'] = id(req)
+        req.kwargs['reply_location'] = _Peer._asyncoro._location
+        _Peer._asyncoro._lock.acquire()
+        _Peer._asyncoro._pending_replies[id(req)] = req
+        _Peer._asyncoro._lock.release()
+        if _Peer.send_req(req) != 0:
+            raise StopIteration(-1)
+        if (yield req.event.wait(req.timeout)) is False:
+            raise StopIteration(alarm_value)
+        raise StopIteration(req.reply)
+
+    @staticmethod
     def close_peer(peer, timeout, coro=None):
         req = _NetRequest('close_peer', kwargs={'location': _Peer._asyncoro._location},
                           dst=peer.location, timeout=timeout)
@@ -1494,7 +1515,8 @@ class _Peer(object):
                 reply = yield self.conn.recv_msg()
                 reply = deserialize(reply)
                 if req.event:
-                    if reply is not None or req.dst == self.location:
+                    if reply is not None or (req.dst == self.location and
+                                             'reply_id' not in req.kwargs):
                         req.reply = reply
                         req.event.set()
                 else:
