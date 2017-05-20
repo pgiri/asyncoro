@@ -390,7 +390,9 @@ class HTTPServer(object):
                             self._updates[node.addr] = node
                 elif msg.status == discoro.Scheduler.NodeInitialized:
                     node = self._nodes.get(msg.info.addr)
-                    if not node:
+                    if node:
+                        node.servers.clear()
+                    else:
                         node = HTTPServer._Node(msg.info.name, msg.info.addr)
                         node.avail_info = msg.info.avail_info
                         node.avail_info.location = None
