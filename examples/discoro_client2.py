@@ -47,7 +47,7 @@ if __name__ == '__main__':
     Scheduler()
     # send 'compute' generator function; use MinPulseInterval so node status
     # updates are sent more frequently (instead of default 2*MinPulseInterval)
-    computation = Computation([compute], timeout=5, pulse_interval=asyncoro.discoro.MinPulseInterval)
+    computation = Computation([compute], pulse_interval=asyncoro.discoro.MinPulseInterval)
 
     # to illustrate relaying of status messages to multiple coroutines, httpd is
     # also used in this example; this sets computation's status_coro to httpd's status_coro
